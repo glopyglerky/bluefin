@@ -19,7 +19,7 @@ struct RootView: View {
             if store.signedIn { LibraryTabs() }
             else { WelcomeView() }
         }
-        .fullScreenCover(item: Binding(get: { store.playback?.item.Type == "Audio" ? nil : store.playback }, set: { if $0 == nil && store.playback?.item.Type != "Audio" { store.playback = nil } }), onDismiss: { Task { await store.refresh() } }) { PlaybackScreen(playback: $0) }
+        .fullScreenCover(item: Binding(get: { store.playback?.item.Type == "Audio" ? nil : store.playback }, set: { if $0 == nil && store.playback?.item.Type != "Audio" { store.dismissPlayback() } }), onDismiss: { Task { await store.refresh() } }) { PlaybackScreen(playback: $0) }
         .sheet(isPresented: $store.musicExpanded) {
             if let playback = store.playback, playback.item.Type == "Audio" { MusicPlayer(playback: playback).id(playback.id) }
         }

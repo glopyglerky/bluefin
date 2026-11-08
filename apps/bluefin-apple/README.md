@@ -65,6 +65,14 @@ production lifecycle helper, including ordered teardown before logout,
 cleanup after reporting failure, cancelled preparation, and ownership transfer.
 They do not substitute for AVPlayer or simulator acceptance.
 
+`tools/StoreLifecycleChecks.swift` separately compiles with those two production
+sources plus `Sources/LibraryStore.swift`. It substitutes host-only network,
+Keychain and player adapters while executing the real store dismissal and
+sign-out methods. It holds an in-flight report, closes the player, signs out,
+and verifies captured-account cleanup completes before logout. It also checks
+that cleanup failure remains visible after dismissal. Compile each check as a
+separate executable, since each defines its own entry point.
+
 ## Development reuse
 
 Lustr was inspected at commit `240e08d91d4aed0299639f6f11fd522912b248f9`.

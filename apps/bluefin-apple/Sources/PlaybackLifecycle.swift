@@ -63,6 +63,37 @@ enum PlaybackCleanup {
     }
 }
 
+/// Keeps teardown owned after its player has left the visible UI.
+@MainActor final class PlaybackTeardowns {
+    private var tasks: [UUID: Task<Void, Error>] = [:]
+    private var completedFailure = false
+
+    func retain(_ task: Task<Void, Error>, onFailure: @escaping () -> Void) {
+        let id = UUID()
+        tasks[id] = task
+        Task {
+            let result = await task.result
+            // A drain takes ownership before awaiting, including of failures.
+            guard tasks.removeValue(forKey: id) != nil else { return }
+            if case .failure = result { completedFailure = true; onFailure() }
+        }
+    }
+
+    func drain() -> Task<Void, Error> {
+        let pending = tasks
+        let priorFailure = completedFailure
+        tasks.removeAll()
+        completedFailure = false
+        return Task {
+            var failure: Error? = priorFailure ? BluefinError.message("Playback cleanup could not be confirmed.") : nil
+            for task in pending.values {
+                do { try await task.value } catch { failure = failure ?? error }
+            }
+            if let failure { throw failure }
+        }
+    }
+}
+
 /// Owns preparation until a controller takes it. Cancellation waits for the
 /// returned plan and disposes it exactly once, including during sign-out.
 @MainActor final class PendingPlayback {

@@ -15,6 +15,7 @@ import SwiftUI
     @Published var musicIndex = 0
     private var accountGeneration = UUID()
     private var pendingPreparation: PendingPlayback?
+    private let playbackTeardowns = PlaybackTeardowns()
     var signedIn: Bool { session != nil || preview }
     var deviceId: String {
         if let saved = UserDefaults.standard.string(forKey: "bluefin.deviceId") { return saved }
@@ -169,14 +170,24 @@ import SwiftUI
         home.nextUp = update(home.nextUp)
     }
 
+    func dismissPlayback() {
+        guard let playback else { return }
+        let generation = accountGeneration
+        playbackTeardowns.retain(playback.stop()) { [weak self] in
+            guard let self, self.accountGeneration == generation else { return }
+            self.error = "Playback cleanup could not be confirmed. Check your connection."
+        }
+        self.playback = nil
+    }
+
     func signOut() async {
         accountGeneration = UUID()
         let generation = accountGeneration
         let previousSession = session
         let pending = pendingPreparation
         pending?.cancel()
-        let teardown = playback?.stop()
-        playback = nil
+        dismissPlayback()
+        let teardown = playbackTeardowns.drain()
         SessionVault.clear()
         session = nil
         preview = false
@@ -187,7 +198,7 @@ import SwiftUI
         error = nil
         var cleanupFailed = false
         do { try await pending?.dispose() } catch { cleanupFailed = true }
-        do { try await teardown?.value } catch { cleanupFailed = true }
+        do { try await teardown.value } catch { cleanupFailed = true }
         if let previousSession {
             do { try await RustBridge.notify("logout", session: previousSession) }
             catch { cleanupFailed = true }
