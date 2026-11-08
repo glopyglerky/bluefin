@@ -1,0 +1,30 @@
+[package]
+name = "bluefin-iroh-transport"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+iroh = { version = "=0.95.1", default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "macros", "io-util", "net", "sync", "signal"] }
+
+reqwest = { version = "=0.12.24", default-features = false, features = ["rustls-tls", "stream"] }
+httparse = "1"
+rand = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[dev-dependencies]
+rcgen = "0.14"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+
+[patch.crates-io]
+netwatch = { path = "vendor/netwatch" }
+portmapper = { path = "vendor/portmapper" }
