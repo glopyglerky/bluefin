@@ -1,3 +1,15 @@
+# Bluefin
+
+Bluefin is glopyglerky's fork of [Ferrofin](https://github.com/mangoleaf/ferrofin).
+The server retains its upstream names, attribution, license, and compatibility
+contracts. The native Apple client lives in [apps/bluefin-apple](apps/bluefin-apple).
+It is in development. No App Store or TestFlight release has been submitted.
+
+The upstream server documentation follows. Its feature and performance claims
+describe Ferrofin's reviewed upstream versions, not acceptance of the new client.
+
+---
+
 <div align="center">
 
 # Ferrofin

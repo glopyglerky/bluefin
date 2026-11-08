@@ -1,0 +1,7 @@
+xcuserdata/
+*.xcuserstate
+*.xcarchive
+*.ipa
+DerivedData/
+.DS_Store
+Local.xcconfig

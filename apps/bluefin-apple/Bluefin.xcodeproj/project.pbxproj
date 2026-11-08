@@ -1,0 +1,655 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		00E12DBFCC22E0C4D3360644 /* NativeShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B85C15446CBCC5BD594B4205 /* NativeShortcuts.swift */; };
+		09C5DECF766EB3BED5EA7356 /* BluefinApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCB87ECD3A2D26C375F3D55C /* BluefinApp.swift */; };
+		0D036DE21AD8ACF6F3052240 /* MusicPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */; };
+		1D5F2EC402608BB297557AB2 /* NativeHomeScenes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B93418762ED988465849B32 /* NativeHomeScenes.swift */; };
+		20F94F6529493D8AAD628B5A /* SharePlay.entitlements.template in Resources */ = {isa = PBXBuildFile; fileRef = 26AD07D8422218809A3C52BA /* SharePlay.entitlements.template */; };
+		29A00921934D3319F6C4AC46 /* NativeHomeScenes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B93418762ED988465849B32 /* NativeHomeScenes.swift */; };
+		2F9D73C75F76205C93623EA1 /* BluefinApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCB87ECD3A2D26C375F3D55C /* BluefinApp.swift */; };
+		3B7BCF23A632D9CBE11F4F74 /* CarPlayVideoSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */; };
+		3C19172E3D40D827C414FF09 /* Artwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FF25D78AA631E5A41B8B313 /* Artwork.swift */; };
+		49446A73FFA372F97BFBE6AC /* LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DE689159E4853343AA651D0 /* LibraryStore.swift */; };
+		4ACCA5EAB0065404A04759B1 /* NativeShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B85C15446CBCC5BD594B4205 /* NativeShortcuts.swift */; };
+		53A3C04E0E2B1EB26BF9E817 /* CarPlay-scene.plist.template in Resources */ = {isa = PBXBuildFile; fileRef = 9BAED692C96434473D2ED78E /* CarPlay-scene.plist.template */; };
+		5740E48A11C7741B27DF98B5 /* RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706B3CC35EBF8FE54AD7791A /* RustBridge.swift */; };
+		5F3257CB271DE208FC6E13A8 /* NativeIntegrations.swift in Sources */ = {isa = PBXBuildFile; fileRef = E63091525FC2417A600865C5 /* NativeIntegrations.swift */; };
+		69DFDD97230345174DD167AE /* SharePlay.entitlements.template in Resources */ = {isa = PBXBuildFile; fileRef = 26AD07D8422218809A3C52BA /* SharePlay.entitlements.template */; };
+		6DE9362DB33BCD47DF35076A /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */; };
+		702DB01A916BBCFCE5D011B1 /* HomeAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */; };
+		702FB15FE4E329C4A2425DAE /* MusicPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */; };
+		796E0B2AE57ECFD0B1C22FA5 /* HomeKit.entitlements.template in Resources */ = {isa = PBXBuildFile; fileRef = D19FE75A109DB7E8983106D8 /* HomeKit.entitlements.template */; };
+		8C8E6B685D460EF1627F4BD6 /* NativeIntegrationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */; };
+		915EAD3B2B3801B77540B432 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A869924D1D322649B8E44112 /* Models.swift */; };
+		97E6881D69BE50868A46817B /* CarPlayVideoSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */; };
+		A08DD4D6F9B92C107A6520E1 /* HomeAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */; };
+		A2FB2ACF6BC94AF9F4CC6280 /* NativeCarPlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */; };
+		A40AEC381221AC19640475F6 /* CarPlay.entitlements.template in Resources */ = {isa = PBXBuildFile; fileRef = A3E2D931F75C4C25E16BA615 /* CarPlay.entitlements.template */; };
+		AAB2D67AF1A21FB8BF768323 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A869924D1D322649B8E44112 /* Models.swift */; };
+		ABECCCD47CAB64F4CCDFC553 /* Artwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FF25D78AA631E5A41B8B313 /* Artwork.swift */; };
+		AE27B61125D6A2043B71CA94 /* NativeSharePlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */; };
+		B30BDDF3135E4C583C1B219D /* LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DE689159E4853343AA651D0 /* LibraryStore.swift */; };
+		B574CFD024AE05B5E5825F2C /* BluefinTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6006E519D52C7EBC295D8FB0 /* BluefinTests.swift */; };
+		B8A20DF9FFD9503886052011 /* NativeIntegrationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */; };
+		CC7D278B7F468987E35308F1 /* NativeSharePlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */; };
+		D0454E33A4BB005B1EC5ECE9 /* CarPlay-scene.plist.template in Resources */ = {isa = PBXBuildFile; fileRef = 9BAED692C96434473D2ED78E /* CarPlay-scene.plist.template */; };
+		D411D49983495E930525B9DD /* NativeCarPlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */; };
+		D48A4036B7B14A8C647B7962 /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */; };
+		D63C6E9B0DB4AACB61428039 /* CarPlay.entitlements.template in Resources */ = {isa = PBXBuildFile; fileRef = A3E2D931F75C4C25E16BA615 /* CarPlay.entitlements.template */; };
+		DC032D9013CC21C8F3B87E03 /* NativeIntegrations.swift in Sources */ = {isa = PBXBuildFile; fileRef = E63091525FC2417A600865C5 /* NativeIntegrations.swift */; };
+		E3F44E94DABB3CB5E3C79903 /* RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706B3CC35EBF8FE54AD7791A /* RustBridge.swift */; };
+		F57272363C6889D2870E8A4F /* HomeKit.entitlements.template in Resources */ = {isa = PBXBuildFile; fileRef = D19FE75A109DB7E8983106D8 /* HomeKit.entitlements.template */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		3DB6336D77FFAD002D3BAFB6 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 31F430E3BC81A341F0AD88FA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 849371161E39E4F01A2EE256;
+			remoteInfo = Bluefin;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeAssistant.swift; sourceTree = "<group>"; };
+		0CCE1271A6DE0258BD662552 /* BluefinTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BluefinTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1B93418762ED988465849B32 /* NativeHomeScenes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeHomeScenes.swift; sourceTree = "<group>"; };
+		1D2F8939E26D2C4764EFF44E /* BluefinTV.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BluefinTV.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		26AD07D8422218809A3C52BA /* SharePlay.entitlements.template */ = {isa = PBXFileReference; path = SharePlay.entitlements.template; sourceTree = "<group>"; };
+		2DE689159E4853343AA651D0 /* LibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryStore.swift; sourceTree = "<group>"; };
+		2FF25D78AA631E5A41B8B313 /* Artwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Artwork.swift; sourceTree = "<group>"; };
+		3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeSharePlay.swift; sourceTree = "<group>"; };
+		33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCarPlay.swift; sourceTree = "<group>"; };
+		45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackController.swift; sourceTree = "<group>"; };
+		4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlayVideoSupport.swift; sourceTree = "<group>"; };
+		5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicPlayer.swift; sourceTree = "<group>"; };
+		5BB5CBF94C7858BB4CC72B30 /* Bluefin.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Bluefin.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6006E519D52C7EBC295D8FB0 /* BluefinTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluefinTests.swift; sourceTree = "<group>"; };
+		706B3CC35EBF8FE54AD7791A /* RustBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustBridge.swift; sourceTree = "<group>"; };
+		9BAED692C96434473D2ED78E /* CarPlay-scene.plist.template */ = {isa = PBXFileReference; path = "CarPlay-scene.plist.template"; sourceTree = "<group>"; };
+		A3E2D931F75C4C25E16BA615 /* CarPlay.entitlements.template */ = {isa = PBXFileReference; path = CarPlay.entitlements.template; sourceTree = "<group>"; };
+		A869924D1D322649B8E44112 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeIntegrationActions.swift; sourceTree = "<group>"; };
+		B85C15446CBCC5BD594B4205 /* NativeShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeShortcuts.swift; sourceTree = "<group>"; };
+		CCB87ECD3A2D26C375F3D55C /* BluefinApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluefinApp.swift; sourceTree = "<group>"; };
+		D19FE75A109DB7E8983106D8 /* HomeKit.entitlements.template */ = {isa = PBXFileReference; path = HomeKit.entitlements.template; sourceTree = "<group>"; };
+		D4C44FD13474EB0877DF6C6B /* Rust-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Rust-Bridging-Header.h"; sourceTree = "<group>"; };
+		E63091525FC2417A600865C5 /* NativeIntegrations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeIntegrations.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		08E70717C5EBD5CED0FDEA60 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				5BB5CBF94C7858BB4CC72B30 /* Bluefin.app */,
+				0CCE1271A6DE0258BD662552 /* BluefinTests.xctest */,
+				1D2F8939E26D2C4764EFF44E /* BluefinTV.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		23ABE7F9D191123E36DB7A7A /* Templates */ = {
+			isa = PBXGroup;
+			children = (
+				9BAED692C96434473D2ED78E /* CarPlay-scene.plist.template */,
+				A3E2D931F75C4C25E16BA615 /* CarPlay.entitlements.template */,
+				D19FE75A109DB7E8983106D8 /* HomeKit.entitlements.template */,
+				26AD07D8422218809A3C52BA /* SharePlay.entitlements.template */,
+			);
+			path = Templates;
+			sourceTree = "<group>";
+		};
+		2CDC2273B593A8B10A260DF0 /* Integrations */ = {
+			isa = PBXGroup;
+			children = (
+				33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */,
+				1B93418762ED988465849B32 /* NativeHomeScenes.swift */,
+				B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */,
+				E63091525FC2417A600865C5 /* NativeIntegrations.swift */,
+				3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */,
+				B85C15446CBCC5BD594B4205 /* NativeShortcuts.swift */,
+				23ABE7F9D191123E36DB7A7A /* Templates */,
+			);
+			path = Integrations;
+			sourceTree = "<group>";
+		};
+		4CAAEC7D10C92CEB296964A1 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				6006E519D52C7EBC295D8FB0 /* BluefinTests.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		8745C439D6AE038E0C54B999 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				2FF25D78AA631E5A41B8B313 /* Artwork.swift */,
+				CCB87ECD3A2D26C375F3D55C /* BluefinApp.swift */,
+				4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */,
+				056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */,
+				2DE689159E4853343AA651D0 /* LibraryStore.swift */,
+				A869924D1D322649B8E44112 /* Models.swift */,
+				5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */,
+				45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */,
+				D4C44FD13474EB0877DF6C6B /* Rust-Bridging-Header.h */,
+				706B3CC35EBF8FE54AD7791A /* RustBridge.swift */,
+				2CDC2273B593A8B10A260DF0 /* Integrations */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		DDA6AAC87DCD92DC88E74B94 = {
+			isa = PBXGroup;
+			children = (
+				8745C439D6AE038E0C54B999 /* Sources */,
+				4CAAEC7D10C92CEB296964A1 /* Tests */,
+				08E70717C5EBD5CED0FDEA60 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		849371161E39E4F01A2EE256 /* Bluefin */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0696E6354027B23F5B031018 /* Build configuration list for PBXNativeTarget "Bluefin" */;
+			buildPhases = (
+				8E7D9BE6295542A23A4221C6 /* Sources */,
+				0374142DD80BB427DD3B65C7 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Bluefin;
+			packageProductDependencies = (
+			);
+			productName = Bluefin;
+			productReference = 5BB5CBF94C7858BB4CC72B30 /* Bluefin.app */;
+			productType = "com.apple.product-type.application";
+		};
+		949B664ECC2F92B8B8729FDF /* BluefinTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FD17108DAE2D4F8A8623E0B7 /* Build configuration list for PBXNativeTarget "BluefinTests" */;
+			buildPhases = (
+				6C33FF7CF976168EB02C452E /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				6D59812D843C477CD210DA04 /* PBXTargetDependency */,
+			);
+			name = BluefinTests;
+			packageProductDependencies = (
+			);
+			productName = BluefinTests;
+			productReference = 0CCE1271A6DE0258BD662552 /* BluefinTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		D28C5500C7E1F6999264A194 /* BluefinTV */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 27B345ABC91872B64860D77C /* Build configuration list for PBXNativeTarget "BluefinTV" */;
+			buildPhases = (
+				38B3B7FA59E2AF2B5EF183E9 /* Sources */,
+				C10A3ABE2679808BBC27FB75 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BluefinTV;
+			packageProductDependencies = (
+			);
+			productName = BluefinTV;
+			productReference = 1D2F8939E26D2C4764EFF44E /* BluefinTV.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		31F430E3BC81A341F0AD88FA /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					849371161E39E4F01A2EE256 = {
+						ProvisioningStyle = Automatic;
+					};
+					949B664ECC2F92B8B8729FDF = {
+						ProvisioningStyle = Automatic;
+					};
+					D28C5500C7E1F6999264A194 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 307653365D16CDE3F8B9EF5B /* Build configuration list for PBXProject "Bluefin" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = DDA6AAC87DCD92DC88E74B94;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 08E70717C5EBD5CED0FDEA60 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				849371161E39E4F01A2EE256 /* Bluefin */,
+				D28C5500C7E1F6999264A194 /* BluefinTV */,
+				949B664ECC2F92B8B8729FDF /* BluefinTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		0374142DD80BB427DD3B65C7 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D0454E33A4BB005B1EC5ECE9 /* CarPlay-scene.plist.template in Resources */,
+				D63C6E9B0DB4AACB61428039 /* CarPlay.entitlements.template in Resources */,
+				F57272363C6889D2870E8A4F /* HomeKit.entitlements.template in Resources */,
+				69DFDD97230345174DD167AE /* SharePlay.entitlements.template in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C10A3ABE2679808BBC27FB75 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				53A3C04E0E2B1EB26BF9E817 /* CarPlay-scene.plist.template in Resources */,
+				A40AEC381221AC19640475F6 /* CarPlay.entitlements.template in Resources */,
+				796E0B2AE57ECFD0B1C22FA5 /* HomeKit.entitlements.template in Resources */,
+				20F94F6529493D8AAD628B5A /* SharePlay.entitlements.template in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		38B3B7FA59E2AF2B5EF183E9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ABECCCD47CAB64F4CCDFC553 /* Artwork.swift in Sources */,
+				2F9D73C75F76205C93623EA1 /* BluefinApp.swift in Sources */,
+				3B7BCF23A632D9CBE11F4F74 /* CarPlayVideoSupport.swift in Sources */,
+				702DB01A916BBCFCE5D011B1 /* HomeAssistant.swift in Sources */,
+				49446A73FFA372F97BFBE6AC /* LibraryStore.swift in Sources */,
+				AAB2D67AF1A21FB8BF768323 /* Models.swift in Sources */,
+				0D036DE21AD8ACF6F3052240 /* MusicPlayer.swift in Sources */,
+				D411D49983495E930525B9DD /* NativeCarPlay.swift in Sources */,
+				1D5F2EC402608BB297557AB2 /* NativeHomeScenes.swift in Sources */,
+				B8A20DF9FFD9503886052011 /* NativeIntegrationActions.swift in Sources */,
+				5F3257CB271DE208FC6E13A8 /* NativeIntegrations.swift in Sources */,
+				CC7D278B7F468987E35308F1 /* NativeSharePlay.swift in Sources */,
+				4ACCA5EAB0065404A04759B1 /* NativeShortcuts.swift in Sources */,
+				6DE9362DB33BCD47DF35076A /* PlaybackController.swift in Sources */,
+				E3F44E94DABB3CB5E3C79903 /* RustBridge.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6C33FF7CF976168EB02C452E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B574CFD024AE05B5E5825F2C /* BluefinTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8E7D9BE6295542A23A4221C6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3C19172E3D40D827C414FF09 /* Artwork.swift in Sources */,
+				09C5DECF766EB3BED5EA7356 /* BluefinApp.swift in Sources */,
+				97E6881D69BE50868A46817B /* CarPlayVideoSupport.swift in Sources */,
+				A08DD4D6F9B92C107A6520E1 /* HomeAssistant.swift in Sources */,
+				B30BDDF3135E4C583C1B219D /* LibraryStore.swift in Sources */,
+				915EAD3B2B3801B77540B432 /* Models.swift in Sources */,
+				702FB15FE4E329C4A2425DAE /* MusicPlayer.swift in Sources */,
+				A2FB2ACF6BC94AF9F4CC6280 /* NativeCarPlay.swift in Sources */,
+				29A00921934D3319F6C4AC46 /* NativeHomeScenes.swift in Sources */,
+				8C8E6B685D460EF1627F4BD6 /* NativeIntegrationActions.swift in Sources */,
+				DC032D9013CC21C8F3B87E03 /* NativeIntegrations.swift in Sources */,
+				AE27B61125D6A2043B71CA94 /* NativeSharePlay.swift in Sources */,
+				00E12DBFCC22E0C4D3360644 /* NativeShortcuts.swift in Sources */,
+				D48A4036B7B14A8C647B7962 /* PlaybackController.swift in Sources */,
+				5740E48A11C7741B27DF98B5 /* RustBridge.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		6D59812D843C477CD210DA04 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 849371161E39E4F01A2EE256 /* Bluefin */;
+			targetProxy = 3DB6336D77FFAD002D3BAFB6 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		22952F8F66542508C5C028FB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
+				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
+				INFOPLIST_FILE = "tvOS-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+			};
+			name = Debug;
+		};
+		2DBC8D66E02E886851EF4616 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin.tests;
+				SDKROOT = iphoneos;
+				SWIFT_OBJC_BRIDGING_HEADER = "";
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Bluefin.app/Bluefin";
+			};
+			name = Debug;
+		};
+		3D7E2CD2948515ABBC247444 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_BITCODE = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(BLUEFIN_RUST_LIB_DIR)",
+				);
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lbluefin_apple_core",
+					"-framework",
+					Security,
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					Network,
+					"-liconv",
+					"-lresolv",
+				);
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Rust-Bridging-Header.h";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TVOS_DEPLOYMENT_TARGET = 15.0;
+			};
+			name = Debug;
+		};
+		6172A24019F7356657246F15 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
+				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
+				INFOPLIST_FILE = "tvOS-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+			};
+			name = Release;
+		};
+		74E3888F9EE888A58D8C97E4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin.tests;
+				SDKROOT = iphoneos;
+				SWIFT_OBJC_BRIDGING_HEADER = "";
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Bluefin.app/Bluefin";
+			};
+			name = Release;
+		};
+		7EA994309EA6525B59B2219D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = BluefinIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = "iOS-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A4EC5003CC8795A746151CA6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_BITCODE = NO;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(BLUEFIN_RUST_LIB_DIR)",
+				);
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lbluefin_apple_core",
+					"-framework",
+					Security,
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					Network,
+					"-liconv",
+					"-lresolv",
+				);
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Rust-Bridging-Header.h";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TVOS_DEPLOYMENT_TARGET = 15.0;
+			};
+			name = Release;
+		};
+		D6180AD9F1A4CB0FDE80C4C1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = BluefinIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = "iOS-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0696E6354027B23F5B031018 /* Build configuration list for PBXNativeTarget "Bluefin" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7EA994309EA6525B59B2219D /* Debug */,
+				D6180AD9F1A4CB0FDE80C4C1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		27B345ABC91872B64860D77C /* Build configuration list for PBXNativeTarget "BluefinTV" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				22952F8F66542508C5C028FB /* Debug */,
+				6172A24019F7356657246F15 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		307653365D16CDE3F8B9EF5B /* Build configuration list for PBXProject "Bluefin" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3D7E2CD2948515ABBC247444 /* Debug */,
+				A4EC5003CC8795A746151CA6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		FD17108DAE2D4F8A8623E0B7 /* Build configuration list for PBXNativeTarget "BluefinTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2DBC8D66E02E886851EF4616 /* Debug */,
+				74E3888F9EE888A58D8C97E4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 31F430E3BC81A341F0AD88FA /* Project object */;
+}

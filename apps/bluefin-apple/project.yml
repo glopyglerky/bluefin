@@ -1,0 +1,82 @@
+name: Bluefin
+options:
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "15.0"
+    tvOS: "15.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_OBJC_BRIDGING_HEADER: Sources/Rust-Bridging-Header.h
+    LIBRARY_SEARCH_PATHS: ["$(inherited)", "$(BLUEFIN_RUST_LIB_DIR)"]
+    OTHER_LDFLAGS: ["$(inherited)", "-lbluefin_apple_core", "-framework", Security, "-framework", SystemConfiguration, "-framework", Network, "-liconv", "-lresolv"]
+    ENABLE_BITCODE: NO
+targets:
+  Bluefin:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    resources: [Resources]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.glopyglerky.bluefin
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: BluefinIcon
+    info:
+      path: iOS-Info.plist
+      properties:
+        CFBundleDisplayName: Bluefin
+        UILaunchScreen: {}
+        UIBackgroundModes: [audio]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSLocalNetworkUsageDescription: Connect to the media server you choose on your home network.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        ITSAppUsesNonExemptEncryption: false
+  BluefinTV:
+    type: application
+    platform: tvOS
+    sources: [Sources]
+    resources: [Resources]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.glopyglerky.bluefin
+        TARGETED_DEVICE_FAMILY: "3"
+    info:
+      path: tvOS-Info.plist
+      properties:
+        CFBundleDisplayName: Bluefin
+        UIBackgroundModes: [audio]
+        NSLocalNetworkUsageDescription: Connect to the media server you choose on your home network.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        ITSAppUsesNonExemptEncryption: false
+  BluefinTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: Bluefin
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.glopyglerky.bluefin.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_OBJC_BRIDGING_HEADER: ""
+schemes:
+  Bluefin:
+    build:
+      targets:
+        Bluefin: all
+    test:
+      targets: [BluefinTests]
+  BluefinTV:
+    build:
+      targets:
+        BluefinTV: all
