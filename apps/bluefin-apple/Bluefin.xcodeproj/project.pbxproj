@@ -28,6 +28,7 @@
 		796E0B2AE57ECFD0B1C22FA5 /* HomeKit.entitlements.template in Resources */ = {isa = PBXBuildFile; fileRef = D19FE75A109DB7E8983106D8 /* HomeKit.entitlements.template */; };
 		8C8E6B685D460EF1627F4BD6 /* NativeIntegrationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */; };
 		915EAD3B2B3801B77540B432 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A869924D1D322649B8E44112 /* Models.swift */; };
+		93A052358E73D0E7124DFCE3 /* PlaybackLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DED8DE60C9EF16484D7401 /* PlaybackLifecycle.swift */; };
 		97E6881D69BE50868A46817B /* CarPlayVideoSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */; };
 		A08DD4D6F9B92C107A6520E1 /* HomeAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */; };
 		A2FB2ACF6BC94AF9F4CC6280 /* NativeCarPlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */; };
@@ -38,6 +39,7 @@
 		B30BDDF3135E4C583C1B219D /* LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DE689159E4853343AA651D0 /* LibraryStore.swift */; };
 		B574CFD024AE05B5E5825F2C /* BluefinTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6006E519D52C7EBC295D8FB0 /* BluefinTests.swift */; };
 		B8A20DF9FFD9503886052011 /* NativeIntegrationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */; };
+		C91AF6A17B6A456ED382E6B1 /* PlaybackLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DED8DE60C9EF16484D7401 /* PlaybackLifecycle.swift */; };
 		CC7D278B7F468987E35308F1 /* NativeSharePlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */; };
 		D0454E33A4BB005B1EC5ECE9 /* CarPlay-scene.plist.template in Resources */ = {isa = PBXBuildFile; fileRef = 9BAED692C96434473D2ED78E /* CarPlay-scene.plist.template */; };
 		D411D49983495E930525B9DD /* NativeCarPlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */; };
@@ -64,6 +66,7 @@
 		1B93418762ED988465849B32 /* NativeHomeScenes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeHomeScenes.swift; sourceTree = "<group>"; };
 		1D2F8939E26D2C4764EFF44E /* BluefinTV.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BluefinTV.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		26AD07D8422218809A3C52BA /* SharePlay.entitlements.template */ = {isa = PBXFileReference; path = SharePlay.entitlements.template; sourceTree = "<group>"; };
+		26DED8DE60C9EF16484D7401 /* PlaybackLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackLifecycle.swift; sourceTree = "<group>"; };
 		2DE689159E4853343AA651D0 /* LibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryStore.swift; sourceTree = "<group>"; };
 		2FF25D78AA631E5A41B8B313 /* Artwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Artwork.swift; sourceTree = "<group>"; };
 		3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeSharePlay.swift; sourceTree = "<group>"; };
@@ -140,6 +143,7 @@
 				A869924D1D322649B8E44112 /* Models.swift */,
 				5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */,
 				45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */,
+				26DED8DE60C9EF16484D7401 /* PlaybackLifecycle.swift */,
 				D4C44FD13474EB0877DF6C6B /* Rust-Bridging-Header.h */,
 				706B3CC35EBF8FE54AD7791A /* RustBridge.swift */,
 				2CDC2273B593A8B10A260DF0 /* Integrations */,
@@ -298,6 +302,7 @@
 				CC7D278B7F468987E35308F1 /* NativeSharePlay.swift in Sources */,
 				4ACCA5EAB0065404A04759B1 /* NativeShortcuts.swift in Sources */,
 				6DE9362DB33BCD47DF35076A /* PlaybackController.swift in Sources */,
+				C91AF6A17B6A456ED382E6B1 /* PlaybackLifecycle.swift in Sources */,
 				E3F44E94DABB3CB5E3C79903 /* RustBridge.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -328,6 +333,7 @@
 				AE27B61125D6A2043B71CA94 /* NativeSharePlay.swift in Sources */,
 				00E12DBFCC22E0C4D3360644 /* NativeShortcuts.swift in Sources */,
 				D48A4036B7B14A8C647B7962 /* PlaybackController.swift in Sources */,
+				93A052358E73D0E7124DFCE3 /* PlaybackLifecycle.swift in Sources */,
 				5740E48A11C7741B27DF98B5 /* RustBridge.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

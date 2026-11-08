@@ -163,6 +163,29 @@ impl<'a> Api<'a> {
     fn post(&self, p: &[&str], b: Value) -> Result<Value> {
         self.request(Method::POST, p, vec![], Some(b), true)
     }
+    fn cleanup_request(
+        &self,
+        method: Method,
+        parts: &[&str],
+        query: Vec<(&str, String)>,
+    ) -> Result<()> {
+        let response = self
+            .client
+            .request(method, self.url(parts)?)
+            .header("Authorization", self.auth(true)?)
+            .query(&query)
+            .timeout(Duration::from_secs(3))
+            .send()
+            .map_err(|_| err("Playback cleanup request failed or timed out"))?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Playback cleanup returned HTTP {}",
+                response.status().as_u16()
+            ))
+        }
+    }
 }
 fn response_json(response: reqwest::blocking::Response) -> Result<Value> {
     if !response.status().is_success() {
@@ -215,6 +238,34 @@ fn profile() -> Value {
     "TranscodingProfiles":[{"Container":"ts","Type":"Video","Protocol":"hls","VideoCodec":"h264","AudioCodec":"aac","MaxAudioChannels":"2","MinSegments":2,"BreakOnNonKeyFrames":false},{"Container":"ts","Type":"Audio","Protocol":"hls","AudioCodec":"aac","MaxAudioChannels":"2"}],
     "CodecProfiles":[{"Type":"Video","Codec":"h264","Conditions":[{"Condition":"EqualsAny","Property":"VideoProfile","Value":"high|main|baseline|constrained baseline","IsRequired":true},{"Condition":"LessThanEqual","Property":"VideoLevel","Value":"41","IsRequired":true},{"Condition":"EqualsAny","Property":"VideoRangeType","Value":"SDR","IsRequired":true},{"Condition":"LessThanEqual","Property":"VideoBitDepth","Value":"8","IsRequired":true},{"Condition":"LessThanEqual","Property":"Width","Value":"1920","IsRequired":true},{"Condition":"LessThanEqual","Property":"Height","Value":"1080","IsRequired":true}]}]})
 }
+fn native_audio(source: &Value) -> bool {
+    source["SupportsDirectPlay"] == true
+        && matches!(
+            source["Container"].as_str(),
+            Some("mp3" | "aac" | "m4a" | "mp4" | "flac" | "wav" | "aiff")
+        )
+        && source["MediaStreams"].as_array().is_some_and(|streams| {
+            streams.iter().any(|s| s["Type"] == "Audio")
+                && !streams.iter().any(|s| s["Type"] == "Video")
+                && streams.iter().filter(|s| s["Type"] == "Audio").all(|s| {
+                    matches!(
+                        s["Codec"].as_str(),
+                        Some(
+                            "mp3"
+                                | "aac"
+                                | "flac"
+                                | "alac"
+                                | "pcm_s16le"
+                                | "pcm_s24le"
+                                | "pcm_s32le"
+                                | "pcm_s16be"
+                                | "pcm_s24be"
+                                | "pcm_s32be"
+                        )
+                    )
+                })
+        })
+}
 fn playback_url(base: &Url, raw: &str) -> Result<Url> {
     if raw.len() > 16384 || raw.contains('\\') || raw.chars().any(char::is_control) {
         return Err(err("Invalid playback URL"));
@@ -238,17 +289,76 @@ fn playback(api: &Api<'_>) -> Result<Value> {
     let ticks = count(v, "startTicks", 0, i64::MAX as u64)?;
     let audio = index(v, "audioStreamIndex")?;
     let subtitle = index(v, "subtitleStreamIndex")?;
-    let is_audio = v["mediaType"] == "Audio";
     let b = json!({"UserId":user,"StartTimeTicks":ticks,"AudioStreamIndex":audio,"SubtitleStreamIndex":subtitle,"IsPlayback":true,"AutoOpenLiveStream":true,"EnableDirectPlay":true,"EnableDirectStream":false,"EnableTranscoding":true,"DeviceProfile":profile()});
     let info = api.post(&["Items", item, "PlaybackInfo"], b)?;
+    let result = plan_playback(api, &info);
+    if let Err(error) = &result {
+        if release_prepared(api, &info).is_err() {
+            return Err(format!("{error}; playback cleanup could not be confirmed"));
+        }
+    }
+    result
+}
+fn release_prepared(api: &Api<'_>, info: &Value) -> Result<()> {
+    let mut failure = None;
+    let mut closed = std::collections::HashSet::new();
+    for source in info["MediaSources"].as_array().into_iter().flatten() {
+        if let Some(id) = source["LiveStreamId"].as_str().filter(|id| !id.is_empty()) {
+            if closed.insert(id) {
+                if closed.len() > 16 {
+                    failure.get_or_insert(err("Too many opened live sources; cleanup incomplete"));
+                    break;
+                }
+                if let Err(error) = api.cleanup_request(
+                    Method::POST,
+                    &["LiveStreams", "Close"],
+                    vec![("liveStreamId", id.into())],
+                ) {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
+    }
+    if info["MediaSources"]
+        .as_array()
+        .is_some_and(|sources| sources.iter().any(|s| s["TranscodingUrl"].is_string()))
+    {
+        if let Some(session) = info["PlaySessionId"].as_str() {
+            let device = api.v["deviceId"].as_str().unwrap_or("bluefin-apple");
+            if let Err(error) = api.cleanup_request(
+                Method::DELETE,
+                &["Videos", "ActiveEncodings"],
+                vec![
+                    ("deviceId", device.into()),
+                    ("playSessionId", session.into()),
+                ],
+            ) {
+                failure.get_or_insert(error);
+            }
+        }
+    }
+    failure.map_or(Ok(()), Err)
+}
+fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
+    let v = api.v;
+    let item = text(v, "itemId")?;
+    let ticks = count(v, "startTicks", 0, i64::MAX as u64)?;
+    let audio = index(v, "audioStreamIndex")?;
+    let subtitle = index(v, "subtitleStreamIndex")?;
+    let is_audio = v["mediaType"] == "Audio";
     if info.get("ErrorCode").is_some_and(|x| !x.is_null()) {
         return Err(err("Server could not prepare playback"));
     }
-    text(&info, "PlaySessionId")?;
-    for source in info["MediaSources"]
+    text(info, "PlaySessionId")?;
+    let mut sources = info["MediaSources"]
         .as_array()
         .ok_or_else(|| err("No playback sources"))?
-    {
+        .iter()
+        .collect::<Vec<_>>();
+    if is_audio {
+        sources.sort_by_key(|source| !native_audio(source));
+    }
+    for source in sources {
         let id = source["Id"]
             .as_str()
             .ok_or_else(|| err("Missing media source ID"))?;
@@ -275,31 +385,7 @@ fn playback(api: &Api<'_>) -> Result<Value> {
                     .all(|s| matches!(s["Codec"].as_str(), Some("aac" | "ac3" | "eac3")))
             })
             && subtitle.unwrap_or(-1) == -1;
-        let audio_direct = is_audio
-            && source["SupportsDirectPlay"] == true
-            && matches!(
-                source["Container"].as_str(),
-                Some("mp3" | "aac" | "m4a" | "mp4" | "flac" | "wav" | "aiff")
-            )
-            && streams.is_some_and(|ss| {
-                ss.iter().filter(|s| s["Type"] == "Audio").all(|s| {
-                    matches!(
-                        s["Codec"].as_str(),
-                        Some(
-                            "mp3"
-                                | "aac"
-                                | "flac"
-                                | "alac"
-                                | "pcm_s16le"
-                                | "pcm_s24le"
-                                | "pcm_s32le"
-                                | "pcm_s16be"
-                                | "pcm_s24be"
-                                | "pcm_s32be"
-                        )
-                    )
-                })
-            });
+        let audio_direct = is_audio && native_audio(source);
         let (mut url, uses_transcode) = if is_audio {
             if !streams.is_some_and(|ss| {
                 ss.iter().any(|s| s["Type"] == "Audio") && !ss.iter().any(|s| s["Type"] == "Video")
@@ -474,26 +560,22 @@ pub fn call(v: &Value) -> Result<Value> {
         "releasePlayback" => {
             let mut failure = None;
             if v["playMethod"] == "Transcode" {
-                if let Err(error) = api.request(
+                if let Err(error) = api.cleanup_request(
                     Method::DELETE,
                     &["Videos", "ActiveEncodings"],
                     vec![
                         ("deviceId", text(v, "deviceId")?.into()),
                         ("playSessionId", text(v, "playSessionId")?.into()),
                     ],
-                    None,
-                    true,
                 ) {
                     failure = Some(error);
                 }
             }
             if let Some(live) = v["liveStreamId"].as_str().filter(|s| !s.is_empty()) {
-                if let Err(error) = api.request(
+                if let Err(error) = api.cleanup_request(
                     Method::POST,
                     &["LiveStreams", "Close"],
                     vec![("liveStreamId", live.into())],
-                    None,
-                    true,
                 ) {
                     failure.get_or_insert(error);
                 }
@@ -571,6 +653,12 @@ impl Drop for Lease {
 #[allow(deprecated)] // fetch_update supports Apple stable and NAS toolchains.
 fn envelope(input: &[u8]) -> Value {
     let r = (|| {
+        let v: Value = serde_json::from_slice(input).map_err(|_| err("Invalid input JSON"))?;
+        // Local cancellation is bounded by the two existing proxy slots and never
+        // waits for ordinary network-call admission.
+        if v["operation"] == "stopPlaybackProxy" {
+            return call(&v);
+        }
         if ACTIVE
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < 4).then_some(n + 1)
@@ -580,7 +668,6 @@ fn envelope(input: &[u8]) -> Value {
             return Err(err("Client busy"));
         }
         let _lease = Lease;
-        let v: Value = serde_json::from_slice(input).map_err(|_| err("Invalid input JSON"))?;
         call(&v)
     })();
     match r {

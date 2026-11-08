@@ -24,6 +24,7 @@ import SwiftUI
     private var endObserver: NSObjectProtocol?
     private var commandTargets: [(MPRemoteCommand, Any)] = []
     private var stopped = false
+    private var teardownTask: Task<Void, Error>?
     private var started = false
     private var initialSeekDone = false
     private var initialTicks: Int64
@@ -42,7 +43,11 @@ import SwiftUI
         player = AVPlayer(url: url)
         player.allowsExternalPlayback = true
         player.automaticallyWaitsToMinimizeStalling = true
-        if let plan, let session { reporter = PlaybackReporter(session: session, itemId: item.Id, plan: plan) }
+        if let plan, let session {
+            reporter = PlaybackReporter(session: session, itemId: item.Id, plan: plan) { operation, session, fields in
+                try await RustBridge.notify(operation, session: session, fields: fields)
+            }
+        }
         else { reporter = nil }
         try AVAudioSession.sharedInstance().setCategory(.playback, mode: item.Type == "Audio" ? .default : .moviePlayback, options: [])
         statusObserver = player.currentItem?.observe(\.status, options: [.initial, .new]) { [weak self] playerItem, _ in
@@ -57,6 +62,7 @@ import SwiftUI
                     if self.initialTicks > 0 {
                         await self.player.seek(to: CMTime(value: self.initialTicks, timescale: 10_000_000), toleranceBefore: .zero, toleranceAfter: .zero)
                     }
+                    guard !self.stopped else { return }
                     self.player.play()
                 }
             }
@@ -114,8 +120,8 @@ import SwiftUI
         }
     }
 
-    func stop() {
-        guard !stopped else { return }
+    @discardableResult func stop() -> Task<Void, Error> {
+        if let teardownTask { return teardownTask }
         stopped = true
         let position = ticks
         player.pause()
@@ -127,20 +133,19 @@ import SwiftUI
         for (command, target) in commandTargets { command.removeTarget(target) }
         commandTargets.removeAll()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        if let reporter {
-            let wasStarted = started
-            Task { [weak self] in
-                do { if wasStarted { try await reporter.report("stopped", ticks: position, paused: true) } }
-                catch { self?.reportingFailure = "The last playback position could not sync." }
-                do { try await reporter.release() }
-                catch { self?.reportingFailure = "The server could not confirm playback cleanup." }
-            }
+        let wasStarted = started, reporter = reporter, proxyId = proxyId
+        let task = Task {
+            if let reporter { try await reporter.finish(ticks: position, wasStarted: wasStarted) }
+            else if let proxyId { let _: EmptyValue = try await RustBridge.call("stopPlaybackProxy", fields: ["proxyId": proxyId]) }
         }
-        if let proxyId {
-            Task { let _: EmptyValue? = try? await RustBridge.call("stopPlaybackProxy", fields: ["proxyId": proxyId]) }
+        teardownTask = task
+        Task { [weak self] in
+            do { try await task.value }
+            catch { self?.reportingFailure = "Playback cleanup could not be confirmed. Check your connection." }
         }
         player.replaceCurrentItem(with: nil)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        return task
     }
 
     private func updateNowPlaying() {
@@ -163,44 +168,6 @@ import SwiftUI
         let next = center.nextTrackCommand.addTarget { [weak self] _ in Task { @MainActor in self?.onNext?() }; return .success }
         let previous = center.previousTrackCommand.addTarget { [weak self] _ in Task { @MainActor in self?.onPrevious?() }; return .success }
         commandTargets = [(center.playCommand, play), (center.pauseCommand, pause), (center.changePlaybackPositionCommand, position), (center.nextTrackCommand, next), (center.previousTrackCommand, previous)]
-    }
-}
-
-private actor PlaybackReporter {
-    private let session: AccountSession
-    private let itemId: String
-    private let plan: PlaybackPlan
-    private var started = false
-    private var finished = false
-    // Calls form a task chain because actors can reenter across network awaits.
-    private var tail: Task<Void, Error>?
-    init(session: AccountSession, itemId: String, plan: PlaybackPlan) { self.session = session; self.itemId = itemId; self.plan = plan }
-    func report(_ operation: String, ticks: Int64, paused: Bool) async throws {
-        guard !finished else { return }
-        if operation == "stopped" { finished = true }
-        let previous = tail
-        let task = Task {
-            if let previous { _ = await previous.result }
-            try await send(operation, ticks: ticks, paused: paused)
-        }
-        tail = task
-        try await task.value
-    }
-    private func send(_ operation: String, ticks: Int64, paused: Bool) async throws {
-        var fields: [String: Any] = ["itemId": itemId, "mediaSourceId": plan.mediaSourceId, "playSessionId": plan.playSessionId, "positionTicks": ticks, "isPaused": paused, "playMethod": plan.playMethod ?? "DirectStream"]
-        if let index = plan.audioStreamIndex { fields["audioStreamIndex"] = index }
-        if let index = plan.subtitleStreamIndex { fields["subtitleStreamIndex"] = index }
-        if !started {
-            try await RustBridge.notify("started", session: session, fields: fields)
-            started = true
-        }
-        if operation != "started" { try await RustBridge.notify(operation, session: session, fields: fields) }
-    }
-    func release() async throws {
-        if let tail { _ = await tail.result }
-        var fields: [String: Any] = ["playSessionId": plan.playSessionId, "playMethod": plan.playMethod ?? "DirectPlay"]
-        if let live = plan.source?.LiveStreamId { fields["liveStreamId"] = live }
-        try await RustBridge.notify("releasePlayback", session: session, fields: fields)
     }
 }
 

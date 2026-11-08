@@ -19,33 +19,65 @@ enum RustBridge {
         let response = try await Task.detached(priority: .userInitiated) {
             guard let json = String(data: data, encoding: .utf8) else { throw BluefinError.message("The request could not be encoded.") }
             return try json.withCString { input in
+                let deadline = Date().addingTimeInterval(60)
+                while true {
+                func invoke() throws -> [String: Any] {
                 guard let output = bluefin_call(input) else { throw BluefinError.message("The media engine did not return a response.") }
                 defer { bluefin_free(output) }
                 let bytes = Data(String(cString: output).utf8)
                 guard let envelope = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { throw BluefinError.message("The media engine returned an invalid response.") }
+                return envelope
+                }
+                let envelope = try invoke()
+                if operation == "releasePlayback", envelope["error"] as? String == "Client busy", Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.05)
+                    continue
+                }
                 guard envelope["ok"] as? Bool == true else {
                     throw BluefinError.message(envelope["error"] as? String ?? "The request failed.")
                 }
                 return try JSONSerialization.data(withJSONObject: envelope["value"] ?? NSNull(), options: [.fragmentsAllowed])
+                }
             }
         }.value
-        if Task.isCancelled {
-            if operation == "playback", let plan = try? JSONDecoder().decode(PlaybackPlan.self, from: response), let proxy = plan.proxyId {
-                let _: EmptyValue? = try? await call("stopPlaybackProxy", fields: ["proxyId": proxy])
-            }
+        if Task.isCancelled && !["releasePlayback", "stopPlaybackProxy"].contains(operation) {
+            if operation == "playback" { try await cleanupPlaybackResponse(response, session: session) }
             throw CancellationError()
         }
         do { return try JSONDecoder().decode(T.self, from: response) }
         catch {
-            if operation == "playback", let value = try? JSONSerialization.jsonObject(with: response) as? [String: Any], let proxy = value["proxyId"] as? String {
-                let _: EmptyValue? = try? await call("stopPlaybackProxy", fields: ["proxyId": proxy])
-            }
+            if operation == "playback" { try await cleanupPlaybackResponse(response, session: session) }
             throw BluefinError.message("The server returned an unexpected response.")
         }
     }
 
     static func notify(_ operation: String, session: AccountSession, fields: [String: Any] = [:]) async throws {
         let _: EmptyValue = try await call(operation, session: session, fields: fields)
+    }
+    static func cleanupPlaybackPlan(_ plan: PlaybackPlan, session: AccountSession) async throws {
+        var failure: Error?
+        if let proxy = plan.proxyId {
+            do { let _: EmptyValue = try await call("stopPlaybackProxy", fields: ["proxyId": proxy]) }
+            catch { failure = error }
+        }
+        do { try await notify("releasePlayback", session: session, fields: PlaybackCleanup.fields(plan)) }
+        catch { failure = failure ?? error }
+        if let failure { throw failure }
+    }
+    private static func cleanupPlaybackResponse(_ data: Data, session: AccountSession?) async throws {
+        guard let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        var failure: Error?
+        if let proxy = value["proxyId"] as? String {
+            do { let _: EmptyValue = try await call("stopPlaybackProxy", fields: ["proxyId": proxy]) }
+            catch { failure = error }
+        }
+        if let session, let playSession = value["playSessionId"] as? String {
+            var fields: [String: Any] = ["playSessionId": playSession, "playMethod": value["playMethod"] as? String ?? "DirectPlay"]
+            if let live = (value["source"] as? [String: Any])?["LiveStreamId"] as? String { fields["liveStreamId"] = live }
+            do { try await notify("releasePlayback", session: session, fields: fields) }
+            catch { failure = failure ?? error }
+        }
+        if let failure { throw failure }
     }
 }
 

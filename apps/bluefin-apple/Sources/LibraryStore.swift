@@ -14,6 +14,7 @@ import SwiftUI
     @Published var musicQueue: [MediaItem] = []
     @Published var musicIndex = 0
     private var accountGeneration = UUID()
+    private var pendingPreparation: PendingPlayback?
     var signedIn: Bool { session != nil || preview }
     var deviceId: String {
         if let saved = UserDefaults.standard.string(forKey: "bluefin.deviceId") { return saved }
@@ -85,26 +86,35 @@ import SwiftUI
         guard !startingPlayback else { return }
         startingPlayback = true
         let generation = accountGeneration
-        var pendingProxy: String?
-        defer { startingPlayback = false }
+        var preparation: PendingPlayback?
+        defer {
+            startingPlayback = false
+            if pendingPreparation === preparation { pendingPreparation = nil }
+        }
         do {
             if preview {
                 // Preview is explicitly separate from a connected library and never reports watch state.
                 let file = item.Id == "preview-2" ? "Sintel.mp4" : item.Id == "preview-3" ? "TearsOfSteel.mp4" : "BigBuckBunny.mp4"
                 let url = URL(string: "https://storage.googleapis.com/gtv-videos-bucket/sample/\(file)")!
+                if let playback { try await playback.stop().value }
                 let controller = try PlaybackController(item: item, url: url, plan: nil, session: nil)
-                playback?.stop()
                 playback = controller
             } else if let session {
                 let ticks: Int64 = startAtTicks ?? (fromBeginning ? 0 : item.UserData?.PlaybackPositionTicks ?? 0)
-                let plan: PlaybackPlan = try await RustBridge.call("playback", session: session, fields: ["itemId": item.Id, "startTicks": ticks, "mediaType": item.Type == "Audio" ? "Audio" : "Video"])
-                pendingProxy = plan.proxyId
+                let pending = PendingPlayback(request: {
+                    try await RustBridge.call("playback", session: session, fields: ["itemId": item.Id, "startTicks": ticks, "mediaType": item.Type == "Audio" ? "Audio" : "Video"])
+                }, cleanup: { try await RustBridge.cleanupPlaybackPlan($0, session: session) })
+                preparation = pending
+                pendingPreparation = pending
+                let plan = try await pending.resolve()
                 guard accountGeneration == generation else { throw CancellationError() }
                 guard let url = URL(string: plan.url) else { throw BluefinError.message("The server did not provide a playable stream.") }
+                if let playback { try await playback.stop().value }
+                try Task.checkCancellation()
+                guard accountGeneration == generation else { throw CancellationError() }
                 let controller = try PlaybackController(item: item, url: url, plan: plan, session: session)
-                playback?.stop()
+                try pending.transfer()
                 playback = controller
-                pendingProxy = nil
                 controller.onSeekOutsideWindow = { [weak self] position in Task { await self?.play(item, startAtTicks: position) } }
                 if item.Type == "Audio" {
                     if let index = musicQueue.firstIndex(where: { $0.Id == item.Id }) { musicIndex = index }
@@ -115,8 +125,13 @@ import SwiftUI
                 }
             }
         } catch {
-            if let pendingProxy { let _: EmptyValue? = try? await RustBridge.call("stopPlaybackProxy", fields: ["proxyId": pendingProxy]) }
-            if !(error is CancellationError) && accountGeneration == generation { self.error = error.localizedDescription }
+            var cleanupFailed = false
+            do { try await preparation?.dispose() }
+            catch { cleanupFailed = true }
+            if accountGeneration == generation {
+                if cleanupFailed { self.error = "Playback preparation cleanup could not be confirmed." }
+                else if !(error is CancellationError) { self.error = error.localizedDescription }
+            }
         }
     }
 
@@ -156,8 +171,11 @@ import SwiftUI
 
     func signOut() async {
         accountGeneration = UUID()
+        let generation = accountGeneration
         let previousSession = session
-        playback?.stop()
+        let pending = pendingPreparation
+        pending?.cancel()
+        let teardown = playback?.stop()
         playback = nil
         SessionVault.clear()
         session = nil
@@ -167,6 +185,13 @@ import SwiftUI
         musicQueue = []
         musicExpanded = false
         error = nil
-        if let previousSession { try? await RustBridge.notify("logout", session: previousSession) }
+        var cleanupFailed = false
+        do { try await pending?.dispose() } catch { cleanupFailed = true }
+        do { try await teardown?.value } catch { cleanupFailed = true }
+        if let previousSession {
+            do { try await RustBridge.notify("logout", session: previousSession) }
+            catch { cleanupFailed = true }
+        }
+        if cleanupFailed && accountGeneration == generation { error = "Signed out on this device. The server could not confirm every playback cleanup operation." }
     }
 }

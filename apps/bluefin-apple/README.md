@@ -57,6 +57,14 @@ action. Use T3 `device_list`, then `device_open`, and the command it returns for
 all simulator interactions. tvOS must be exposed by T3 before its remote UI
 journey can be accepted.
 
+The Foundation-only playback lifecycle also has executable host checks. Build
+`Sources/Models.swift`, `Sources/PlaybackLifecycle.swift`, and
+`tools/LifecycleChecks.swift` together with `swiftc -parse-as-library`, placing
+the executable and module cache in the bounded build cache. These exercise the
+production lifecycle helper, including ordered teardown before logout,
+cleanup after reporting failure, cancelled preparation, and ownership transfer.
+They do not substitute for AVPlayer or simulator acceptance.
+
 ## Development reuse
 
 Lustr was inspected at commit `240e08d91d4aed0299639f6f11fd522912b248f9`.

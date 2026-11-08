@@ -6,6 +6,17 @@ Standalone nested workspace for the native Apple client of [Bluefin](https://git
 
 ## FFI contract
 
+Local `stopPlaybackProxy` dispatch bypasses ordinary network-call saturation,
+so closing a player cannot lose its local resource cleanup to `Client busy`.
+Swift keeps an awaitable teardown owner and retries admission for remote
+release for up to 60 seconds. Cleanup endpoints have a three-second request
+timeout. Final progress and server release settle before remote logout.
+Pending plans retain cleanup ownership until controller installation; cancelled
+or rejected plans close their local proxy and release known server resources.
+Rust also closes known opened live sources when preparation fails before
+returning a plan. Source-only or host checks do not guarantee cleanup after
+process termination or an unreachable server; such failures are surfaced.
+
 `char *bluefin_call(const char *json)` blocks. Call it from a background thread, outside a Tokio runtime. Supply valid readable NUL-terminated UTF-8 of at most 65,536 bytes, excluding the terminator. The returned allocated UTF-8 JSON always has either `{"ok":true,"value":...}` or `{"ok":false,"error":"safe message"}`. Copy it, then release it exactly once with `bluefin_free`. NULL input is an error; freeing NULL is safe. Invalid/dangling pointers, double frees and foreign allocations violate the C contract and cannot be caught as Rust panics.
 
 Panics during dispatch are caught. Four FFI calls may run concurrently; further calls fail with `Client busy`. Each HTTP request has a 5-second connection timeout, 15-second total timeout and 8 MiB body limit. Home performs three requests sequentially, so its bound is approximately 45 seconds. The final JSON envelope is limited to 8 MiB. Allocation exhaustion and host process termination are outside panic recovery. HTTP errors expose status only; transport and JSON errors never echo response bodies, credentials or URLs. The core installs no logging or global panic hook.

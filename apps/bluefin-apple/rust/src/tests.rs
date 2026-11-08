@@ -1,5 +1,134 @@
 use super::*;
 use std::{net::TcpListener, thread};
+static FFI_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn ffi(value: Value) -> Value {
+    let input = CString::new(value.to_string()).unwrap();
+    unsafe {
+        let output = bluefin_call(input.as_ptr());
+        let result =
+            serde_json::from_str(std::ffi::CStr::from_ptr(output).to_str().unwrap()).unwrap();
+        bluefin_free(output);
+        result
+    }
+}
+#[test]
+fn cleanup_under_saturated_ffi_closes_listener() {
+    use std::{
+        io::Write,
+        sync::{Arc, Barrier},
+    };
+    let _serial = stream::tests::SERIAL.lock().unwrap();
+    let _ffi = FFI_TEST_LOCK.lock().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let ready = Arc::new(Barrier::new(5));
+    let release = Arc::new(Barrier::new(5));
+    let r = ready.clone();
+    let done = release.clone();
+    let server = thread::spawn(move || {
+        let mut workers = Vec::new();
+        for _ in 0..4 {
+            let (mut socket, _) = listener.accept().unwrap();
+            let r = r.clone();
+            let done = done.clone();
+            workers.push(thread::spawn(move || {
+                let mut bytes = [0; 16384];
+                let read = socket.read(&mut bytes).unwrap();
+                assert!(read > 0);
+                r.wait();
+                done.wait();
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    )
+                    .unwrap();
+            }));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+    });
+    let clients = (0..4).map(|_| thread::spawn(move || ffi(json!({"operation":"info","server":format!("http://{address}"),"allowLocalHttp":true})))).collect::<Vec<_>>();
+    let (id, local) = stream::start(
+        Url::parse(&format!("http://{address}/Videos/i/file.mp4")).unwrap(),
+        "/Videos/i/".into(),
+        "viewer".into(),
+    )
+    .unwrap();
+    ready.wait();
+    let result = ffi(json!({"operation":"stopPlaybackProxy","proxyId":id}));
+    release.wait();
+    for client in clients {
+        assert_eq!(client.join().unwrap()["ok"], true);
+    }
+    server.join().unwrap();
+    let url = Url::parse(&local).unwrap();
+    let closed = std::net::TcpStream::connect(("127.0.0.1", url.port().unwrap())).is_err();
+    stream::stop(&id).unwrap();
+    assert_eq!(
+        result["ok"], true,
+        "Cleanup must bypass ordinary FFI saturation"
+    );
+    assert!(closed);
+}
+#[test]
+fn lossless_source_wins_regardless_of_source_order() {
+    let _guard = stream::tests::SERIAL.lock().unwrap();
+    for reverse in [false, true] {
+        let direct = json!({"Id":"lossless","Container":"flac","SupportsDirectPlay":true,"MediaStreams":[{"Type":"Audio","Codec":"flac"}]});
+        let lossy = json!({"Id":"lossy","TranscodingUrl":"Audio/i/master.m3u8","MediaStreams":[{"Type":"Audio","Codec":"wma"}]});
+        let sources = if reverse {
+            vec![direct, lossy]
+        } else {
+            vec![lossy, direct]
+        };
+        let (server, worker) = mock(
+            "200 OK",
+            &json!({"PlaySessionId":"p","MediaSources":sources}).to_string(),
+        );
+        let plan = call(&json!({"operation":"playback","mediaType":"Audio","server":server,"allowLocalHttp":true,"token":"viewer-token","userId":"u","itemId":"i"})).unwrap();
+        worker.join().unwrap();
+        stream::stop(plan["proxyId"].as_str().unwrap()).unwrap();
+        assert_eq!(plan["mediaSourceId"], "lossless");
+        assert_eq!(plan["playMethod"], "DirectPlay");
+    }
+}
+#[test]
+fn rejected_preparation_closes_opened_live_source() {
+    use std::io::Write;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let worker = thread::spawn(move || {
+        let mut requests = Vec::new();
+        for body in [
+            r#"{"PlaySessionId":"p","MediaSources":[{"Id":"m","LiveStreamId":"live-one","Container":"mkv","SupportsDirectPlay":false}]}"#,
+            "",
+        ] {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut buffer = [0; 16384];
+            let size = socket.read(&mut buffer).unwrap();
+            requests.push(String::from_utf8_lossy(&buffer[..size]).into_owned());
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+        }
+        requests
+    });
+    let error = call(&json!({"operation":"playback","server":format!("http://{address}"),"allowLocalHttp":true,"token":"viewer","userId":"u","itemId":"i"})).unwrap_err();
+    let requests = worker.join().unwrap();
+    assert_eq!(error, "No supported Apple playback source");
+    assert!(requests[1].starts_with("POST /LiveStreams/Close?liveStreamId=live-one "));
+    assert!(requests[1].contains("Token=\"viewer\""));
+}
 #[test]
 fn favorite_updates_are_user_scoped() {
     for (favorite, method) in [(true, "POST"), (false, "DELETE")] {
@@ -192,6 +321,7 @@ fn playback_preserves_metadata_and_removes_query_credentials() {
 }
 #[test]
 fn limits_and_ffi() {
+    let _ffi = FFI_TEST_LOCK.lock().unwrap();
     assert!(count(&json!({"limit":201}), "limit", 50, 200).is_err());
     assert!(index(&json!({"audioStreamIndex":-2}), "audioStreamIndex").is_err());
     let s = CString::new("{bad").unwrap();
@@ -208,6 +338,7 @@ fn limits_and_ffi() {
 
 #[test]
 fn auth_injection_and_oversized_input_rejected() {
+    let _ffi = FFI_TEST_LOCK.lock().unwrap();
     for extra in [
         json!({"token":"secret\"Injected"}),
         json!({"deviceId":"device\"Injected","token":"valid"}),
