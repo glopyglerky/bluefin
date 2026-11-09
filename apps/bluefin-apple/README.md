@@ -75,6 +75,15 @@ separate executable, since each defines its own entry point.
 
 ## Development reuse
 
+For release candidates, compile `tools/BuildCore.rs` with stable Rust into your
+bounded build cache, then run it from this directory. Set `CARGO_TARGET_DIR` and
+`BLUEFIN_CORE_OUT` to absolute cache/deliverable paths outside source. An optional
+argument selects one of the four Apple targets. This helper selects the matching
+Xcode SDK, keeps the OS 15 deployment floor and remaps source, home, toolchain and
+cache paths in Rust output. Use `CARGO_ENCODED_RUSTFLAGS` for additional flags.
+Point Xcode's `BLUEFIN_RUST_LIB_DIR` at the matching retained candidate directory.
+Audit the final bundle too; compiler path remapping is not a secret-data scan.
+
 Lustr was inspected at commit `240e08d91d4aed0299639f6f11fd522912b248f9`.
 Its current compiler is a Linux x86_64 Rust subset with no async, unsafe, or
 general proc-macro support. It cannot compile this client's FFI, Reqwest, or

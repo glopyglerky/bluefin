@@ -1,5 +1,16 @@
 import SwiftUI
 
+/// iOS content labels keep native text colors instead of inheriting link tint.
+struct MusicContentLinkStyle: ViewModifier {
+    @ViewBuilder func body(content: Content) -> some View {
+        #if os(iOS)
+        content.buttonStyle(.plain)
+        #else
+        content
+        #endif
+    }
+}
+
 struct MusicCover: View {
     let item: MediaItem
     var radius: CGFloat = BluefinStyle.artworkRadius

@@ -8,7 +8,7 @@ import CoreSpotlight
     @AppStorage("bluefin.appearance") private var appearance = 0
     var body: some Scene {
         WindowGroup {
-            RootView().environmentObject(store).tint(.cyan).preferredColorScheme(appearance == 1 ? .light : appearance == 2 ? .dark : nil)
+            RootView().environmentObject(store).tint(BluefinStyle.accent).preferredColorScheme(appearance == 1 ? .light : appearance == 2 ? .dark : nil)
         }
     }
 }
@@ -137,7 +137,7 @@ struct QuickConnectView: View {
             VStack(spacing: 24) {
                 Image(systemName: "key.viewfinder").font(.system(size: 50, weight: .light)).foregroundColor(.cyan).accessibilityHidden(true)
                 Text("Sign in on your own terms").font(.title2.bold()).multilineTextAlignment(.center)
-                Text("Open Quick Connect in another signed-in Ferrofin or Jellyfin client and enter this code.").multilineTextAlignment(.center).foregroundStyle(.secondary)
+                Text("Open Quick Connect in another signed-in client for your server and enter this code.").multilineTextAlignment(.center).foregroundStyle(.secondary)
                 if let code { Text(code).font(.system(size: 42, weight: .semibold, design: .monospaced)).tracking(6).accessibilityLabel("Quick Connect code, \(code.map(String.init).joined(separator: ", "))").accessibilityIdentifier("quickConnectCode") }
                 if let problem { Text(problem).foregroundColor(.red).multilineTextAlignment(.center); Button("Try again") { retry = UUID() } }
                 else { ProgressView(code == nil ? "Getting a code" : "Waiting for your approval") }

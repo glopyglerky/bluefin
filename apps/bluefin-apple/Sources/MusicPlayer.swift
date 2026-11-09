@@ -40,6 +40,7 @@ struct MusicLibraryView: View {
                     LazyHStack(alignment: .top, spacing: 20) {
                         ForEach(Array(model.items.prefix(12))) { item in
                             NavigationLink(destination: MusicCollection(title: item.title, type: "Audio", parent: item)) { MusicShelfCard(item: item).frame(width: shelfWidth) }
+                                .modifier(MusicContentLinkStyle())
                         }
                     }.padding(.vertical, 6)
                 }

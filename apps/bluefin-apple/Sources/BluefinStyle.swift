@@ -2,7 +2,11 @@ import SwiftUI
 
 /// Semantic colors shared by the native library and playback views.
 enum BluefinStyle {
-    static let accent = Color.accentColor
+    static let accent = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.35, green: 0.85, blue: 0.95, alpha: 1)
+            : UIColor(red: 0, green: 0.43, blue: 0.57, alpha: 1)
+    })
     #if os(tvOS)
     static let background = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark ? UIColor(white: 0.055, alpha: 1) : UIColor(white: 0.98, alpha: 1)
