@@ -5,6 +5,11 @@ enum RustBridge {
     /// Rust owns protocol validation, device profiles, playback planning, and API requests.
     /// A detached task keeps synchronous FFI off the main actor.
     static func call<T: Decodable>(_ operation: String, session: AccountSession? = nil, fields: [String: Any] = [:], as type: T.Type = T.self) async throws -> T {
+        let cleanup = ["releasePlayback", "stopPlaybackProxy", "downloadCancel"].contains(operation)
+        let permit: UUID?
+        if cleanup { permit = nil } else { permit = try await CoreAdmission.shared.acquire() }
+        defer { if let permit { Task { await CoreAdmission.shared.release(permit) } } }
+        if !cleanup { try Task.checkCancellation() }
         var request = fields
         request["operation"] = operation
         if let session {
@@ -13,6 +18,9 @@ enum RustBridge {
             request["userId"] = session.userId
             request["deviceId"] = session.deviceId
             request["allowLocalHttp"] = session.allowHttp
+            if operation == "playback", let pin = session.irohPeerId, let address = session.irohPeerAddress {
+                request["iroh"] = ["peerId": pin, "peerAddress": address]
+            }
         }
         if let allowHttp = request.removeValue(forKey: "allowHttp") { request["allowLocalHttp"] = allowHttp }
         let data = try JSONSerialization.data(withJSONObject: request)

@@ -66,11 +66,30 @@ Header reads time out after five seconds, upstream connects after five seconds, 
 
 ## Iroh scope
 
-The optional `iroh-probe` feature implements an actual Iroh 1.4.1 QUIC/TLS handshake using ALPN `bluefin/apple-probe/1`. It requires an explicit pinned EndpointId and direct numeric IP:port, uses the Minimal preset with no discovery or relay service, sends no media token/application payload, and closes the connection. Handshake timeout is 5 seconds; graceful shutdown adds at most 1 second. The FFI concurrency limit also applies to probes. A server must explicitly offer this ALPN. A successful handshake returns `connected:true` and `mediaRouteQualified:false`.
+The core consumes the current `../iroh-modern` rlib inside its single static
+archive. Both mobile compatibility patches are applied at this consuming
+workspace root. Link only `libbluefin_apple_core.a` in the app.
 
-The workspace-gateway source uses `workspace-gateway/1` and length-prefixed MCP requests. That is not a media protocol. Read-only targeted inspection of the installed NAS media bin directory and likely source checkouts did not establish an authenticated media protocol. No isolated media owner thread was inspected or contacted. The HTTPS media bridge is independent of Iroh and is not presented as Iroh transport.
+Playback accepts optional `iroh:{peerId,peerAddress}` with an explicitly pinned
+endpoint and numeric socket address. API metadata stays on canonical HTTPS.
+The existing capability proxy validates and rewrites every HLS media route;
+only upstream fetches map into the private authenticated tunnel. The usual
+viewer Authorization is forwarded to the selected origin. No second token,
+automatic peer replacement, discovery, relay or silent HTTPS fallback is used.
+The session owns the tunnel until its proxy jobs drain on stop. See the modern
+crate README for the bounded windows, request limits and foreground constraints.
 
-NAS tests include a real loopback Iroh handshake and a wrong-pin failure. The Iroh-enabled iOS simulator build still fails in released upstream `netdev 0.46.3`, whose Darwin `ipv6_addr_flags.rs` uses `libc::in6_ifreq`, absent for iOS. The supported released upgrade from Iroh 0.98.2 to 1.4.1 was tested on NAS and attempted on Apple. It did not remove this blocker. Default Apple deliverables exclude `iroh-probe`. No ABI structs, vendored stack, private Apple datapath feature or app subprocess fallback was added. Upstream references: [Iroh manifest](https://github.com/n0-computer/iroh/blob/v1.4.1/iroh/Cargo.toml), [netdev source](https://github.com/shellrow/netdev/blob/v0.46.3/src/os/darwin/ipv6_addr_flags.rs). Actual Apple transport and an authenticated media protocol remain unqualified.
+The matching adapter supports explicitly admitted item prefixes and still
+requires the origin to authorize every viewer request. Its CLI remains
+foreground and ephemeral. Durable endpoint identity, trusted pin provisioning,
+installed server integration, relays, suspend/recovery and mobile interface
+migration need separate qualification. Host TLS/Iroh/HLS fixtures do not prove
+native playback or remote-server acceptance.
+
+The optional `iroh-probe` feature uses the same modern Iroh version for a real
+pinned handshake with `bluefin/apple-probe/1`. Its `mediaRouteQualified:false`
+result is only a probe. Workspace-gateway MCP framing is not a media protocol.
+The retired compatibility experiment is not part of the active core graph.
 
 ## Building and verification
 
@@ -98,3 +117,92 @@ Retain libraries outside target directories, with one useful rollback and small
 private logs/hashes. Exact deployment identifiers and operator evidence stay
 outside product source. Deliverables do not establish physical-device or
 installed-server acceptance.
+
+## Music, guide and offline operations
+
+`musicItems` returns paginated `Items` and `TotalRecordCount`. `kind` is `songs`,
+`albums`, `artists`, `albumArtists`, `playlists`, or `playlistItems`. The latter
+requires `playlistId` and preserves server order and `PlaylistItemId`. Optional
+filters include `artistId`, `albumArtistId`, `albumId`, `parentId`, `isFavorite`,
+`searchTerm`, `genres`, and `years`. Relationships use IDs, never title matching.
+`startIndex` defaults to 0 and `limit` to 50 with a maximum of 200. Sort columns
+are explicitly admitted; the default is `SortName` ascending. Favorites use the
+existing `favorite` operation. Item details include chapters and media tracks.
+
+`createPlaylist` takes `name` and optional `itemIds`, creates a private audio
+playlist for the authenticated caller, and returns `Id`. `addPlaylistItems`
+takes `playlistId`, `itemIds`, and optional `position`. `removePlaylistItems`
+takes `entryIds` returned as `PlaylistItemId`, rather than inferring them from
+track IDs. `renamePlaylist` changes only `name`; `deletePlaylist` checks the
+current user's item type before calling the server delete endpoint. Permissions
+and HTTP errors propagate. Mutations are never silently retried.
+
+`lyrics` returns the server's `Metadata` and `Lyrics`, including optional tick
+positions, word cues and timing offset. `liveChannels` returns the authorized
+channel page and server `CurrentProgram`. `livePrograms` takes `channelIds` and
+optional date bounds or `isAiring`, and returns programmes ordered by start date.
+Use `minEndDate` for current and upcoming guide rows. The client applies no
+sports policy or external metadata lookup.
+
+`downloadStart`, `downloads`, `downloadCancel`, and `downloadRemove` take an
+existing absolute app-owned `cacheRoot`, normalized server URL and `userId`.
+Start also takes `itemId` and a token, verifies `/Users/Me`, checks the account's
+download policy and admits a native original audio source via non-playing
+PlaybackInfo. `/Items/{id}/Download` enforces actual server download permissions.
+Redirects and foreign origins are refused. HLS and transcoded sources are never
+cached as native audio. Content length, source length when supplied, and native
+container signature are checked. A SHA256 digest verifies retained bytes.
+
+One worker runs per process. Default per-file reservation is 256 MiB, configurable
+through `maxBytes` to at most 1 GiB. Default account quota is 2 GiB, configurable
+through `quotaBytes` to at most 8 GiB, with at most 100 records. A start reserves
+the full per-file maximum against the quota; it can refuse a small file if that
+reservation does not fit. Transfer buffers are 32 KiB and item metadata is capped
+at 8 KiB. The account catalog is capped at 1 MiB. One staging file and a small
+pending receipt permit bounded recovery after a killed process. Files are synced
+and atomically renamed before becoming playable. Directory-FD operations reject
+symlinks and non-regular or multiply linked files; account mutations take a native
+exclusive lock. Caller must protect the app-owned root from concurrent renaming.
+
+Records contain `itemId`, `state`, `bytes`, `totalBytes`, optional safe `item`,
+optional generic `error`, and `localUrl` only for verified `completed` records.
+States are `downloading`, `completed`, `failed`, and `cancelled`. Completed records
+survive restart, while failed and cancelled progress is retained for the current
+worker only. `downloads` returns `Items`, default limits, `maxWorkers`, and
+`maxItems`. Cancellation and removal bypass network admission. Cancellation joins
+the worker; an in-flight request may take its timeout, up to 30 seconds, to exit.
+Logout joins the matching account worker before its server request. Account
+namespaces contain no token. Native hosts must stop their player and discard file
+URLs on logout; a file URL cannot revoke an already-open file descriptor.
+
+Run the offline tests with `BLUEFIN_TEST_CACHE` pointing at bounded build storage.
+No authenticated household account or live library mutation is needed by tests.
+
+Apple delivery includes a real native C linkage check against each target
+library. The installed Xcode linker accepts the default ThinLTO libraries. Its
+`nm` reader reports unsupported LLVM attributes while inspecting newer Rust
+bitcode, so that inspection alone does not establish a linker failure.
+
+## Optional Bluefin and sports APIs
+
+`bluefinCapabilities`, `bluefinMusicQueue`, `saveBluefinMusicQueue` and
+`bluefinMusicQueueItems` consume the shared `bluefin-contract` v1 types.
+Queue writes require `expectedRevision` and a typed `queue`. Conflicts remain
+HTTP409 and are never automatically retried. Metadata fetches are user scoped,
+batched and reordered to preserve duplicate tracks. Missing extensions return
+normal errors; clients must not infer support from a server name.
+
+`sportsPreferences` and `sportsHome` use the selected origin's root
+`/sports/api/v1/preferences` and `/sports/api/v1/home`. Saving preferences takes
+the preferences object and the exact quoted numeric `etag`; PUT sends only
+that object with If-Match. Missing/stale revisions remain HTTP428/412. The
+adapter preserves unknown event identity and unverified availability. Native
+server playback authorization remains authoritative.
+
+Video playback accepts `mediaSourceId` and `quality` automatic/original/balanced/
+dataSaver. Their bitrate ceilings are 80/200/12/3 Mbps; these are upper policy
+bounds, not guaranteed throughput or codec support. The admitted codec profile
+remains conservative SDR. Source and track choices are preserved when planning.
+Explicit audio selection requests a transcode so static playback cannot ignore
+it. Subtitle index -1 means off. A lower bitrate choice cannot silently select
+a known over-limit static source. Source quality does not prove output quality.

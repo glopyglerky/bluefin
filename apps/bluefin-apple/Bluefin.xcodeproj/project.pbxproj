@@ -10,44 +10,73 @@
 		00E12DBFCC22E0C4D3360644 /* NativeShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B85C15446CBCC5BD594B4205 /* NativeShortcuts.swift */; };
 		09C5DECF766EB3BED5EA7356 /* BluefinApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCB87ECD3A2D26C375F3D55C /* BluefinApp.swift */; };
 		0D036DE21AD8ACF6F3052240 /* MusicPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */; };
+		110F323927F8A2E9E6650B0D /* MusicExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF41EA8217CC01ED78F5B230 /* MusicExtras.swift */; };
 		1D5F2EC402608BB297557AB2 /* NativeHomeScenes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B93418762ED988465849B32 /* NativeHomeScenes.swift */; };
-		20F94F6529493D8AAD628B5A /* SharePlay.entitlements.template in Resources */ = {isa = PBXBuildFile; fileRef = 26AD07D8422218809A3C52BA /* SharePlay.entitlements.template */; };
+		20B782EE4425370F11C47F47 /* MusicExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF41EA8217CC01ED78F5B230 /* MusicExtras.swift */; };
+		220D7C750B03BA789D7F2D95 /* BluefinAudioCheck.m4a in Resources */ = {isa = PBXBuildFile; fileRef = 79B40C813F78E1CD75D9520B /* BluefinAudioCheck.m4a */; };
+		2716B29DABA02C484556DE05 /* NativeServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE2460776A20B4FB7A2F4B5B /* NativeServer.swift */; };
+		27B2DCC4EF9BC965C69ACC2F /* LiveTV.swift in Sources */ = {isa = PBXBuildFile; fileRef = 982BE933C743D9BFA5CE7B37 /* LiveTV.swift */; };
 		29A00921934D3319F6C4AC46 /* NativeHomeScenes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B93418762ED988465849B32 /* NativeHomeScenes.swift */; };
+		2DBD381BD622504214533F10 /* CoreAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8004301C4A8B9B7CF56DB3F4 /* CoreAdmission.swift */; };
 		2F9D73C75F76205C93623EA1 /* BluefinApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCB87ECD3A2D26C375F3D55C /* BluefinApp.swift */; };
+		37DBC0B0D29851E6F6178ED0 /* MusicLibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D006ABB8323A0134B9F3E64C /* MusicLibraryModel.swift */; };
+		39C8E62F36F70A6FA975D184 /* VideoOptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8408F8A6A7152DBA9996513 /* VideoOptions.swift */; };
 		3B7BCF23A632D9CBE11F4F74 /* CarPlayVideoSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */; };
 		3C19172E3D40D827C414FF09 /* Artwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FF25D78AA631E5A41B8B313 /* Artwork.swift */; };
+		423AB228CA49BA6C7E5ECE66 /* NativePlaybackHTTP.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2DFA2F71A88876FFAE99094 /* NativePlaybackHTTP.swift */; };
+		452A3FCF6B81F530F66D67A3 /* IrohSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49DB857C424585BC6F92237 /* IrohSettings.swift */; };
 		49446A73FFA372F97BFBE6AC /* LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DE689159E4853343AA651D0 /* LibraryStore.swift */; };
 		4ACCA5EAB0065404A04759B1 /* NativeShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B85C15446CBCC5BD594B4205 /* NativeShortcuts.swift */; };
-		53A3C04E0E2B1EB26BF9E817 /* CarPlay-scene.plist.template in Resources */ = {isa = PBXBuildFile; fileRef = 9BAED692C96434473D2ED78E /* CarPlay-scene.plist.template */; };
 		5740E48A11C7741B27DF98B5 /* RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706B3CC35EBF8FE54AD7791A /* RustBridge.swift */; };
+		5DAC315EDF02CF8E164C8188 /* Sports.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3732B4D57D5C67E6EF478440 /* Sports.swift */; };
 		5F3257CB271DE208FC6E13A8 /* NativeIntegrations.swift in Sources */ = {isa = PBXBuildFile; fileRef = E63091525FC2417A600865C5 /* NativeIntegrations.swift */; };
-		69DFDD97230345174DD167AE /* SharePlay.entitlements.template in Resources */ = {isa = PBXBuildFile; fileRef = 26AD07D8422218809A3C52BA /* SharePlay.entitlements.template */; };
+		64B604505F07EA883550040B /* NativeServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE2460776A20B4FB7A2F4B5B /* NativeServer.swift */; };
+		6CF660F9938362B5F8A34568 /* AudioSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8510BA858AF05A7716E9F3AB /* AudioSettings.swift */; };
 		6DE9362DB33BCD47DF35076A /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */; };
 		702DB01A916BBCFCE5D011B1 /* HomeAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */; };
 		702FB15FE4E329C4A2425DAE /* MusicPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */; };
-		796E0B2AE57ECFD0B1C22FA5 /* HomeKit.entitlements.template in Resources */ = {isa = PBXBuildFile; fileRef = D19FE75A109DB7E8983106D8 /* HomeKit.entitlements.template */; };
+		7484DFC2B2094C6C18EC67D8 /* OfflineLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D285970E9B54011DA8C30BA /* OfflineLibrary.swift */; };
+		7B45817160C57283E7345606 /* IrohSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49DB857C424585BC6F92237 /* IrohSettings.swift */; };
+		7B529048D78C70B0660E3262 /* NativePlaybackFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FAC5D92CC21A4DF2B39C342 /* NativePlaybackFixtures.swift */; };
+		8A6ED647567DE99473AE5EEC /* AudioSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8510BA858AF05A7716E9F3AB /* AudioSettings.swift */; };
 		8C8E6B685D460EF1627F4BD6 /* NativeIntegrationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */; };
 		915EAD3B2B3801B77540B432 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A869924D1D322649B8E44112 /* Models.swift */; };
 		93A052358E73D0E7124DFCE3 /* PlaybackLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DED8DE60C9EF16484D7401 /* PlaybackLifecycle.swift */; };
 		97E6881D69BE50868A46817B /* CarPlayVideoSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */; };
 		A08DD4D6F9B92C107A6520E1 /* HomeAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */; };
+		A09BD06984B2DA35F6ECAF80 /* MusicLibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D006ABB8323A0134B9F3E64C /* MusicLibraryModel.swift */; };
+		A18604A6D17207CBD4FC1107 /* BluefinOceanStudy.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = 26BD4A8C5AB4CFEA96586328 /* BluefinOceanStudy.mp4 */; };
 		A2FB2ACF6BC94AF9F4CC6280 /* NativeCarPlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */; };
-		A40AEC381221AC19640475F6 /* CarPlay.entitlements.template in Resources */ = {isa = PBXBuildFile; fileRef = A3E2D931F75C4C25E16BA615 /* CarPlay.entitlements.template */; };
+		A8ACDA1FE3D4F69053FCA371 /* BluefinOceanStudy.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = 26BD4A8C5AB4CFEA96586328 /* BluefinOceanStudy.mp4 */; };
+		AA4CF381A8AC7A3774AF780B /* BluefinStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 151BD9B36DBFDD44A247108B /* BluefinStyle.swift */; };
 		AAB2D67AF1A21FB8BF768323 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A869924D1D322649B8E44112 /* Models.swift */; };
 		ABECCCD47CAB64F4CCDFC553 /* Artwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FF25D78AA631E5A41B8B313 /* Artwork.swift */; };
+		AD403E6DD0A42ACE9777F90C /* BluefinStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 151BD9B36DBFDD44A247108B /* BluefinStyle.swift */; };
 		AE27B61125D6A2043B71CA94 /* NativeSharePlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */; };
 		B30BDDF3135E4C583C1B219D /* LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DE689159E4853343AA651D0 /* LibraryStore.swift */; };
 		B574CFD024AE05B5E5825F2C /* BluefinTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6006E519D52C7EBC295D8FB0 /* BluefinTests.swift */; };
 		B8A20DF9FFD9503886052011 /* NativeIntegrationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */; };
+		BEEF40A7258BA8E88F13E2D0 /* VideoOptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8408F8A6A7152DBA9996513 /* VideoOptions.swift */; };
+		BF5C1FBF949A718CE2E9C9DC /* NativeAudioDSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = E88CF800F2A3D9B8F0779C5B /* NativeAudioDSP.swift */; };
+		BFE41D00EA94B85CE35A75B8 /* NativeAudioDSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = E88CF800F2A3D9B8F0779C5B /* NativeAudioDSP.swift */; };
+		C5C8F63F9166746987128869 /* MusicDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = C161B9D616DEA7BA78CA3269 /* MusicDesign.swift */; };
+		C854B0A308957C9C255C8B24 /* CoreAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8004301C4A8B9B7CF56DB3F4 /* CoreAdmission.swift */; };
 		C91AF6A17B6A456ED382E6B1 /* PlaybackLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DED8DE60C9EF16484D7401 /* PlaybackLifecycle.swift */; };
+		CA2B4CCECE3D8374E522FB5A /* BluefinAudioCheck.m4a in Resources */ = {isa = PBXBuildFile; fileRef = 79B40C813F78E1CD75D9520B /* BluefinAudioCheck.m4a */; };
 		CC7D278B7F468987E35308F1 /* NativeSharePlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */; };
-		D0454E33A4BB005B1EC5ECE9 /* CarPlay-scene.plist.template in Resources */ = {isa = PBXBuildFile; fileRef = 9BAED692C96434473D2ED78E /* CarPlay-scene.plist.template */; };
+		CD84E7F67C8D595A2B572FAE /* Sports.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3732B4D57D5C67E6EF478440 /* Sports.swift */; };
 		D411D49983495E930525B9DD /* NativeCarPlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */; };
 		D48A4036B7B14A8C647B7962 /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */; };
-		D63C6E9B0DB4AACB61428039 /* CarPlay.entitlements.template in Resources */ = {isa = PBXBuildFile; fileRef = A3E2D931F75C4C25E16BA615 /* CarPlay.entitlements.template */; };
+		D8D2E0847E16AEF1BE05C295 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = DBCDDCED380E226B8BA1540C /* PrivacyInfo.xcprivacy */; };
+		DB7D896D4144893819D4FA3F /* OfflineLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D285970E9B54011DA8C30BA /* OfflineLibrary.swift */; };
 		DC032D9013CC21C8F3B87E03 /* NativeIntegrations.swift in Sources */ = {isa = PBXBuildFile; fileRef = E63091525FC2417A600865C5 /* NativeIntegrations.swift */; };
 		E3F44E94DABB3CB5E3C79903 /* RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706B3CC35EBF8FE54AD7791A /* RustBridge.swift */; };
-		F57272363C6889D2870E8A4F /* HomeKit.entitlements.template in Resources */ = {isa = PBXBuildFile; fileRef = D19FE75A109DB7E8983106D8 /* HomeKit.entitlements.template */; };
+		EB65753346AEFB43AC116417 /* MusicDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = C161B9D616DEA7BA78CA3269 /* MusicDesign.swift */; };
+		ECF5BE8CED401BEFFED6AE1B /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = DBCDDCED380E226B8BA1540C /* PrivacyInfo.xcprivacy */; };
+		F3BB324981FD1223E3CEA605 /* LiveTV.swift in Sources */ = {isa = PBXBuildFile; fileRef = 982BE933C743D9BFA5CE7B37 /* LiveTV.swift */; };
+		F8AEA80934F90BF2DC579F4B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF0280F112CF1BBC0F287DCD /* Assets.xcassets */; };
+		F9807DCE4365D032A5506A98 /* NativePlaybackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55DBC4D89A5CC6B08F603BAE /* NativePlaybackTests.swift */; };
+		FB06B81496BE628C42868C34 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF0280F112CF1BBC0F287DCD /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -63,29 +92,45 @@
 /* Begin PBXFileReference section */
 		056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeAssistant.swift; sourceTree = "<group>"; };
 		0CCE1271A6DE0258BD662552 /* BluefinTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BluefinTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		151BD9B36DBFDD44A247108B /* BluefinStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluefinStyle.swift; sourceTree = "<group>"; };
 		1B93418762ED988465849B32 /* NativeHomeScenes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeHomeScenes.swift; sourceTree = "<group>"; };
 		1D2F8939E26D2C4764EFF44E /* BluefinTV.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BluefinTV.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		26AD07D8422218809A3C52BA /* SharePlay.entitlements.template */ = {isa = PBXFileReference; path = SharePlay.entitlements.template; sourceTree = "<group>"; };
+		26BD4A8C5AB4CFEA96586328 /* BluefinOceanStudy.mp4 */ = {isa = PBXFileReference; path = BluefinOceanStudy.mp4; sourceTree = "<group>"; };
 		26DED8DE60C9EF16484D7401 /* PlaybackLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackLifecycle.swift; sourceTree = "<group>"; };
 		2DE689159E4853343AA651D0 /* LibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryStore.swift; sourceTree = "<group>"; };
 		2FF25D78AA631E5A41B8B313 /* Artwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Artwork.swift; sourceTree = "<group>"; };
 		3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeSharePlay.swift; sourceTree = "<group>"; };
 		33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCarPlay.swift; sourceTree = "<group>"; };
+		3732B4D57D5C67E6EF478440 /* Sports.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sports.swift; sourceTree = "<group>"; };
+		3D285970E9B54011DA8C30BA /* OfflineLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineLibrary.swift; sourceTree = "<group>"; };
 		45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackController.swift; sourceTree = "<group>"; };
 		4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlayVideoSupport.swift; sourceTree = "<group>"; };
 		5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicPlayer.swift; sourceTree = "<group>"; };
+		55DBC4D89A5CC6B08F603BAE /* NativePlaybackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlaybackTests.swift; sourceTree = "<group>"; };
 		5BB5CBF94C7858BB4CC72B30 /* Bluefin.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Bluefin.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5FAC5D92CC21A4DF2B39C342 /* NativePlaybackFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlaybackFixtures.swift; sourceTree = "<group>"; };
 		6006E519D52C7EBC295D8FB0 /* BluefinTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluefinTests.swift; sourceTree = "<group>"; };
 		706B3CC35EBF8FE54AD7791A /* RustBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustBridge.swift; sourceTree = "<group>"; };
-		9BAED692C96434473D2ED78E /* CarPlay-scene.plist.template */ = {isa = PBXFileReference; path = "CarPlay-scene.plist.template"; sourceTree = "<group>"; };
-		A3E2D931F75C4C25E16BA615 /* CarPlay.entitlements.template */ = {isa = PBXFileReference; path = CarPlay.entitlements.template; sourceTree = "<group>"; };
+		79B40C813F78E1CD75D9520B /* BluefinAudioCheck.m4a */ = {isa = PBXFileReference; path = BluefinAudioCheck.m4a; sourceTree = "<group>"; };
+		8004301C4A8B9B7CF56DB3F4 /* CoreAdmission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreAdmission.swift; sourceTree = "<group>"; };
+		8510BA858AF05A7716E9F3AB /* AudioSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSettings.swift; sourceTree = "<group>"; };
+		982BE933C743D9BFA5CE7B37 /* LiveTV.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTV.swift; sourceTree = "<group>"; };
 		A869924D1D322649B8E44112 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		B49DB857C424585BC6F92237 /* IrohSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohSettings.swift; sourceTree = "<group>"; };
 		B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeIntegrationActions.swift; sourceTree = "<group>"; };
 		B85C15446CBCC5BD594B4205 /* NativeShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeShortcuts.swift; sourceTree = "<group>"; };
+		C161B9D616DEA7BA78CA3269 /* MusicDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicDesign.swift; sourceTree = "<group>"; };
+		C2DFA2F71A88876FFAE99094 /* NativePlaybackHTTP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlaybackHTTP.swift; sourceTree = "<group>"; };
+		C8408F8A6A7152DBA9996513 /* VideoOptions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoOptions.swift; sourceTree = "<group>"; };
 		CCB87ECD3A2D26C375F3D55C /* BluefinApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluefinApp.swift; sourceTree = "<group>"; };
-		D19FE75A109DB7E8983106D8 /* HomeKit.entitlements.template */ = {isa = PBXFileReference; path = HomeKit.entitlements.template; sourceTree = "<group>"; };
+		CF41EA8217CC01ED78F5B230 /* MusicExtras.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicExtras.swift; sourceTree = "<group>"; };
+		D006ABB8323A0134B9F3E64C /* MusicLibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicLibraryModel.swift; sourceTree = "<group>"; };
 		D4C44FD13474EB0877DF6C6B /* Rust-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Rust-Bridging-Header.h"; sourceTree = "<group>"; };
+		DBCDDCED380E226B8BA1540C /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		DF0280F112CF1BBC0F287DCD /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		E63091525FC2417A600865C5 /* NativeIntegrations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeIntegrations.swift; sourceTree = "<group>"; };
+		E88CF800F2A3D9B8F0779C5B /* NativeAudioDSP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAudioDSP.swift; sourceTree = "<group>"; };
+		FE2460776A20B4FB7A2F4B5B /* NativeServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeServer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -99,17 +144,6 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		23ABE7F9D191123E36DB7A7A /* Templates */ = {
-			isa = PBXGroup;
-			children = (
-				9BAED692C96434473D2ED78E /* CarPlay-scene.plist.template */,
-				A3E2D931F75C4C25E16BA615 /* CarPlay.entitlements.template */,
-				D19FE75A109DB7E8983106D8 /* HomeKit.entitlements.template */,
-				26AD07D8422218809A3C52BA /* SharePlay.entitlements.template */,
-			);
-			path = Templates;
-			sourceTree = "<group>";
-		};
 		2CDC2273B593A8B10A260DF0 /* Integrations */ = {
 			isa = PBXGroup;
 			children = (
@@ -119,7 +153,6 @@
 				E63091525FC2417A600865C5 /* NativeIntegrations.swift */,
 				3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */,
 				B85C15446CBCC5BD594B4205 /* NativeShortcuts.swift */,
-				23ABE7F9D191123E36DB7A7A /* Templates */,
 			);
 			path = Integrations;
 			sourceTree = "<group>";
@@ -128,6 +161,9 @@
 			isa = PBXGroup;
 			children = (
 				6006E519D52C7EBC295D8FB0 /* BluefinTests.swift */,
+				5FAC5D92CC21A4DF2B39C342 /* NativePlaybackFixtures.swift */,
+				C2DFA2F71A88876FFAE99094 /* NativePlaybackHTTP.swift */,
+				55DBC4D89A5CC6B08F603BAE /* NativePlaybackTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -136,28 +172,61 @@
 			isa = PBXGroup;
 			children = (
 				2FF25D78AA631E5A41B8B313 /* Artwork.swift */,
+				8510BA858AF05A7716E9F3AB /* AudioSettings.swift */,
 				CCB87ECD3A2D26C375F3D55C /* BluefinApp.swift */,
+				151BD9B36DBFDD44A247108B /* BluefinStyle.swift */,
 				4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */,
+				8004301C4A8B9B7CF56DB3F4 /* CoreAdmission.swift */,
 				056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */,
+				B49DB857C424585BC6F92237 /* IrohSettings.swift */,
 				2DE689159E4853343AA651D0 /* LibraryStore.swift */,
+				982BE933C743D9BFA5CE7B37 /* LiveTV.swift */,
 				A869924D1D322649B8E44112 /* Models.swift */,
+				C161B9D616DEA7BA78CA3269 /* MusicDesign.swift */,
+				CF41EA8217CC01ED78F5B230 /* MusicExtras.swift */,
+				D006ABB8323A0134B9F3E64C /* MusicLibraryModel.swift */,
 				5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */,
+				E88CF800F2A3D9B8F0779C5B /* NativeAudioDSP.swift */,
+				FE2460776A20B4FB7A2F4B5B /* NativeServer.swift */,
+				3D285970E9B54011DA8C30BA /* OfflineLibrary.swift */,
 				45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */,
 				26DED8DE60C9EF16484D7401 /* PlaybackLifecycle.swift */,
 				D4C44FD13474EB0877DF6C6B /* Rust-Bridging-Header.h */,
 				706B3CC35EBF8FE54AD7791A /* RustBridge.swift */,
+				3732B4D57D5C67E6EF478440 /* Sports.swift */,
+				C8408F8A6A7152DBA9996513 /* VideoOptions.swift */,
 				2CDC2273B593A8B10A260DF0 /* Integrations */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
 		};
+		D052DB95D28E8B16B038BC23 /* Preview */ = {
+			isa = PBXGroup;
+			children = (
+				79B40C813F78E1CD75D9520B /* BluefinAudioCheck.m4a */,
+				26BD4A8C5AB4CFEA96586328 /* BluefinOceanStudy.mp4 */,
+			);
+			path = Preview;
+			sourceTree = "<group>";
+		};
 		DDA6AAC87DCD92DC88E74B94 = {
 			isa = PBXGroup;
 			children = (
+				FEBDE78B6FE928B778A92632 /* Resources */,
 				8745C439D6AE038E0C54B999 /* Sources */,
 				4CAAEC7D10C92CEB296964A1 /* Tests */,
 				08E70717C5EBD5CED0FDEA60 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		FEBDE78B6FE928B778A92632 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				DF0280F112CF1BBC0F287DCD /* Assets.xcassets */,
+				DBCDDCED380E226B8BA1540C /* PrivacyInfo.xcprivacy */,
+				D052DB95D28E8B16B038BC23 /* Preview */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -263,10 +332,10 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D0454E33A4BB005B1EC5ECE9 /* CarPlay-scene.plist.template in Resources */,
-				D63C6E9B0DB4AACB61428039 /* CarPlay.entitlements.template in Resources */,
-				F57272363C6889D2870E8A4F /* HomeKit.entitlements.template in Resources */,
-				69DFDD97230345174DD167AE /* SharePlay.entitlements.template in Resources */,
+				FB06B81496BE628C42868C34 /* Assets.xcassets in Resources */,
+				CA2B4CCECE3D8374E522FB5A /* BluefinAudioCheck.m4a in Resources */,
+				A8ACDA1FE3D4F69053FCA371 /* BluefinOceanStudy.mp4 in Resources */,
+				ECF5BE8CED401BEFFED6AE1B /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -274,10 +343,10 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				53A3C04E0E2B1EB26BF9E817 /* CarPlay-scene.plist.template in Resources */,
-				A40AEC381221AC19640475F6 /* CarPlay.entitlements.template in Resources */,
-				796E0B2AE57ECFD0B1C22FA5 /* HomeKit.entitlements.template in Resources */,
-				20F94F6529493D8AAD628B5A /* SharePlay.entitlements.template in Resources */,
+				F8AEA80934F90BF2DC579F4B /* Assets.xcassets in Resources */,
+				220D7C750B03BA789D7F2D95 /* BluefinAudioCheck.m4a in Resources */,
+				A18604A6D17207CBD4FC1107 /* BluefinOceanStudy.mp4 in Resources */,
+				D8D2E0847E16AEF1BE05C295 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -289,21 +358,34 @@
 			buildActionMask = 2147483647;
 			files = (
 				ABECCCD47CAB64F4CCDFC553 /* Artwork.swift in Sources */,
+				6CF660F9938362B5F8A34568 /* AudioSettings.swift in Sources */,
 				2F9D73C75F76205C93623EA1 /* BluefinApp.swift in Sources */,
+				AA4CF381A8AC7A3774AF780B /* BluefinStyle.swift in Sources */,
 				3B7BCF23A632D9CBE11F4F74 /* CarPlayVideoSupport.swift in Sources */,
+				2DBD381BD622504214533F10 /* CoreAdmission.swift in Sources */,
 				702DB01A916BBCFCE5D011B1 /* HomeAssistant.swift in Sources */,
+				7B45817160C57283E7345606 /* IrohSettings.swift in Sources */,
 				49446A73FFA372F97BFBE6AC /* LibraryStore.swift in Sources */,
+				27B2DCC4EF9BC965C69ACC2F /* LiveTV.swift in Sources */,
 				AAB2D67AF1A21FB8BF768323 /* Models.swift in Sources */,
+				EB65753346AEFB43AC116417 /* MusicDesign.swift in Sources */,
+				20B782EE4425370F11C47F47 /* MusicExtras.swift in Sources */,
+				A09BD06984B2DA35F6ECAF80 /* MusicLibraryModel.swift in Sources */,
 				0D036DE21AD8ACF6F3052240 /* MusicPlayer.swift in Sources */,
+				BF5C1FBF949A718CE2E9C9DC /* NativeAudioDSP.swift in Sources */,
 				D411D49983495E930525B9DD /* NativeCarPlay.swift in Sources */,
 				1D5F2EC402608BB297557AB2 /* NativeHomeScenes.swift in Sources */,
 				B8A20DF9FFD9503886052011 /* NativeIntegrationActions.swift in Sources */,
 				5F3257CB271DE208FC6E13A8 /* NativeIntegrations.swift in Sources */,
+				2716B29DABA02C484556DE05 /* NativeServer.swift in Sources */,
 				CC7D278B7F468987E35308F1 /* NativeSharePlay.swift in Sources */,
 				4ACCA5EAB0065404A04759B1 /* NativeShortcuts.swift in Sources */,
+				DB7D896D4144893819D4FA3F /* OfflineLibrary.swift in Sources */,
 				6DE9362DB33BCD47DF35076A /* PlaybackController.swift in Sources */,
 				C91AF6A17B6A456ED382E6B1 /* PlaybackLifecycle.swift in Sources */,
 				E3F44E94DABB3CB5E3C79903 /* RustBridge.swift in Sources */,
+				5DAC315EDF02CF8E164C8188 /* Sports.swift in Sources */,
+				BEEF40A7258BA8E88F13E2D0 /* VideoOptions.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -312,6 +394,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				B574CFD024AE05B5E5825F2C /* BluefinTests.swift in Sources */,
+				7B529048D78C70B0660E3262 /* NativePlaybackFixtures.swift in Sources */,
+				423AB228CA49BA6C7E5ECE66 /* NativePlaybackHTTP.swift in Sources */,
+				F9807DCE4365D032A5506A98 /* NativePlaybackTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -320,21 +405,34 @@
 			buildActionMask = 2147483647;
 			files = (
 				3C19172E3D40D827C414FF09 /* Artwork.swift in Sources */,
+				8A6ED647567DE99473AE5EEC /* AudioSettings.swift in Sources */,
 				09C5DECF766EB3BED5EA7356 /* BluefinApp.swift in Sources */,
+				AD403E6DD0A42ACE9777F90C /* BluefinStyle.swift in Sources */,
 				97E6881D69BE50868A46817B /* CarPlayVideoSupport.swift in Sources */,
+				C854B0A308957C9C255C8B24 /* CoreAdmission.swift in Sources */,
 				A08DD4D6F9B92C107A6520E1 /* HomeAssistant.swift in Sources */,
+				452A3FCF6B81F530F66D67A3 /* IrohSettings.swift in Sources */,
 				B30BDDF3135E4C583C1B219D /* LibraryStore.swift in Sources */,
+				F3BB324981FD1223E3CEA605 /* LiveTV.swift in Sources */,
 				915EAD3B2B3801B77540B432 /* Models.swift in Sources */,
+				C5C8F63F9166746987128869 /* MusicDesign.swift in Sources */,
+				110F323927F8A2E9E6650B0D /* MusicExtras.swift in Sources */,
+				37DBC0B0D29851E6F6178ED0 /* MusicLibraryModel.swift in Sources */,
 				702FB15FE4E329C4A2425DAE /* MusicPlayer.swift in Sources */,
+				BFE41D00EA94B85CE35A75B8 /* NativeAudioDSP.swift in Sources */,
 				A2FB2ACF6BC94AF9F4CC6280 /* NativeCarPlay.swift in Sources */,
 				29A00921934D3319F6C4AC46 /* NativeHomeScenes.swift in Sources */,
 				8C8E6B685D460EF1627F4BD6 /* NativeIntegrationActions.swift in Sources */,
 				DC032D9013CC21C8F3B87E03 /* NativeIntegrations.swift in Sources */,
+				64B604505F07EA883550040B /* NativeServer.swift in Sources */,
 				AE27B61125D6A2043B71CA94 /* NativeSharePlay.swift in Sources */,
 				00E12DBFCC22E0C4D3360644 /* NativeShortcuts.swift in Sources */,
+				7484DFC2B2094C6C18EC67D8 /* OfflineLibrary.swift in Sources */,
 				D48A4036B7B14A8C647B7962 /* PlaybackController.swift in Sources */,
 				93A052358E73D0E7124DFCE3 /* PlaybackLifecycle.swift in Sources */,
 				5740E48A11C7741B27DF98B5 /* RustBridge.swift in Sources */,
+				CD84E7F67C8D595A2B572FAE /* Sports.swift in Sources */,
+				39C8E62F36F70A6FA975D184 /* VideoOptions.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -352,7 +450,7 @@
 		22952F8F66542508C5C028FB /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
+				ASSETCATALOG_COMPILER_APPICON_NAME = BluefinTV;
 				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
 				INFOPLIST_FILE = "tvOS-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -472,7 +570,7 @@
 		6172A24019F7356657246F15 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
+				ASSETCATALOG_COMPILER_APPICON_NAME = BluefinTV;
 				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
 				INFOPLIST_FILE = "tvOS-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (

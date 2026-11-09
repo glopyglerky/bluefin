@@ -5,3 +5,12 @@ xcuserdata/
 DerivedData/
 .DS_Store
 Local.xcconfig
+Secrets.xcconfig
+.env
+.env.*
+*.p12
+*.mobileprovision
+*.provisionprofile
+*.key
+*.pem
+Private/

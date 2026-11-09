@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 // Host adapters keep this check off the network, Keychain and AVFoundation.
 // LibraryStore and PlaybackReporter below are the actual production sources.
@@ -30,14 +31,21 @@ actor StoreEvents {
 
 @MainActor enum SessionVault {
     static var clearCount = 0
-    static func load() -> AccountSession? { nil }
-    static func save(_ session: AccountSession) throws {}
-    static func clear() { clearCount += 1 }
+    static var current: AccountSession?
+    static func load() -> AccountSession? { current }
+    static func save(_ session: AccountSession) throws { current = session }
+    static func clear() { clearCount += 1; current = nil }
 }
+
+struct EmptyValue: Decodable {}
 
 @MainActor enum RustBridge {
     static var events = StoreEvents()
+    static var allowPlayback = false
     static func call<T: Decodable>(_ operation: String, session: AccountSession? = nil, fields: [String: Any] = [:]) async throws -> T {
+        if allowPlayback && operation == "playback" {
+            return try JSONDecoder().decode(T.self, from: Data(#"{"url":"https://example.com/fixture","playSessionId":"play","mediaSourceId":"media","playMethod":"DirectPlay","source":{"LiveStreamId":"live"}}"#.utf8))
+        }
         throw BluefinError.message("Unexpected fixture request: \(operation)")
     }
     static func notify(_ operation: String, session: AccountSession, fields: [String: Any] = [:]) async throws {
@@ -48,7 +56,31 @@ actor StoreEvents {
     }
 }
 
+struct NativeAudioSettings {}
+@MainActor final class AudioPreferences { var settings = NativeAudioSettings() }
+
+@MainActor final class SportsStore { func disconnect() {} }
+
+@MainActor final class OfflineLibrary {
+    func disconnect() {}
+    func localURL(for item: MediaItem, session: AccountSession) -> URL? { nil }
+}
+
 @MainActor final class PlaybackController {
+    let id = UUID()
+    var onMusicAdvance: ((MediaItem) -> Void)?
+    var videoSelection = VideoOptionSelection()
+    var onVideoOptions: ((VideoOptionSelection) -> Void)?
+    func configureAudio(_ settings: NativeAudioSettings) {}
+    func discardNextMusicCandidate() -> Task<Void, Error> { Task {} }
+    func setNextMusicCandidate(_ item: MediaItem?, session: AccountSession) {}
+    let item: MediaItem
+    var positionSeconds: Double = 0
+    var isFavorite = false
+    var onReplay: (() -> Void)?
+    var onFavorite: (() -> Void)?
+    func seek(seconds: Double) { positionSeconds = seconds }
+    func updateFavorite(_ value: Bool) { isFavorite = value }
     var onSeekOutsideWindow: ((Int64) -> Void)?
     var onNext: (() -> Void)?
     var onPrevious: (() -> Void)?
@@ -56,6 +88,7 @@ actor StoreEvents {
     private let reporter: PlaybackReporter
     private var teardown: Task<Void, Error>?
     init(item: MediaItem, url: URL, plan: PlaybackPlan?, session: AccountSession?) throws {
+        self.item = item
         guard let plan, let session else { throw BluefinError.message("Missing fixture plan") }
         reporter = PlaybackReporter(session: session, itemId: item.Id, plan: plan) { operation, session, fields in
             try await RustBridge.notify(operation, session: session, fields: fields)
@@ -117,6 +150,47 @@ actor StoreEvents {
         precondition(store.error?.contains("could not confirm") == true, "Sign-out lost an earlier cleanup failure")
         let failedOrder = await failedEvents.snapshot()
         precondition(failedOrder == ["stopPlaybackProxy", "started", "stopped", "releasePlayback", "logout"])
+        RustBridge.events = StoreEvents()
+        RustBridge.allowPlayback = true
+        SessionVault.current = account
+        let video = LibraryStore()
+        await video.play(.preview[0])
+        let ended = video.playback
+        precondition(ended?.onFinish != nil, "Video completion has no presentation owner")
+        ended?.onFinish?()
+        precondition(video.playback == nil, "Completed video left an empty player onscreen")
+        await video.signOut()
+        SessionVault.current = account
+        let queued = LibraryStore()
+        queued.clearMusicQueue()
+        let a = MediaItem(Id: "audio-a", Name: "A", Type: "Audio")
+        let b = MediaItem(Id: "audio-b", Name: "B", Type: "Audio")
+        await queued.playMusic([a, a, b], at: 1)
+        precondition(queued.musicIndex == 1, "Duplicate playlist entries lost the requested cursor")
+        queued.removeMusic(at: IndexSet(integer: 0))
+        precondition(queued.musicIndex == 0 && queued.musicQueue.count == 2)
+        queued.moveMusic(from: IndexSet(integer: 0), to: 2)
+        precondition(queued.musicIndex == 1 && queued.musicQueue.map(\.Id) == [b.Id, a.Id])
+        queued.cycleMusicRepeat()
+        queued.cycleMusicRepeat()
+        precondition(queued.musicRepeat == .one)
+        queued.toggleMusicShuffle()
+        queued.toggleMusicShuffle()
+        precondition(queued.musicQueue.map(\.Id) == [b.Id, a.Id])
+        let restored = LibraryStore()
+        precondition(restored.musicQueue.map(\.Id) == [b.Id, a.Id] && restored.musicRepeat == .one)
+        var other = account; other.userId = "different-fixture-user"
+        SessionVault.current = other
+        let isolated = LibraryStore()
+        precondition(isolated.musicQueue.isEmpty, "Queue leaked between accounts")
+        SessionVault.current = nil
+        let key = "bluefin.queue." + SHA256.hash(data: Data((account.server + "\u{0}" + account.userId).utf8)).map { String(format: "%02x", $0) }.joined()
+        UserDefaults.standard.removeObject(forKey: key)
+        let preview = LibraryStore(); preview.explore()
+        let favorites = try await preview.musicItems(type: "MusicAlbum", favorites: true)
+        precondition(favorites.Items.isEmpty, "Preview falsely labeled an unfavorited album")
+        print("PASS: completed video dismisses through owned teardown; preview favorites are filtered")
+        print("PASS: duplicate queue cursor, queue remove/move, shuffle restoration, repeat and account-scoped persistence")
         print("PASS: actual LibraryStore dismiss/sign-out retains ordered cleanup, captured account and release fields; dismissed failures remain visible")
     }
 }

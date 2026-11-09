@@ -427,6 +427,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bluefin-contract"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "blurhash"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1259,10 +1268,12 @@ version = "0.4.1"
 dependencies = [
  "async-trait",
  "axum",
+ "bluefin-contract",
  "brotli 9.0.0",
  "chrono",
  "ferrofin-api",
  "ferrofin-common",
+ "ferrofin-core",
  "ferrofin-db",
  "ferrofin-health",
  "ferrofin-model",
@@ -1284,6 +1295,7 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
+ "sqlx",
  "tempfile",
  "thiserror",
  "tokio",

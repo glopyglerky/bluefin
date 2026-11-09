@@ -1,0 +1,14 @@
+{
+  "info" : {
+    "author" : "org.glopyglerky.bluefin",
+    "version" : 1
+  },
+  "layers" : [
+    {
+      "filename" : "Foreground.imagestacklayer"
+    },
+    {
+      "filename" : "Background.imagestacklayer"
+    }
+  ]
+}

@@ -5,6 +5,12 @@ The server retains its upstream names, attribution, license, and compatibility
 contracts. The native Apple client lives in [apps/bluefin-apple](apps/bluefin-apple).
 It is in development. No App Store or TestFlight release has been submitted.
 
+Bluefin's source and releases contain generic code and original demo samples,
+not an operator's media, accounts or private deployment configuration. The arr
+stack stays in separate projects; Bluefin can integrate with user-configured
+external services through supported APIs. See the
+[public-source and integration boundaries](docs/bluefin/public-release.md).
+
 The upstream server documentation follows. Its feature and performance claims
 describe Ferrofin's reviewed upstream versions, not acceptance of the new client.
 

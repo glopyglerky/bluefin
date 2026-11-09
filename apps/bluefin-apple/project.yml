@@ -20,8 +20,12 @@ targets:
   Bluefin:
     type: application
     platform: iOS
-    sources: [Sources]
-    resources: [Resources]
+    sources:
+      - path: Sources
+        excludes: ["Integrations/Templates/**"]
+      - path: Resources
+        excludes: ["Preview/README.md"]
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.glopyglerky.bluefin
@@ -43,12 +47,17 @@ targets:
   BluefinTV:
     type: application
     platform: tvOS
-    sources: [Sources]
-    resources: [Resources]
+    sources:
+      - path: Sources
+        excludes: ["Integrations/Templates/**"]
+      - path: Resources
+        excludes: ["Preview/README.md"]
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.glopyglerky.bluefin
         TARGETED_DEVICE_FAMILY: "3"
+        ASSETCATALOG_COMPILER_APPICON_NAME: BluefinTV
     info:
       path: tvOS-Info.plist
       properties:

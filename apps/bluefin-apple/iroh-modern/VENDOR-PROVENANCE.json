@@ -1,0 +1,31 @@
+[
+  {
+    "crate": "netdev-0.46.3",
+    "registry_archive_sha256": "c3c52c2584961c68f5a6e3356797344061f818c93b8acc9cd6d7e284795e563e",
+    "changes": [
+      "Cargo.toml",
+      "src/interface/mod.rs",
+      "src/os/darwin/ipv6_addr_flags.rs",
+      "src/os/mod.rs",
+      "src/os/unix/dns.rs",
+      "src/os/unix/interface.rs",
+      "src/os/unix/link_speed.rs"
+    ],
+    "license": "MIT"
+  },
+  {
+    "crate": "netwatch-0.19.3",
+    "registry_archive_sha256": "39da9cad5f23aa43401f09497d3b280e51b5feba115d9ffbf38ca35d6ff95e96",
+    "changes": [
+      "Cargo.toml",
+      "build.rs",
+      "src/interfaces.rs",
+      "src/interfaces/apple_mobile.rs",
+      "src/interfaces/netdev_impl.rs",
+      "src/netmon.rs",
+      "src/netmon/actor.rs",
+      "src/netmon/apple_mobile.rs"
+    ],
+    "license": "MIT OR Apache-2.0"
+  }
+]

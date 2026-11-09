@@ -19,6 +19,7 @@ workspace = true
 test-util = []
 
 [dependencies]
+bluefin-contract = { path = "../bluefin-contract" }
 ferrofin-traits.workspace = true
 ferrofin-model.workspace = true
 ferrofin-health.workspace = true
@@ -67,6 +68,8 @@ tracing-opentelemetry.workspace = true
 zip = { workspace = true, features = ["time"] }   # backup archives; `time` stamps entries with now
 
 [dev-dependencies]
+sqlx.workspace = true
+ferrofin-core = { path = "../ferrofin-core" }
 # Self dev-dependency so unit + integration tests build with the `test-util`
 # fakes (the composition-root deps are unavailable at this layer by design).
 ferrofin-api = { workspace = true, features = ["test-util"] }

@@ -193,7 +193,7 @@ fn release_playback_is_session_scoped_and_idempotent_for_direct_media() {
         .starts_with("POST /jellyfin/LiveStreams/Close?liveStreamId=live-one "));
     call(&json!({"operation":"releasePlayback","server":"https://example.com","token":"viewer-token","playMethod":"DirectPlay"})).unwrap();
 }
-fn mock(status: &str, body: &str) -> (String, thread::JoinHandle<String>) {
+pub(crate) fn mock(status: &str, body: &str) -> (String, thread::JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let response = format!(
@@ -205,11 +205,65 @@ fn mock(status: &str, body: &str) -> (String, thread::JoinHandle<String>) {
         let (mut s, _) = listener.accept().unwrap();
         s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
         let mut buf = [0; 65536];
-        let n = s.read(&mut buf).unwrap();
+        let mut n = 0;
+        loop {
+            let read = s.read(&mut buf[n..]).unwrap();
+            assert!(read > 0, "Incomplete request");
+            n += read;
+            let request = String::from_utf8_lossy(&buf[..n]);
+            if let Some(end) = request.find("\r\n\r\n") {
+                let length = request[..end]
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")?
+                            .parse::<usize>()
+                            .ok()
+                    })
+                    .unwrap_or(0);
+                if n >= end + 4 + length {
+                    break;
+                }
+            }
+            assert!(n < buf.len(), "Request too large for fixture");
+        }
         s.write_all(response.as_bytes()).unwrap();
         String::from_utf8_lossy(&buf[..n]).into_owned()
     });
     (format!("http://{addr}/jellyfin/"), h)
+}
+
+#[test]
+fn premium_playback_source_and_quality_reach_the_planner() {
+    let _guard = stream::tests::SERIAL.lock().unwrap();
+    for (quality, expected) in [
+        ("automatic", 80_000_000u64),
+        ("original", 200_000_000),
+        ("balanced", 12_000_000),
+        ("dataSaver", 3_000_000),
+    ] {
+        let (server, worker) = mock(
+            "200 OK",
+            &json!({"PlaySessionId":"p","MediaSources":[
+                {"Id":"other","TranscodingUrl":"Videos/i/other.m3u8"},
+                {"Id":"selected","TranscodingUrl":"Videos/i/selected.m3u8"}
+            ]})
+            .to_string(),
+        );
+        let plan = call(&json!({"operation":"playback","server":server,"allowLocalHttp":true,"token":"viewer","userId":"u","itemId":"i","mediaSourceId":"selected","quality":quality,"audioStreamIndex":1,"subtitleStreamIndex":-1})).unwrap();
+        stream::stop(plan["proxyId"].as_str().unwrap()).unwrap();
+        let request = worker.join().unwrap();
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(plan["mediaSourceId"], "selected");
+        assert_eq!(body["MediaSourceId"], "selected");
+        assert_eq!(body["DeviceProfile"]["MaxStreamingBitrate"], expected);
+        assert_eq!(body["MaxStreamingBitrate"], expected);
+        assert_eq!(
+            body["EnableDirectPlay"], false,
+            "An explicit audio track must not be ignored by static direct play"
+        );
+        assert_eq!(body["SubtitleStreamIndex"], -1);
+    }
 }
 #[test]
 fn url_security() {
@@ -410,4 +464,93 @@ fn standalone_audio_plan() {
     call(&json!({"operation":"stopPlaybackProxy","proxyId":r["proxyId"]})).unwrap();
     let request = h.join().unwrap();
     assert!(request.contains("PlaybackInfo"));
+}
+#[test]
+fn premium_music_relationships_and_projection() {
+    let (server, h) = mock(
+        "200 OK",
+        r#"{"Items":[{"Id":"song","AlbumId":"album","ArtistItems":[{"Id":"artist","Name":"Artist"}],"Path":"/private","Chapters":[{"Name":"Part","StartPositionTicks":20,"ImageTag":"tag"}],"MediaStreams":[{"Type":"Audio","Codec":"flac","Path":"secret"}]}],"TotalRecordCount":12}"#,
+    );
+    let r=call(&json!({"operation":"musicItems","server":server,"allowLocalHttp":true,"token":"secret","userId":"u","kind":"songs","artistId":"artist","albumId":"album","sortBy":"IndexNumber","isFavorite":true,"startIndex":4,"limit":2})).unwrap();
+    let request = h.join().unwrap();
+    let u = Url::parse(&format!(
+        "http://localhost{}",
+        request
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+    ))
+    .unwrap();
+    let q = u.query_pairs().collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(q["artistIds"], "artist");
+    assert_eq!(q["parentId"], "album");
+    assert_eq!(q["isFavorite"], "true");
+    assert_eq!(r["TotalRecordCount"], 12);
+    assert_eq!(r["Items"][0]["AlbumId"], "album");
+    assert!(r["Items"][0].get("Path").is_none());
+    assert!(r["Items"][0]["MediaStreams"][0].get("Path").is_none());
+}
+#[test]
+fn premium_playlist_checked_semantics() {
+    for (op, key, path, method) in [
+        (
+            "addPlaylistItems",
+            "itemIds",
+            "/jellyfin/Playlists/p/Items",
+            "POST",
+        ),
+        (
+            "removePlaylistItems",
+            "entryIds",
+            "/jellyfin/Playlists/p/Items",
+            "DELETE",
+        ),
+        ("renamePlaylist", "name", "/jellyfin/Playlists/p", "POST"),
+    ] {
+        let (server, h) = mock("204 No Content", "");
+        let mut v = json!({"operation":op,"server":server,"allowLocalHttp":true,"token":"secret","userId":"u","playlistId":"p"});
+        v[key] = if key == "name" {
+            json!("New name")
+        } else {
+            json!(["entry"])
+        };
+        assert_eq!(call(&v).unwrap()["updated"], true);
+        let req = h.join().unwrap();
+        assert!(req.starts_with(&format!("{method} {path}")));
+        if key == "entryIds" {
+            assert!(req.contains("entryIds=entry"));
+            assert!(!req.contains("?ids="));
+        }
+    }
+    let (server, h) = mock("403 Forbidden", "");
+    assert_eq!(call(&json!({"operation":"renamePlaylist","server":server,"allowLocalHttp":true,"token":"secret","userId":"u","playlistId":"p","name":"N"})).unwrap_err(),"Server returned HTTP 403");
+    h.join().unwrap();
+    let (server, h) = mock("200 OK", r#"{"Type":"Audio"}"#);
+    assert!(call(&json!({"operation":"deletePlaylist","server":server,"allowLocalHttp":true,"token":"secret","userId":"u","playlistId":"song"})).unwrap_err().contains("non-playlist"));
+    h.join().unwrap();
+}
+#[test]
+fn premium_lyrics_and_live_contract() {
+    let (server, h) = mock(
+        "200 OK",
+        r#"{"Metadata":{"IsSynced":true,"Offset":50},"Lyrics":[{"Text":"line","Start":100}]}"#,
+    );
+    let r=call(&json!({"operation":"lyrics","server":server,"allowLocalHttp":true,"token":"secret","userId":"u","itemId":"song"})).unwrap();
+    assert_eq!(r["Lyrics"][0]["Start"], 100);
+    assert!(h
+        .join()
+        .unwrap()
+        .starts_with("GET /jellyfin/Audio/song/Lyrics "));
+    let (server, h) = mock(
+        "200 OK",
+        r#"{"Items":[{"Id":"p","StartDate":"2026-11-08T12:00:00Z","ChannelId":"c"}],"TotalRecordCount":1}"#,
+    );
+    let r=call(&json!({"operation":"livePrograms","server":server,"allowLocalHttp":true,"token":"secret","userId":"u","channelIds":["c"],"minEndDate":"2026-11-08T12:00:00Z"})).unwrap();
+    assert_eq!(r["Items"][0]["ChannelId"], "c");
+    let req = h.join().unwrap();
+    assert!(req.contains("channelIds=c"));
+    assert!(!req.contains("isSports"));
 }

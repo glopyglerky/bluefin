@@ -171,6 +171,11 @@ async fn get_display_preferences(
         .client
         .filter(|c| !c.is_empty())
         .ok_or_else(|| ApiError::BadRequest("missing required 'client'".to_owned()))?;
+    if client == super::bluefin::QUEUE_CLIENT {
+        return Err(ApiError::Forbidden(
+            "reserved Bluefin queue preferences".to_owned(),
+        ));
+    }
     let item_id = resolve_item_id(&display_preferences_id);
 
     // The three reads are independent (each keyed by user, item and client),
@@ -285,6 +290,11 @@ async fn update_display_preferences(
         .client
         .filter(|c| !c.is_empty())
         .ok_or_else(|| ApiError::BadRequest("missing required 'client'".to_owned()))?;
+    if client == super::bluefin::QUEUE_CLIENT {
+        return Err(ApiError::Forbidden(
+            "reserved Bluefin queue preferences".to_owned(),
+        ));
+    }
     let item_id = resolve_item_id(&display_preferences_id);
 
     let mut prefs: DisplayPreferencesEntity = state

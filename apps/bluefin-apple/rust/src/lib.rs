@@ -9,8 +9,13 @@ use std::{
 };
 use url::Url;
 mod home_assistant;
+mod iroh_transport;
+mod native_server;
+mod offline;
+mod premium;
 #[cfg(feature = "iroh-probe")]
 mod probe;
+mod sports;
 mod stream;
 const INPUT_MAX: usize = 65536;
 const RESPONSE_MAX: usize = 8 * 1024 * 1024;
@@ -238,6 +243,27 @@ fn profile() -> Value {
     "TranscodingProfiles":[{"Container":"ts","Type":"Video","Protocol":"hls","VideoCodec":"h264","AudioCodec":"aac","MaxAudioChannels":"2","MinSegments":2,"BreakOnNonKeyFrames":false},{"Container":"ts","Type":"Audio","Protocol":"hls","AudioCodec":"aac","MaxAudioChannels":"2"}],
     "CodecProfiles":[{"Type":"Video","Codec":"h264","Conditions":[{"Condition":"EqualsAny","Property":"VideoProfile","Value":"high|main|baseline|constrained baseline","IsRequired":true},{"Condition":"LessThanEqual","Property":"VideoLevel","Value":"41","IsRequired":true},{"Condition":"EqualsAny","Property":"VideoRangeType","Value":"SDR","IsRequired":true},{"Condition":"LessThanEqual","Property":"VideoBitDepth","Value":"8","IsRequired":true},{"Condition":"LessThanEqual","Property":"Width","Value":"1920","IsRequired":true},{"Condition":"LessThanEqual","Property":"Height","Value":"1080","IsRequired":true}]}]})
 }
+fn playback_bitrate(v: &Value) -> Result<u64> {
+    let quality = match v.get("quality").filter(|value| !value.is_null()) {
+        None => "automatic",
+        Some(value) => value
+            .as_str()
+            .ok_or_else(|| err("Invalid playback quality"))?,
+    };
+    match quality {
+        "automatic" => Ok(80_000_000),
+        "original" => Ok(200_000_000),
+        "balanced" => Ok(12_000_000),
+        "dataSaver" => Ok(3_000_000),
+        _ => Err(err("Invalid playback quality")),
+    }
+}
+fn selected_source(v: &Value) -> Result<Option<&str>> {
+    v.get("mediaSourceId")
+        .filter(|value| !value.is_null())
+        .map(|_| text(v, "mediaSourceId"))
+        .transpose()
+}
 fn native_audio(source: &Value) -> bool {
     source["SupportsDirectPlay"] == true
         && matches!(
@@ -289,7 +315,10 @@ fn playback(api: &Api<'_>) -> Result<Value> {
     let ticks = count(v, "startTicks", 0, i64::MAX as u64)?;
     let audio = index(v, "audioStreamIndex")?;
     let subtitle = index(v, "subtitleStreamIndex")?;
-    let b = json!({"UserId":user,"StartTimeTicks":ticks,"AudioStreamIndex":audio,"SubtitleStreamIndex":subtitle,"IsPlayback":true,"AutoOpenLiveStream":true,"EnableDirectPlay":true,"EnableDirectStream":false,"EnableTranscoding":true,"DeviceProfile":profile()});
+    let bitrate = playback_bitrate(v)?;
+    let mut device_profile = profile();
+    device_profile["MaxStreamingBitrate"] = json!(bitrate);
+    let b = json!({"UserId":user,"MediaSourceId":selected_source(v)?,"MaxStreamingBitrate":bitrate,"StartTimeTicks":ticks,"AudioStreamIndex":audio,"SubtitleStreamIndex":subtitle,"IsPlayback":true,"AutoOpenLiveStream":true,"EnableDirectPlay":audio.is_none_or(|index| index < 0) && subtitle.is_none_or(|index| index < 0),"EnableDirectStream":false,"EnableTranscoding":true,"DeviceProfile":device_profile});
     let info = api.post(&["Items", item, "PlaybackInfo"], b)?;
     let result = plan_playback(api, &info);
     if let Err(error) = &result {
@@ -346,6 +375,8 @@ fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
     let audio = index(v, "audioStreamIndex")?;
     let subtitle = index(v, "subtitleStreamIndex")?;
     let is_audio = v["mediaType"] == "Audio";
+    let selected_source = selected_source(v)?;
+    let bitrate = playback_bitrate(v)?;
     if info.get("ErrorCode").is_some_and(|x| !x.is_null()) {
         return Err(err("Server could not prepare playback"));
     }
@@ -362,9 +393,18 @@ fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
         let id = source["Id"]
             .as_str()
             .ok_or_else(|| err("Missing media source ID"))?;
+        if selected_source.is_some_and(|selected| selected != id) {
+            continue;
+        }
         let transcode = source["TranscodingUrl"].as_str();
         let streams = source["MediaStreams"].as_array();
         let direct = source["SupportsDirectPlay"] == true
+            && audio.is_none_or(|index| index < 0)
+            && source["Bitrate"]
+                .as_u64()
+                .is_none_or(|value| value <= bitrate)
+            && (!matches!(v["quality"].as_str(), Some("balanced" | "dataSaver"))
+                || source["Bitrate"].is_u64())
             && matches!(source["Container"].as_str(), Some("mp4" | "m4v"))
             && streams.is_some_and(|s| {
                 s.iter().any(|s| {
@@ -385,7 +425,7 @@ fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
                     .all(|s| matches!(s["Codec"].as_str(), Some("aac" | "ac3" | "eac3")))
             })
             && subtitle.unwrap_or(-1) == -1;
-        let audio_direct = is_audio && native_audio(source);
+        let audio_direct = is_audio && native_audio(source) && audio.is_none_or(|index| index < 0);
         let (mut url, uses_transcode) = if is_audio {
             if !streams.is_some_and(|ss| {
                 ss.iter().any(|s| s["Type"] == "Audio") && !ss.iter().any(|s| s["Type"] == "Video")
@@ -440,7 +480,12 @@ fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
         } else {
             0
         };
-        let (proxy_id, local_url) = stream::start(url.clone(), prefix, api.auth(true)?)?;
+        let (proxy_id, local_url) = stream::start_with_transport(
+            url.clone(),
+            prefix,
+            api.auth(true)?,
+            iroh_transport::Tunnel::from_request(api)?,
+        )?;
         let result = json!({"playbackInfo":info,"source":source,"url":local_url,"remoteUrl":url.as_str(),"headers":{},"proxyId":proxy_id,"playSessionId":info["PlaySessionId"],"mediaSourceId":id,"startTicks":ticks,"startOffsetTicks":offset,"playMethod":if uses_transcode {"Transcode"} else {"DirectPlay"},"audioStreamIndex":audio,"subtitleStreamIndex":subtitle});
         if result.to_string().len() > RESPONSE_MAX - 64 {
             stream::stop(&proxy_id)?;
@@ -470,7 +515,45 @@ pub fn call(v: &Value) -> Result<Value> {
         stream::stop(text(v, "proxyId")?)?;
         return Ok(json!({"stopped":true}));
     }
+    if matches!(
+        op,
+        "downloadStart" | "downloads" | "downloadCancel" | "downloadRemove"
+    ) {
+        return offline::call(v, op);
+    }
+    if op == "logout" {
+        offline::logout(v)?;
+    }
     let api = Api::new(v)?;
+    if matches!(
+        op,
+        "bluefinCapabilities"
+            | "bluefinMusicQueue"
+            | "saveBluefinMusicQueue"
+            | "bluefinMusicQueueItems"
+    ) {
+        return native_server::call(&api, op);
+    }
+    if matches!(
+        op,
+        "sportsPreferences" | "saveSportsPreferences" | "sportsHome"
+    ) {
+        return sports::call(&api, op);
+    }
+    if matches!(
+        op,
+        "musicItems"
+            | "lyrics"
+            | "createPlaylist"
+            | "addPlaylistItems"
+            | "removePlaylistItems"
+            | "renamePlaylist"
+            | "deletePlaylist"
+            | "liveChannels"
+            | "livePrograms"
+    ) {
+        return premium::call(&api, op);
+    }
     match op {
         "info" => api.request(
             Method::GET,
@@ -532,10 +615,12 @@ pub fn call(v: &Value) -> Result<Value> {
                 .ok_or_else(|| err("Invalid item count"))?;
             Ok(json!({"Items":items,"TotalRecordCount":total}))
         }
-        "item" => api.get(
-            &["Users", text(v, "userId")?, "Items", text(v, "itemId")?],
-            vec![],
-        ),
+        "item" => api
+            .get(
+                &["Users", text(v, "userId")?, "Items", text(v, "itemId")?],
+                vec![("fields", premium::FIELDS.into())],
+            )
+            .map(|x| premium::project(&x)),
         "favorite" => {
             let favorite = v["favorite"]
                 .as_bool()
@@ -656,7 +741,10 @@ fn envelope(input: &[u8]) -> Value {
         let v: Value = serde_json::from_slice(input).map_err(|_| err("Invalid input JSON"))?;
         // Local cancellation is bounded by the two existing proxy slots and never
         // waits for ordinary network-call admission.
-        if v["operation"] == "stopPlaybackProxy" {
+        if matches!(
+            v["operation"].as_str(),
+            Some("stopPlaybackProxy" | "downloadCancel" | "downloadRemove")
+        ) {
             return call(&v);
         }
         if ACTIVE

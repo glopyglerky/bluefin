@@ -144,6 +144,7 @@ pub mod api_key;
 pub mod artists;
 pub mod audio;
 pub mod backup;
+pub mod bluefin;
 pub mod branding;
 pub mod by_name;
 pub mod channels;
@@ -3915,6 +3916,7 @@ pub fn register(router: Router<AppState>) -> Router<AppState> {
     let router = branding::register(router);
     let router = localization::register(router);
     let router = display_preferences::register(router);
+    let router = bluefin::register(router);
     let router = activity_log::register(router);
     let router = dashboard::register(router);
     let router = environment::register(router);

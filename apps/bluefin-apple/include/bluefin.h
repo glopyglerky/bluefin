@@ -10,6 +10,11 @@ extern "C" {
  * playback returns local url, proxyId, startOffsetTicks and original session fields.
  * Pass url directly to AVPlayer; no custom HTTP headers. On every exit/failure call
  * {"operation":"stopPlaybackProxy","proxyId":"..."} on a background thread.
+ * Premium musicItems returns Items/TotalRecordCount; playlist removals take entryIds.
+ * Offline operations require cacheRoot owned by this app plus server/userId. Only
+ * completed downloads return localUrl. Discard offline URLs and stop players on
+ * account change/logout; call downloadCancel off the main thread. Tokens are not
+ * persisted. Cache roots must have no symlink path components.
  * Original report ticks = player ticks + startOffsetTicks. See Rust README. */
 char *bluefin_call(const char *json);
 void bluefin_free(char *json);

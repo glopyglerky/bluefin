@@ -1,0 +1,22 @@
+# Modern direct Iroh transport
+
+Pinned Iroh 1.4.1 client library and matching foreground peer. The Apple core consumes this crate as an rlib inside its single static archive; no service is installed. Both ends use ALPN `bluefin/http/1` and this locked generation. No compatibility with the retired experimental adapter is asserted.
+
+`bluefin_iroh.h` defines synchronous background-thread start/stop/free. Start JSON supplies the pinned public key, numeric socket address and viewer Authorization. The returned random loopback capability URL accepts GET/HEAD and a single byte range. Stop on every replacement, exit and failure. Keep IDs as uint64. Credentials stay in memory and never belong in URLs or logs. HTTPS origin certificate validation, peer identity validation and authorization remain enabled.
+
+Run `cargo run --locked --bin peer -- https://origin /Videos/item-id/` as an ephemeral foreground peer. It reports its actual ephemeral public key and addresses; configure the client with those values. Only the configured HTTPS origin and item prefix are reachable. No discovery, relay, automatic port mapping, redirects or environment proxies. No production adapter is installed.
+
+Headers are limited to 16KiB. Two tunnels and four local requests are admitted globally; the adapter admits four connections. Each connection permits one bidi stream, zero uni streams, an 8MiB stream receive window, a 16MiB connection receive window and a 16MiB send window. These bound QUIC flow control and queued sending, not whole-process RSS. Transfer uses 32KiB writes with backpressure, cancellation, five-second connection/header deadlines, thirty-second idle deadlines and a six-hour total deadline. HTTP Authorization crosses the authenticated tunnel unchanged and is forwarded to the configured origin. Unsupported inputs fail closed. No whole-media buffer.
+
+The safe Rust `start(ClientConfig)` and `stop(id)` APIs let the core own a tunnel
+through proxy teardown. `Origin::library_media` admits an explicit bounded list
+of item prefixes for a shared foreground adapter. It does not admit all media,
+replace origin authorization, persist an endpoint identity or discover peers.
+The core handles canonical item-scoped HLS rewriting before mapping each fetch
+into this transport. Applications link only the final core static archive.
+
+Apple repair provenance and licenses are in `VENDOR-PROVENANCE.json` and `vendor/`. Mobile public SDKs lack the IPv6 flags ioctl ABI and modern libc excludes the BSD routing constants. Netdev uses its documented unknown-flags fallback on mobile, retaining public getifaddrs and Network.framework enumeration. Its existing iOS implementation and public platform dependencies are selected for tvOS too. Unused gateway and SystemConfiguration extras are excluded from the mobile graph. Netwatch uses the same shared enumeration and a cancellable five-second foreground snapshot check with skipped missed ticks. Default gateway metadata is unavailable. The existing macOS/BSD routing implementation remains in use on desktop. This is a foreground direct-address implementation; background discovery, gateway reporting and seamless interface migration are not qualified.
+
+Default features are empty. `portable-apple-check` selects the mobile netwatch implementation on macOS for fixture testing; it adds no new packages. The default crate always includes Iroh, unlike the parent core's separate optional probe. There is no legacy transport or insecure TLS option. The crate is GPL-3.0-only. Vendored netdev is MIT; netwatch is MIT OR Apache-2.0. The locked transitive licenses and security findings are recorded in the private handoff. Ring and blake3 include native compiled code: no all-Rust binary claim is made.
+
+Run `cargo test --locked`, `cargo test --locked --features portable-apple-check` on macOS, and `cargo clippy --locked --all-targets --all-features -- -D warnings`. Fixtures generate their own HTTPS CA and exercise actual QUIC media bytes, authorization, GET/HEAD/ranges, wrong peer pins, limits and cancellation. Production uses normal trust roots. Apple builds require the installed matching Xcode SDK and deployment target 15.0. Staticlib compilation and object inspection do not prove OS15 runtime or native playback acceptance. Nested HLS URLs are not rewritten by this adapter; parent integration must keep every fetch on the authenticated route before claiming playback.

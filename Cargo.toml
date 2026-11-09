@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/bluefin-contract",
     "crates/ferrofin-util",
     "crates/ferrofin-keyframes",
     "crates/ferrofin-model",

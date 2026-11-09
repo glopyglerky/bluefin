@@ -28,6 +28,7 @@ struct Session {
     origin: Url,
     prefix: String,
     auth: String,
+    tunnel: Option<super::iroh_transport::Tunnel>,
     local: String,
     routes: Mutex<Vec<Url>>,
 }
@@ -207,7 +208,16 @@ pub(super) fn credential(k: &str) -> bool {
             | "x-mediabrowser-token"
     )
 }
+#[cfg(test)]
 pub(super) fn start(remote: Url, prefix: String, auth: String) -> Result<(String, String)> {
+    start_with_transport(remote, prefix, auth, None)
+}
+pub(super) fn start_with_transport(
+    remote: Url,
+    prefix: String,
+    auth: String,
+    tunnel: Option<super::iroh_transport::Tunnel>,
+) -> Result<(String, String)> {
     let mut map = proxies().lock().map_err(|_| err("Proxy unavailable"))?;
     if map.len() >= 2 {
         return Err(err("Playback proxy limit reached"));
@@ -231,6 +241,7 @@ pub(super) fn start(remote: Url, prefix: String, auth: String) -> Result<(String
         origin: remote.clone(),
         prefix,
         auth,
+        tunnel,
         local,
         routes: Mutex::new(Vec::new()),
     });
@@ -390,10 +401,15 @@ async fn transfer(
             } else {
                 reqwest::Method::GET
             },
-            remote.clone(),
+            match &state.tunnel {
+                Some(tunnel) => tunnel.fetch_url(&remote)?,
+                None => remote.clone(),
+            },
         )
-        .header("Authorization", &state.auth)
         .header("Accept-Encoding", "identity");
+    if state.tunnel.is_none() {
+        request = request.header("Authorization", &state.auth);
+    }
     if let Some(r) = range {
         request = request.header("Range", r);
     }
