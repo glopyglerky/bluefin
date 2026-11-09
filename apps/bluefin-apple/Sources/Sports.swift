@@ -21,7 +21,14 @@ struct SportsPreferences: Codable {
 struct SportsSaved: Decodable { var version: UInt64; var preferences: SportsPreferences; var etag: String }
 
 struct SportsOption: Decodable, Identifiable {
-    struct Event: Decodable { var name: String; var league_name: String?; var date: String? }
+    struct Competitor: Decodable, Identifiable {
+        var id: String; var name: String; var short_name: String?; var abbreviation: String?
+        var side: String?; var score: String?; var logo: String?; var record: String?; var winner: Bool?
+    }
+    struct Event: Decodable {
+        var name: String; var league_name: String?; var date: String?; var detail: String?; var state: String?
+        var competitors: [Competitor]?; var broadcasters: [String]?; var event_url: String?
+    }
     var kind: String
     var item_id: String
     var channel_id: String?
@@ -51,11 +58,16 @@ struct SportsOption: Decodable, Identifiable {
 }
 
 struct SportsFeed: Decodable {
+    struct Provider: Decodable, Identifiable {
+        var name: String; var url: String; var kind: String; var access: String; var action: String
+        var id: String { url }
+    }
     var schema: Int
     var sports_only: Bool
     var games: [SportsOption]
     var local_broadcasts: [SportsOption]
     var presentation_only: Bool
+    var providers: [Provider]?
 }
 
 @MainActor final class SportsStore: ObservableObject {
@@ -139,7 +151,7 @@ private struct SportsBroadcastList: View {
     var body: some View { List(options) { SportsBroadcastRow(option: $0) }.navigationTitle(title) }
 }
 
-private struct SportsBroadcastRow: View {
+struct SportsBroadcastRow: View {
     let option: SportsOption
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -147,7 +159,23 @@ private struct SportsBroadcastRow: View {
                 Text(option.stateLabel).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 if let league = option.event?.league_name { Text(league).font(.caption).foregroundStyle(.secondary) }
             }
-            Text(option.displayTitle).font(.headline)
+            if let competitors = option.event?.competitors, !competitors.isEmpty {
+                ForEach(competitors) { team in
+                    HStack(spacing: 12) {
+                        SportsTeamLogo(team: team).frame(width: 32, height: 32)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(team.short_name ?? team.name).font(.headline)
+                            if let record = team.record, !record.isEmpty { Text(record).font(.caption).foregroundStyle(.secondary) }
+                        }
+                        Spacer()
+                        if let score = team.score, !score.isEmpty { Text(score).font(.title2.weight(.semibold).monospacedDigit()) }
+                    }
+                }
+                if let detail = option.event?.detail, !detail.isEmpty { Text(detail).font(.caption).foregroundStyle(.secondary) }
+            } else { Text(option.displayTitle).font(.headline) }
+            if let broadcasters = option.event?.broadcasters, !broadcasters.isEmpty {
+                Label(broadcasters.joined(separator: ", "), systemImage: "tv").font(.caption).foregroundStyle(.secondary)
+            }
             if let channel = option.channel_name { Text(channel).font(.subheadline).foregroundStyle(.secondary) }
             if let status = option.recording_status { Text(status).font(.caption).foregroundStyle(.secondary) }
             if option.canOpenChannel, let id = option.channel_id {
@@ -158,6 +186,22 @@ private struct SportsBroadcastRow: View {
                 NavigationLink(destination: DetailView(item: MediaItem(Id: option.item_id, Name: option.displayTitle, Type: "Recording"))) { Label("Open recording", systemImage: "play.rectangle") }.buttonStyle(.bordered)
             }
         }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(BluefinStyle.secondaryBackground, in: RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+private struct SportsTeamLogo: View {
+    let team: SportsOption.Competitor
+    private var url: URL? {
+        guard let raw = team.logo, raw.count <= 1024, let p = URLComponents(string: raw),
+              p.scheme == "https", p.host == "a.espncdn.com", p.user == nil,
+              p.password == nil, p.port == nil, p.fragment == nil, p.query == nil else { return nil }
+        return p.url
+    }
+    var body: some View {
+        AsyncImage(url: url) { image in image.resizable().scaledToFit() } placeholder: {
+            Text(String((team.abbreviation ?? team.name).prefix(3))).font(.caption2.bold())
+                .frame(maxWidth: .infinity, maxHeight: .infinity).background(.secondary.opacity(0.1), in: Circle())
+        }.accessibilityHidden(true)
     }
 }
 

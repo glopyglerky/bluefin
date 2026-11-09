@@ -6,6 +6,8 @@ import SwiftUI
 struct VideoDeviceCapabilities: Codable, Equatable {
     let schemaVersion: Int
     let hevcHardwareDecode: Bool
+    let av1HardwareDecode: Bool
+    let nativeProbeSupported: Bool
     let hdrPlaybackEligible: Bool
     let hdrModes: [String]
     let dolbyVisionProfiles: [Int]
@@ -13,7 +15,7 @@ struct VideoDeviceCapabilities: Codable, Equatable {
     let maximumWidth: Int?
     let maximumHeight: Int?
 
-    static let conservative = Self(schemaVersion: 1, hevcHardwareDecode: false,
+    static let conservative = Self(schemaVersion: 1, hevcHardwareDecode: false, av1HardwareDecode: false, nativeProbeSupported: false,
         hdrPlaybackEligible: false, hdrModes: [], dolbyVisionProfiles: [],
         losslessAtmos: false, maximumWidth: nil, maximumHeight: nil)
 
@@ -21,6 +23,10 @@ struct VideoDeviceCapabilities: Codable, Equatable {
         #if os(iOS) || os(tvOS)
         let eligible = AVPlayer.eligibleForHDRPlayback
         let modes = AVPlayer.availableHDRModes
+        let hevc = VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC)
+        let av1: Bool
+        if #available(iOS 17, tvOS 17, *) { av1 = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1) }
+        else { av1 = false }
         var names: [String] = []
         if eligible {
             if modes.contains(.hlg) { names.append("hlg") }
@@ -28,9 +34,10 @@ struct VideoDeviceCapabilities: Codable, Equatable {
             if modes.contains(.dolbyVision) { names.append("dolby_vision") }
         }
         return Self(schemaVersion: 1,
-            hevcHardwareDecode: VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC),
-            hdrPlaybackEligible: eligible, hdrModes: names, dolbyVisionProfiles: [],
-            losslessAtmos: false, maximumWidth: nil, maximumHeight: nil)
+            hevcHardwareDecode: hevc, av1HardwareDecode: av1, nativeProbeSupported: true,
+            hdrPlaybackEligible: eligible, hdrModes: names,
+            dolbyVisionProfiles: names.contains("dolby_vision") ? (av1 ? [5, 8, 10] : [5, 8]) : [],
+            losslessAtmos: false, maximumWidth: hevc || av1 ? 3840 : 1920, maximumHeight: hevc || av1 ? 2160 : 1080)
         #else
         return conservative
         #endif

@@ -94,6 +94,8 @@ struct WelcomeView: View {
                     Button { store.explore() } label: { Label("Explore the preview", systemImage: "play.rectangle.on.rectangle") }
                         .accessibilityIdentifier("explorePreview")
                     Text("Preview uses sample titles. Your server address and sign-in stay on this device, protected by Keychain.").font(.footnote).foregroundStyle(.secondary)
+                    Text(BluefinAuthorizedUse.connectionNotice).font(.footnote).foregroundStyle(.secondary)
+                    NavigationLink("Libraries and rights", destination: AuthorizedUseView()).font(.footnote)
                 }
                 .padding(28).frame(maxWidth: 520).frame(maxWidth: .infinity)
             }
@@ -174,18 +176,55 @@ struct LibraryTabs: View {
     @EnvironmentObject private var store: LibraryStore
     @State private var selectedTab = 0
     var body: some View {
-        TabView(selection: $selectedTab) {
-            NavigationView { HomeView(sports: store.sports) }.navigationViewStyle(.stack).tabItem { Label("Home", systemImage: "house") }.tag(0)
-            NavigationView { LibrariesView() }.tabItem { Label("Library", systemImage: "square.stack") }.tag(1)
-            NavigationView { MusicLibraryView() }.navigationViewStyle(.stack).tabItem { Label("Music", systemImage: "music.note") }.tag(2)
-            NavigationView { SearchView() }.navigationViewStyle(.stack).tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(3)
-            NavigationView { DownloadsView(offline: store.offline) }.navigationViewStyle(.stack).tabItem { Label("Downloads", systemImage: "arrow.down.circle") }.tag(4)
-        }.safeAreaInset(edge: .bottom, spacing: 0) {
-            if let playback = store.playback, playback.item.Type == "Audio" { MusicMiniPlayer(playback: playback) }
+        Group {
+            #if os(iOS)
+            if #available(iOS 26.1, *) {
+                tabs.tabViewBottomAccessory(isEnabled: store.playback?.item.Type == "Audio") {
+                    if let playback = store.playback, playback.item.Type == "Audio" {
+                        MusicNativeAccessory(playback: playback)
+                    }
+                }
+            } else if #available(iOS 26, *) {
+                tabs.tabViewBottomAccessory {
+                    if let playback = store.playback, playback.item.Type == "Audio" { MusicNativeAccessory(playback: playback) }
+                }
+            } else { legacyPlayerTabs }
+            #else
+            legacyPlayerTabs
+            #endif
         }.task {
             NativeIntegrations.attach(to: store)
             NativeIntegrations.shared.openLibrary = { selectedTab = 1 }
             await store.refresh()
+        }
+    }
+    private var legacyPlayerTabs: some View {
+        tabs.safeAreaInset(edge: .bottom, spacing: 0) {
+            if let playback = store.playback, playback.item.Type == "Audio" { MusicMiniPlayer(playback: playback) }
+        }
+    }
+    @ViewBuilder private var tabs: some View {
+        #if os(iOS)
+        if #available(iOS 18, *) {
+            TabView(selection: $selectedTab) {
+                Tab("Home", systemImage: "house", value: 0) { BluefinNavigation { HomeView(sports: store.sports) } }
+                Tab("Library", systemImage: "square.stack", value: 1) { BluefinNavigation { LibrariesView() } }
+                Tab("Music", systemImage: "music.note", value: 2) { BluefinNavigation { MusicLibraryView() } }
+                Tab(value: 3, role: .search) { BluefinNavigation { SearchView() } }
+                Tab("Live TV", systemImage: "dot.radiowaves.left.and.right", value: 4) { BluefinNavigation { LiveTVView() } }
+            }.tabViewStyle(.sidebarAdaptable)
+        } else { legacyTabs }
+        #else
+        legacyTabs
+        #endif
+    }
+    private var legacyTabs: some View {
+        TabView(selection: $selectedTab) {
+            BluefinNavigation { HomeView(sports: store.sports) }.tabItem { Label("Home", systemImage: "house") }.tag(0)
+            BluefinNavigation { LibrariesView() }.tabItem { Label("Library", systemImage: "square.stack") }.tag(1)
+            BluefinNavigation { MusicLibraryView() }.tabItem { Label("Music", systemImage: "music.note") }.tag(2)
+            BluefinNavigation { SearchView() }.tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(3)
+            BluefinNavigation { LiveTVView() }.tabItem { Label("Live TV", systemImage: "dot.radiowaves.left.and.right") }.tag(4)
         }
     }
 }
@@ -295,6 +334,8 @@ struct LibrariesView: View {
     @EnvironmentObject private var store: LibraryStore
     var body: some View {
         List {
+            NavigationLink(destination: DownloadsView(offline: store.offline)) { Label("Downloads", systemImage: "arrow.down.circle") }
+            NavigationLink(destination: ConnectedAppsView()) { Label("Connected apps", systemImage: "arrow.up.forward.app") }
             if !store.preview {
                 NavigationLink(destination: LiveTVView()) { Label("Live TV", systemImage: "dot.radiowaves.left.and.right").padding(.vertical, 12) }
             }
@@ -362,9 +403,9 @@ struct SearchView: View {
     var body: some View {
         Group {
             if committed.isEmpty { EmptyLibrary(title: "Find your next favorite", message: "Search the movies, shows, and music available to your account.", symbol: "magnifyingglass") }
-            else { ItemGrid(title: "Search", parent: nil, query: committed).id(committed) }
+            else { UnifiedSearchResults(query: committed) }
         }
-        .navigationTitle("Search").searchable(text: $query, prompt: Text("Your library"))
+        .navigationTitle("Search").searchable(text: $query, prompt: Text("Movies, shows, music and live TV"))
         .task(id: query) {
             do { try await Task.sleep(nanoseconds: 350_000_000); try Task.checkCancellation(); committed = query.trimmingCharacters(in: .whitespacesAndNewlines) } catch {}
         }
@@ -376,6 +417,8 @@ struct DetailView: View {
     @EnvironmentObject private var store: LibraryStore
     @State private var detail: MediaItem?
     @State private var problem: String?
+    @State private var favorite = false
+    @State private var favoriteBusy = false
     private var current: MediaItem { detail ?? item }
     var body: some View {
         ScrollView {
@@ -397,7 +440,23 @@ struct DetailView: View {
                 if let problem { Label(problem, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.secondary) }
             }.padding(24).frame(maxWidth: 1100).frame(maxWidth: .infinity)
         }
-        .task { do { detail = try await store.detail(item) } catch { problem = error.localizedDescription } }
+        .task {
+            favorite = item.UserData?.IsFavorite == true
+            do { detail = try await store.detail(item); favorite = current.UserData?.IsFavorite == true }
+            catch { problem = error.localizedDescription }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    Task {
+                        favoriteBusy = true; defer { favoriteBusy = false }
+                        do { try await store.setFavorite(current, value: !favorite); favorite.toggle() }
+                        catch { problem = error.localizedDescription }
+                    }
+                } label: { Image(systemName: favorite ? "star.fill" : "star") }
+                .accessibilityLabel(favorite ? "Remove favorite" : "Add favorite").disabled(favoriteBusy)
+            }
+        }
         .navigationTitle("")
     }
 }
@@ -430,6 +489,7 @@ struct SettingsView: View {
                 NavigationLink(destination: HomeAssistantView()) { Label("Home Assistant", systemImage: "house") }
             }
             Section("Bluefin") {
+                NavigationLink(destination: AuthorizedUseView()) { Label("Libraries and rights", systemImage: "checkmark.shield") }
                 LabeledContentCompat("Version", value: "0.1.0 · Development")
                 Text("Development build. No analytics or advertising. Bluefin is an independent client for Bluefin, Ferrofin and Jellyfin servers.").font(.footnote).foregroundStyle(.secondary)
                 Link("Source and licenses", destination: URL(string: "https://github.com/glopyglerky/bluefin")!)

@@ -9,10 +9,11 @@ struct BluefinGroupActivity: GroupActivity {
     /// Hash of credential-free origin. Different users on the same server authenticate separately.
     let serverIdentity: String
     let itemID: String
+    var mediaKind: String? = nil
     var metadata: GroupActivityMetadata {
         var value = GroupActivityMetadata()
-        value.title = "Bluefin library playback"
-        value.type = .watchTogether
+        value.title = mediaKind == "Audio" ? "Listen together in Bluefin" : "Watch together in Bluefin"
+        value.type = mediaKind == "Audio" ? .listenTogether : .watchTogether
         return value
     }
 }
@@ -31,6 +32,7 @@ private final class BluefinPlaybackIdentity: NSObject, AVPlayerPlaybackCoordinat
     private var joinTask: Task<Void, Never>?
     private var active: GroupSession<BluefinGroupActivity>?
     private var playbackIdentity: BluefinPlaybackIdentity?
+    private var playbackSubscriptions: Set<AnyCancellable> = []
     private var subscriptions: Set<AnyCancellable> = []
     private var sessionSubscriptions: Set<AnyCancellable> = []
 
@@ -48,10 +50,16 @@ private final class BluefinPlaybackIdentity: NSObject, AVPlayerPlaybackCoordinat
         store.$playback.sink { [weak self] playback in
             guard let self, let session = self.active else { return }
             guard let playback, playback.item.Id == session.activity.itemID else { self.leave(); return }
+            self.playbackSubscriptions.removeAll()
             let identity = BluefinPlaybackIdentity(identifier: session.activity.serverIdentity + ":" + session.activity.itemID)
             self.playbackIdentity = identity
             playback.player.playbackCoordinator.delegate = identity
             playback.player.playbackCoordinator.coordinateWithSession(session)
+            // A native queue can advance inside the same controller. Never label the
+            // following song as the item that the group agreed to play together.
+            playback.$item.dropFirst().sink { [weak self] item in
+                guard item.Id == session.activity.itemID else { self?.leave(); return }
+            }.store(in: &self.playbackSubscriptions)
         }.store(in: &subscriptions)
         listener = Task { [weak self] in
             for await session in BluefinGroupActivity.sessions() {
@@ -64,7 +72,7 @@ private final class BluefinPlaybackIdentity: NSObject, AVPlayerPlaybackCoordinat
 
     func start(_ item: MediaItem) async throws {
         guard let store, let account = store.session, !store.preview, !item.isContainer else { throw BluefinError.message("Sign in and choose a playable library item.") }
-        let activity = BluefinGroupActivity(serverIdentity: try serverKey(account), itemID: item.Id)
+        let activity = BluefinGroupActivity(serverIdentity: try serverKey(account), itemID: item.Id, mediaKind: item.Type)
         switch await activity.prepareForActivation() {
         case .activationPreferred:
             guard store.session.map(NativeIntegrations.identity) == NativeIntegrations.identity(account) else { throw CancellationError() }
@@ -106,6 +114,7 @@ private final class BluefinPlaybackIdentity: NSObject, AVPlayerPlaybackCoordinat
     }
 
     func leave() {
+        playbackSubscriptions.removeAll()
         sessionSubscriptions.removeAll()
         if active != nil { store?.playback?.player.pause() }
         active?.leave()

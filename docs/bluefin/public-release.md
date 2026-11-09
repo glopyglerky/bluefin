@@ -23,6 +23,11 @@ and similar projects are not Bluefin components. Do not vendor, reimplement,
 bundle, install, start, upgrade or orchestrate them in this repository or app.
 Do not make them prerequisites for running Bluefin.
 
+Use the [authorized-use notice](authorized-use.md) in connection setup and
+settings. [Seerr integration](discovery-boundary.md) is server/web-only; native
+clients receive generic server-controlled results and actions, with no Seerr
+integration or credentials in their packages.
+
 Optional integrations may call a separately installed, user-configured service
 through its supported API with that service's own authorization. Configuration
 and credentials stay outside source. A generic authenticated library-change

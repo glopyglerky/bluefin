@@ -12,8 +12,8 @@ identity never replaces the viewer's media authorization.
 [Manet](https://tilosoftware.io/manet/) is the principal music reference. Its
 published screens use album artwork, native typography, restrained controls,
 a compact player, and a focused full-screen player. Its documented features
-include offline music, lyrics, Siri, CarPlay and normalization. Manet+ adds
-library selection, ignored tracks, a six-band equalizer and alternate icons.
+include offline music, lyrics, Siri, CarPlay and normalization. Review the exact
+listing/version because Manet Music and Manet Music Player are distinct listings.
 Bluefin should provide useful equivalents without adding a paywall here.
 
 [Infuse](https://firecore.com/infuse) is a video reference for library
@@ -26,6 +26,9 @@ for music sorting/filtering, queue editing, playlists and offline use.
 These are behavior and design references. Do not copy proprietary source,
 branding, screenshots or album artwork into Bluefin. Reference screenshots
 used for design review stay outside product source.
+
+The [client comparison](client-benchmarks.md) records concrete parity gates,
+including unresolved features. Do not infer parity from appearance or source.
 
 ## Completion criteria
 

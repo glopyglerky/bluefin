@@ -82,7 +82,8 @@ struct Artwork: View {
         GeometryReader { geometry in
             ZStack {
                 LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-                if let image { Image(uiImage: image).resizable().scaledToFill() }
+                if item.Id.hasPrefix("preview") { PreviewArtwork(music: ["Audio", "MusicAlbum", "MusicArtist"].contains(item.Type ?? "")) }
+                else if let image { Image(uiImage: image).resizable().scaledToFill() }
                 else {
                     VStack(spacing: 12) {
                         Image(systemName: symbol).font(.system(size: backdrop ? 72 : 40, weight: .ultraLight)).opacity(0.5)

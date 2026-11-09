@@ -8,6 +8,7 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     SWIFT_STRICT_CONCURRENCY: minimal
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS: ["$(inherited)", BLUEFIN_SHAREPLAY]
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGN_STYLE: Automatic
@@ -37,6 +38,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: org.glopyglerky.bluefin
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
+        CODE_SIGN_ENTITLEMENTS: Bluefin.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: BluefinIcon
     info:
       path: iOS-Info.plist
@@ -63,6 +65,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.glopyglerky.bluefin
         TARGETED_DEVICE_FAMILY: "3"
+        CODE_SIGN_ENTITLEMENTS: Bluefin.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: BluefinTV
     info:
       path: tvOS-Info.plist
@@ -84,6 +87,17 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: org.glopyglerky.bluefin.tests
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_OBJC_BRIDGING_HEADER: ""
+  BluefinTVTests:
+    type: bundle.unit-test
+    platform: tvOS
+    sources: [Tests]
+    dependencies:
+      - target: BluefinTV
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.glopyglerky.bluefin.tvtests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_OBJC_BRIDGING_HEADER: ""
 schemes:
   Bluefin:
     build:
@@ -95,3 +109,5 @@ schemes:
     build:
       targets:
         BluefinTV: all
+    test:
+      targets: [BluefinTVTests]

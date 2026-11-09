@@ -70,6 +70,7 @@ import SwiftUI
         // Playback URLs come from the Rust planner and are pinned to the server origin.
         // No custom AVFoundation keys or third-party software decoder are used.
         let native = AVPlayerItem(url: url)
+        native.externalMetadata = Self.displayMetadata(for: item)
         currentNativeItem = native
         player = item.Type == "Audio" ? AVQueuePlayer(items: [native]) : AVPlayer(playerItem: native)
         player.allowsExternalPlayback = true
@@ -205,6 +206,7 @@ import SwiftUI
                 guard !self.stopped, self.candidateGeneration == generation else { throw CancellationError() }
                 guard let url = URL(string: plan.url), (plan.startTicks ?? 0) == 0, (plan.startOffsetTicks ?? 0) == 0 else { throw BluefinError.message("Next stream cannot be preloaded from its beginning.") }
                 let native = AVPlayerItem(url: url)
+                native.externalMetadata = Self.displayMetadata(for: item)
                 guard queue.canInsert(native, after: self.currentNativeItem) else { throw BluefinError.message("The next track could not be queued.") }
                 let reporter = PlaybackReporter(session: session, itemId: candidate.Id, plan: plan) { operation, session, fields in
                     try await RustBridge.notify(operation, session: session, fields: fields)
@@ -324,6 +326,17 @@ import SwiftUI
             guard seconds <= Double(Int64.max / 10_000_000) else { return }
             onSeekOutsideWindow?(Int64(seconds * 10_000_000))
         } else { player.seek(to: CMTime(seconds: seconds - offset, preferredTimescale: 600)) }
+    }
+
+    private static func displayMetadata(for item: MediaItem) -> [AVMetadataItem] {
+        [(AVMetadataIdentifier.commonIdentifierTitle, item.title),
+         (AVMetadataIdentifier.commonIdentifierDescription, item.Overview ?? item.subtitle)]
+            .filter { !$0.1.isEmpty }.map { identifier, text in
+                let value = AVMutableMetadataItem()
+                value.identifier = identifier; value.value = text as NSString
+                value.extendedLanguageTag = "und"
+                return value
+            }
     }
 
     private var ticks: Int64 {
@@ -465,10 +478,17 @@ import SwiftUI
 
 struct NativePlayer: UIViewControllerRepresentable {
     @ObservedObject var playback: PlaybackController
+    var onOptions: (() -> Void)? = nil
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
         controller.player = playback.player
         controller.showsPlaybackControls = true
+        #if os(tvOS)
+        controller.appliesPreferredDisplayCriteriaAutomatically = true
+        if let onOptions {
+            controller.transportBarCustomMenuItems = [UIAction(title: "Video options", image: UIImage(systemName: "slider.horizontal.3")) { _ in onOptions() }]
+        }
+        #endif
         #if os(iOS)
         controller.allowsPictureInPicturePlayback = true
         controller.canStartPictureInPictureAutomaticallyFromInline = true
@@ -485,7 +505,7 @@ struct PlaybackScreen: View {
     @State private var optionsVisible = false
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            NativePlayer(playback: playback).ignoresSafeArea()
+            NativePlayer(playback: playback, onOptions: { optionsVisible = true }).ignoresSafeArea()
             if let failure = playback.failure {
                 VStack(spacing: 20) {
                     Image(systemName: "exclamationmark.triangle").font(.largeTitle)
@@ -494,14 +514,14 @@ struct PlaybackScreen: View {
                     Button("Close player") { playback.stop(); dismiss() }.buttonStyle(.borderedProminent)
                 }.padding(32).background(.regularMaterial).cornerRadius(20).padding()
             }
+            #if os(iOS)
             HStack(spacing: 18) {
                 Button { optionsVisible = true } label: { Image(systemName: "slider.horizontal.3").font(.title2).foregroundStyle(.white).frame(width: 44, height: 44).background(.black.opacity(0.5), in: Circle()) }
                     .accessibilityLabel("Video options")
-                #if os(iOS)
                 Button { playback.stop(); dismiss() } label: { Image(systemName: "xmark.circle.fill").font(.title).symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.5)) }
                     .accessibilityLabel("Close player")
-                #endif
             }.padding(20)
+            #endif
         }
         .sheet(isPresented: $optionsVisible) {
             NavigationView {

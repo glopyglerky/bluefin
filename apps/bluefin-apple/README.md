@@ -66,7 +66,8 @@ cleanup after reporting failure, cancelled preparation, and ownership transfer.
 They do not substitute for AVPlayer or simulator acceptance.
 
 `tools/StoreLifecycleChecks.swift` separately compiles with those two production
-sources plus `Sources/LibraryStore.swift`. It substitutes host-only network,
+sources plus `Sources/LibraryStore.swift` and `Sources/MusicLibraryModel.swift`.
+It substitutes host-only network,
 Keychain and player adapters while executing the real store dismissal and
 sign-out methods. It holds an in-flight report, closes the player, signs out,
 and verifies captured-account cleanup completes before logout. It also checks
@@ -83,6 +84,12 @@ Xcode SDK, keeps the OS 15 deployment floor and remaps source, home, toolchain a
 cache paths in Rust output. Use `CARGO_ENCODED_RUSTFLAGS` for additional flags.
 Point Xcode's `BLUEFIN_RUST_LIB_DIR` at the matching retained candidate directory.
 Audit the final bundle too; compiler path remapping is not a secret-data scan.
+
+The helper first runs the [native dependency boundary check](../../gates/client-boundary/README.md).
+Provider discovery adapters and their administration code belong to the server
+and web administration application. Native clients may consume generic Bluefin
+results/actions only when the server enables and authorizes them. No provider
+connector, credential, mapping or direct request implementation belongs here.
 
 Lustr was inspected at commit `240e08d91d4aed0299639f6f11fd522912b248f9`.
 Its current compiler is a Linux x86_64 Rust subset with no async, unsafe, or

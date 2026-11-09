@@ -102,6 +102,11 @@ struct MediaStream: Codable, Hashable {
     var DisplayTitle: String?
     var Title: String?
     var IsExternal: Bool?
+    var Profile: String?
+    var VideoRange: String?
+    var VideoRangeType: String?
+    var Width: Int?
+    var Height: Int?
 }
 
 struct MediaChapter: Codable, Hashable {
@@ -189,6 +194,7 @@ struct PlaybackPlan: Decodable {
     var startOffsetTicks: Int64?
     var audioStreamIndex: Int?
     var subtitleStreamIndex: Int?
+    var nativeProbeRequired: Bool?
 }
 
 enum BluefinError: LocalizedError {

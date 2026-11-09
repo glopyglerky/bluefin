@@ -11,6 +11,7 @@ use url::Url;
 mod home_assistant;
 mod iroh_transport;
 mod native_server;
+mod native_video;
 mod offline;
 mod premium;
 #[cfg(feature = "iroh-probe")]
@@ -316,7 +317,7 @@ fn playback(api: &Api<'_>) -> Result<Value> {
     let audio = index(v, "audioStreamIndex")?;
     let subtitle = index(v, "subtitleStreamIndex")?;
     let bitrate = playback_bitrate(v)?;
-    let mut device_profile = profile();
+    let mut device_profile = native_video::Capabilities::read(v)?.profile();
     device_profile["MaxStreamingBitrate"] = json!(bitrate);
     let b = json!({"UserId":user,"MediaSourceId":selected_source(v)?,"MaxStreamingBitrate":bitrate,"StartTimeTicks":ticks,"AudioStreamIndex":audio,"SubtitleStreamIndex":subtitle,"IsPlayback":true,"AutoOpenLiveStream":true,"EnableDirectPlay":audio.is_none_or(|index| index < 0) && subtitle.is_none_or(|index| index < 0),"EnableDirectStream":false,"EnableTranscoding":true,"DeviceProfile":device_profile});
     let info = api.post(&["Items", item, "PlaybackInfo"], b)?;
@@ -370,6 +371,7 @@ fn release_prepared(api: &Api<'_>, info: &Value) -> Result<()> {
 }
 fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
     let v = api.v;
+    let capabilities = native_video::Capabilities::read(v)?;
     let item = text(v, "itemId")?;
     let ticks = count(v, "startTicks", 0, i64::MAX as u64)?;
     let audio = index(v, "audioStreamIndex")?;
@@ -407,22 +409,10 @@ fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
                 || source["Bitrate"].is_u64())
             && matches!(source["Container"].as_str(), Some("mp4" | "m4v"))
             && streams.is_some_and(|s| {
-                s.iter().any(|s| {
-                    s["Type"] == "Video"
-                        && s["Codec"] == "h264"
-                        && matches!(
-                            s["Profile"].as_str(),
-                            Some("High" | "Main" | "Baseline" | "Constrained Baseline")
-                        )
-                        && s["Level"].as_f64().is_some_and(|n| n <= 41.0)
-                        && s["VideoRange"].as_str() == Some("SDR")
-                        && s["BitDepth"].as_u64().is_some_and(|n| n <= 8)
-                        && s["Width"].as_u64().is_some_and(|n| n <= 1920)
-                        && s["Height"].as_u64().is_some_and(|n| n <= 1080)
-                }) && s
-                    .iter()
-                    .filter(|s| s["Type"] == "Audio")
-                    .all(|s| matches!(s["Codec"].as_str(), Some("aac" | "ac3" | "eac3")))
+                s.iter().any(|s| capabilities.accepts(s))
+                    && s.iter()
+                        .filter(|s| s["Type"] == "Audio")
+                        .all(|s| matches!(s["Codec"].as_str(), Some("aac" | "ac3" | "eac3")))
             })
             && subtitle.unwrap_or(-1) == -1;
         let audio_direct = is_audio && native_audio(source) && audio.is_none_or(|index| index < 0);
@@ -486,7 +476,14 @@ fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
             api.auth(true)?,
             iroh_transport::Tunnel::from_request(api)?,
         )?;
-        let result = json!({"playbackInfo":info,"source":source,"url":local_url,"remoteUrl":url.as_str(),"headers":{},"proxyId":proxy_id,"playSessionId":info["PlaySessionId"],"mediaSourceId":id,"startTicks":ticks,"startOffsetTicks":offset,"playMethod":if uses_transcode {"Transcode"} else {"DirectPlay"},"audioStreamIndex":audio,"subtitleStreamIndex":subtitle});
+        let mut result = json!({"playbackInfo":info,"source":source,"url":local_url,"remoteUrl":url.as_str(),"headers":{},"proxyId":proxy_id,"playSessionId":info["PlaySessionId"],"mediaSourceId":id,"startTicks":ticks,"startOffsetTicks":offset,"playMethod":if uses_transcode {"Transcode"} else {"DirectPlay"},"audioStreamIndex":audio,"subtitleStreamIndex":subtitle});
+        result["nativeProbeRequired"] = json!(
+            !uses_transcode
+                && !is_audio
+                && streams.is_some_and(|ss| ss
+                    .iter()
+                    .any(|s| s["Type"] == "Video" && capabilities.requires_probe(s)))
+        );
         if result.to_string().len() > RESPONSE_MAX - 64 {
             stream::stop(&proxy_id)?;
             return Err(err("Playback metadata too large"));

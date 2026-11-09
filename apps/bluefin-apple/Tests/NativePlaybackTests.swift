@@ -1,7 +1,11 @@
 import XCTest
 import AVFoundation
 import CryptoKit
+#if os(tvOS)
+@testable import BluefinTV
+#else
 @testable import Bluefin
+#endif
 
 /// Run serially in the app-hosted BluefinTests scheme with the parent's final Rust archive.
 /// These are synthetic-server native checks; they do not qualify a production server or audio route.

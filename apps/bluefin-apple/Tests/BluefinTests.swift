@@ -1,6 +1,10 @@
 import XCTest
 import AVFoundation
+#if os(tvOS)
+@testable import BluefinTV
+#else
 @testable import Bluefin
+#endif
 
 final class BluefinTests: XCTestCase {
     @MainActor func testBundledPreviewIsOriginalLocalAndDecodable() async throws {

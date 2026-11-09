@@ -42,7 +42,16 @@ struct EmptyValue: Decodable {}
 @MainActor enum RustBridge {
     static var events = StoreEvents()
     static var allowPlayback = false
+    static var candidatePlans: [String] = []
+    static var candidateRequests: [[String: Any]] = []
+    static var preparationCleanups: [String] = []
     static func call<T: Decodable>(_ operation: String, session: AccountSession? = nil, fields: [String: Any] = [:]) async throws -> T {
+        if operation == "playback", !candidatePlans.isEmpty {
+            precondition(session?.token == "old-session")
+            if !candidateRequests.isEmpty { precondition(preparationCleanups == ["rejected-candidate"]) }
+            candidateRequests.append(fields)
+            return try JSONDecoder().decode(T.self, from: Data(candidatePlans.removeFirst().utf8))
+        }
         if allowPlayback && operation == "playback" {
             return try JSONDecoder().decode(T.self, from: Data(#"{"url":"https://example.com/fixture","playSessionId":"play","mediaSourceId":"media","playMethod":"DirectPlay","source":{"LiveStreamId":"live"}}"#.utf8))
         }
@@ -52,12 +61,29 @@ struct EmptyValue: Decodable {}
         try await events.record(operation, session: session, fields: fields)
     }
     static func cleanupPlaybackPlan(_ plan: PlaybackPlan, session: AccountSession) async throws {
-        throw BluefinError.message("Unexpected preparation cleanup")
+        precondition(session.token == "old-session")
+        guard let id = plan.proxyId else { throw BluefinError.message("Missing candidate cleanup identity") }
+        preparationCleanups.append(id)
     }
 }
 
 struct NativeAudioSettings {}
 @MainActor final class AudioPreferences { var settings = NativeAudioSettings() }
+
+struct VideoDeviceCapabilities {
+    var expanded = true
+    static let conservative = Self(expanded: false)
+    static func current() -> Self { Self() }
+    func jsonDictionary() throws -> [String: Any] { ["nativeProbeSupported": expanded] }
+}
+@MainActor enum NativeAssetAdmission {
+    static var onProbe: (() -> Void)?
+    static func validate(_ url: URL) async throws {
+        guard let onProbe else { throw BluefinError.message("Unexpected native asset probe in host fixture") }
+        onProbe()
+        throw BluefinError.message("Fixture asset is not decodable")
+    }
+}
 
 @MainActor final class SportsStore { func disconnect() {} }
 
@@ -85,6 +111,7 @@ struct NativeAudioSettings {}
     var onNext: (() -> Void)?
     var onPrevious: (() -> Void)?
     var onFinish: (() -> Void)?
+    var didStop = false
     private let reporter: PlaybackReporter
     private var teardown: Task<Void, Error>?
     init(item: MediaItem, url: URL, plan: PlaybackPlan?, session: AccountSession?) throws {
@@ -97,6 +124,7 @@ struct NativeAudioSettings {}
     func holdProgress() async throws { try await reporter.report("progress", ticks: 100, paused: false) }
     func stop() -> Task<Void, Error> {
         if let teardown { return teardown }
+        didStop = true
         let reporter = reporter
         let task = Task { try await reporter.finish(ticks: 120, wasStarted: true) }
         teardown = task
@@ -189,6 +217,35 @@ struct NativeAudioSettings {}
         let preview = LibraryStore(); preview.explore()
         let favorites = try await preview.musicItems(type: "MusicAlbum", favorites: true)
         precondition(favorites.Items.isEmpty, "Preview falsely labeled an unfavorited album")
+
+        RustBridge.events = StoreEvents()
+        SessionVault.current = account
+        let fallback = LibraryStore()
+        let existing = try PlaybackController(item: .preview[0], url: URL(string: plan.url)!, plan: plan, session: account)
+        fallback.playback = existing
+        NativeAssetAdmission.onProbe = {
+            precondition(fallback.playback === existing && !existing.didStop, "Probe stopped the existing player")
+        }
+        RustBridge.candidatePlans = [
+            #"{"url":"http://127.0.0.1:1234/rejected","playSessionId":"play","mediaSourceId":"chosen-media","playMethod":"DirectPlay","proxyId":"rejected-candidate","nativeProbeRequired":true,"source":{"LiveStreamId":"live"}}"#,
+            #"{"url":"http://127.0.0.1:1234/fallback","playSessionId":"play","mediaSourceId":"chosen-media","playMethod":"Transcode","proxyId":"accepted-candidate","nativeProbeRequired":false,"source":{"LiveStreamId":"live"}}"#
+        ]
+        await fallback.play(.preview[0], startAtTicks: 200_000,
+                            videoOptions: .init(mediaSourceID: "chosen-media", audioStreamIndex: 2, subtitleStreamIndex: 3))
+        precondition(fallback.playback != nil && fallback.playback !== existing && existing.didStop)
+        precondition(RustBridge.candidateRequests.count == 2)
+        for request in RustBridge.candidateRequests {
+            precondition(request["itemId"] as? String == MediaItem.preview[0].Id)
+            precondition(request["mediaSourceId"] as? String == "chosen-media")
+            precondition(request["startTicks"] as? Int64 == 200_000)
+            precondition(request["audioStreamIndex"] as? Int == 2 && request["subtitleStreamIndex"] as? Int == 3)
+        }
+        precondition((RustBridge.candidateRequests[0]["videoCapabilities"] as? [String: Any])?["nativeProbeSupported"] as? Bool == true)
+        precondition((RustBridge.candidateRequests[1]["videoCapabilities"] as? [String: Any])?["nativeProbeSupported"] as? Bool == false)
+        precondition(RustBridge.preparationCleanups == ["rejected-candidate"])
+        await fallback.signOut()
+        NativeAssetAdmission.onProbe = nil
+        print("PASS: native admission fallback drains rejected candidate before retry, preserves existing playback, viewer/source/tracks/timeline, and retries once conservatively")
         print("PASS: completed video dismisses through owned teardown; preview favorites are filtered")
         print("PASS: duplicate queue cursor, queue remove/move, shuffle restoration, repeat and account-scoped persistence")
         print("PASS: actual LibraryStore dismiss/sign-out retains ordered cleanup, captured account and release fields; dismissed failures remain visible")

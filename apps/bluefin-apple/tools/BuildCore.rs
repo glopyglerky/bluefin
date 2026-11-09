@@ -37,6 +37,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let repo = app.ancestors().nth(2).ok_or("Missing repository")?;
     let target = output("CARGO_TARGET_DIR", repo)?;
     let destination = output("BLUEFIN_CORE_OUT", repo)?;
+    let boundary = Command::new("cargo")
+        .args(["+stable", "run", "--locked", "--manifest-path"])
+        .arg(repo.join("gates/client-boundary/Cargo.toml"))
+        .arg("--")
+        .arg(repo)
+        .env("CARGO_TARGET_DIR", target.join("client-boundary"))
+        .status()?;
+    if !boundary.success() {
+        return Err("Native client dependency boundary failed".into());
+    }
     let mut flags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
     if env::var_os("RUSTFLAGS").is_some() {
         return Err("Use CARGO_ENCODED_RUSTFLAGS for additional flags, not RUSTFLAGS".into());

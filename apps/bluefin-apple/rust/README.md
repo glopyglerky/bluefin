@@ -6,6 +6,16 @@ Standalone nested workspace for the native Apple client of [Bluefin](https://git
 
 ## FFI contract
 
+Expanded video capabilities are observations supplied in `videoCapabilities`,
+schemaVersion1. HEVC and AV1 hardware observations plus `nativeProbeSupported`
+allow bounded direct-play candidates beyond the legacy H264 SDR profile. The
+returned `nativeProbeRequired` flag is mandatory: the native host must verify
+that exact authorized asset with AVFoundation before installing the player.
+On failure, drain the candidate and request one conservative fallback with the
+same viewer, source, tracks and timeline. Do not infer a Dolby/HDR output mode
+or lossless Atmos from decodability. Enhancement-layer Dolby Vision is excluded;
+physical format/output qualification remains a separate release gate.
+
 Local `stopPlaybackProxy` dispatch bypasses ordinary network-call saturation,
 so closing a player cannot lose its local resource cleanup to `Client busy`.
 Swift keeps an awaitable teardown owner and retries admission for remote

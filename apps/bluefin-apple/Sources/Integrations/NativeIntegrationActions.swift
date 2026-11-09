@@ -102,7 +102,7 @@ private struct NativeShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
-private struct NativeStoreProduct: UIViewControllerRepresentable {
+struct NativeStoreProduct: UIViewControllerRepresentable {
     let productID: String
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIViewController(context: Context) -> SKStoreProductViewController {

@@ -84,7 +84,8 @@ import CryptoKit
 
     func items(parent: MediaItem? = nil, query: String = "", start: Int = 0) async throws -> ItemPage {
         if preview {
-            let values = MediaItem.preview.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }
+            let source = query.isEmpty ? MediaItem.preview : MediaItem.preview + [.previewAudio, .previewAlbum, .previewArtist]
+            let values = source.filter { query.isEmpty || [$0.title, $0.Album, $0.AlbumArtist, $0.Artists?.joined(separator: " ")].compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(query) } }
             return .init(Items: start == 0 ? values : [], TotalRecordCount: values.count)
         }
         guard let session else { throw BluefinError.message("Sign in to browse your library.") }
@@ -201,13 +202,37 @@ import CryptoKit
             } else if let session {
                 let ticks: Int64 = startAtTicks ?? (fromBeginning ? 0 : item.UserData?.PlaybackPositionTicks ?? 0)
                 var fields: [String: Any] = ["itemId": item.Id, "startTicks": ticks, "mediaType": item.Type == "Audio" ? "Audio" : "Video"]
-                if item.Type != "Audio" { fields.merge((videoOptions ?? .init()).plannerFields) { _, new in new } }
-                let pending = PendingPlayback(request: {
-                    try await RustBridge.call("playback", session: session, fields: fields)
-                }, cleanup: { try await RustBridge.cleanupPlaybackPlan($0, session: session) })
+                if item.Type != "Audio" {
+                    fields.merge((videoOptions ?? .init()).plannerFields) { _, new in new }
+                    fields["videoCapabilities"] = try VideoDeviceCapabilities.current().jsonDictionary()
+                }
+                func prepare(_ snapshot: [String: Any]) -> PendingPlayback {
+                    PendingPlayback(request: {
+                        try await RustBridge.call("playback", session: session, fields: snapshot)
+                    }, cleanup: { try await RustBridge.cleanupPlaybackPlan($0, session: session) })
+                }
+                var pending = prepare(fields)
                 preparation = pending
                 pendingPreparation = pending
-                let plan = try await pending.resolve()
+                var plan = try await pending.resolve()
+                if plan.nativeProbeRequired == true {
+                    do {
+                        guard let candidate = URL(string: plan.url) else { throw BluefinError.message("The source URL is invalid.") }
+                        try await NativeAssetAdmission.validate(candidate)
+                    } catch is CancellationError { throw CancellationError() }
+                    catch {
+                        // Drain this exact candidate before one conservative retry.
+                        // Keep the existing player, account, source, tracks and timeline.
+                        try await pending.dispose()
+                        try Task.checkCancellation()
+                        guard accountGeneration == generation else { throw CancellationError() }
+                        fields["videoCapabilities"] = try VideoDeviceCapabilities.conservative.jsonDictionary()
+                        fields["mediaSourceId"] = plan.mediaSourceId
+                        pending = prepare(fields); preparation = pending; pendingPreparation = pending
+                        plan = try await pending.resolve()
+                        guard plan.nativeProbeRequired != true else { throw BluefinError.message("The server did not provide a supported fallback.") }
+                    }
+                }
                 guard accountGeneration == generation else { throw CancellationError() }
                 guard let url = URL(string: plan.url) else { throw BluefinError.message("The server did not provide a playable stream.") }
                 if let playback { try await playback.stop().value }
