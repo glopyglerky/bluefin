@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Ferrofin media server — a Rust implementation of the Jellyfin server speaking the same API"
+description = "Bluefin media server, a Rust fork of Ferrofin implementing the Jellyfin API"
 
 [lints]
 workspace = true
@@ -120,10 +120,10 @@ version = "${FERROFIN_VERSION}"
 epoch = ""
 release = ""
 license = "GPL-3.0-only"
-homepage = "https://github.com/mangoleaf/ferrofin"
+homepage = "https://github.com/glopyglerky/bluefin"
 # First line is the synopsis; nfpm indents the rest into the extended description.
 description = """Jellyfin-compatible media server written in Rust
-Ferrofin serves the Jellyfin HTTP API, so existing Jellyfin web, mobile and
+Bluefin serves the Jellyfin HTTP API, so existing Jellyfin web, mobile and
 TV clients connect to it unchanged. It can adopt an existing Jellyfin
 database in place. Adoption is one-way: Ferrofin keeps a
 jellyfin.db.pre-ferrofin backup, then migrates the database, which may not
