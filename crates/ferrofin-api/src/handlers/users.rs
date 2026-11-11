@@ -62,7 +62,7 @@ use crate::auth::{
     is_administrator_identity,
 };
 use crate::error::ApiError;
-use crate::extract::{JsonBody, ProblemDetails, Query, RequiredString};
+use crate::extract::{JsonBody, ProblemDetails, Query, RequiredString, body_parameter};
 use crate::handlers::items::user_uuid;
 use crate::panic_boundary::ERROR_BODY;
 use crate::state::AppState;
@@ -998,6 +998,7 @@ async fn forgot_password(
     let entered_username = match body.entered_username.require(
         "Jellyfin.Api.Models.UserDtos.ForgotPasswordDto",
         "EnteredUsername",
+        || body_parameter(&parts.method, parts.extensions.get()),
     ) {
         Ok(name) => name,
         Err(problem) => return Ok(problem.into_response()),
@@ -1042,12 +1043,14 @@ async fn forgot_password(
 )]
 async fn forgot_password_pin(
     State(state): State<AppState>,
+    parts: Parts,
     JsonBody(body): JsonBody<ForgotPasswordPinDto>,
 ) -> Result<Response, ApiError> {
-    let pin = match body
-        .pin
-        .require("Jellyfin.Api.Models.UserDtos.ForgotPasswordPinDto", "Pin")
-    {
+    let pin = match body.pin.require(
+        "Jellyfin.Api.Models.UserDtos.ForgotPasswordPinDto",
+        "Pin",
+        || body_parameter(&parts.method, parts.extensions.get()),
+    ) {
         Ok(pin) => pin,
         Err(problem) => return Ok(problem.into_response()),
     };
