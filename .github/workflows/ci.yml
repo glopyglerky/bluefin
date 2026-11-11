@@ -37,7 +37,7 @@ jobs:
     # protection means that commit is exactly what merges. Every job below repeats this
     # condition.
     if: &not-release-pr ${{ !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/') && github.base_ref == 'main') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')['ubuntu-latest'] || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -58,7 +58,7 @@ jobs:
   # job below is the status check main's branch protection requires.
   clippy:
     if: *not-release-pr
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')['ubuntu-latest'] || 'ubuntu-latest' }}
     permissions:
       contents: read
     env:
@@ -106,7 +106,7 @@ jobs:
   # doctests in partition 1.
   lint-tests:
     if: *not-release-pr
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')['ubuntu-latest'] || 'ubuntu-latest' }}
     permissions:
       contents: read
     env:
@@ -191,7 +191,7 @@ jobs:
   # (release.yml).
   dependencies:
     if: *not-release-pr
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')['ubuntu-latest'] || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -221,7 +221,7 @@ jobs:
     needs: [clippy, lint-tests]
     # always(): a failed or cancelled job must fail this check, not leave it skipped
     if: ${{ always() && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/') && github.base_ref == 'main') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')['ubuntu-latest'] || 'ubuntu-latest' }}
     permissions: {}
     steps:
       - name: clippy and every test partition passed
@@ -246,7 +246,7 @@ jobs:
     # gate's Python tests (gates/bench's again, beside benchmark-report) and scripts/ci-timings.py (CI
     # time medians — its log parsing is driven with canned job logs). The gates' part is one list, the
     # Makefile's test-gates-offline target.
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')['ubuntu-latest'] || 'ubuntu-latest' }}
     # About 5 minutes normally (4.5 to 5.0 over 20 runs, 2026-10-25). A hung test once held it for 24
     # minutes (gl-920); without a limit a hang would run to GitHub's 6-hour default.
     timeout-minutes: 15
@@ -271,7 +271,7 @@ jobs:
   # requires (matrix jobs report as `coverage-shard (core)` etc., never as `coverage`).
   coverage-shard:
     if: *not-release-pr
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')['ubuntu-latest'] || 'ubuntu-latest' }}
     permissions:
       contents: read
     env:
@@ -328,7 +328,7 @@ jobs:
     needs: coverage-shard
     # always(): a failed or cancelled shard must fail this check, not leave it skipped
     if: ${{ always() && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/') && github.base_ref == 'main') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')['ubuntu-latest'] || 'ubuntu-latest' }}
     permissions: {}
     steps:
       - name: all coverage shards passed
