@@ -36,7 +36,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')['ubuntu-latest'] || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -60,7 +60,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
     needs: release-advisories
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')['ubuntu-latest'] || 'ubuntu-latest' }}
     permissions:
       contents: read # the tag push uses RELEASE_TOKEN, not GITHUB_TOKEN
       actions: read # the gate lists CI runs with `gh run list`
@@ -97,7 +97,7 @@ jobs:
   # ── server image → GHCR (+ Docker Hub when its secrets are configured) ──
   docker-image:
     if: github.event_name == 'push' && startsWith(github.ref_name, 'v')
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')['ubuntu-latest'] || 'ubuntu-latest' }}
     permissions:
       contents: read
       packages: write
@@ -224,7 +224,7 @@ jobs:
           - { os: ubuntu-latest,  target: aarch64-unknown-linux-gnu, cross: true }
           - { os: macos-latest,   target: aarch64-apple-darwin,     experimental: true }
           - { os: windows-latest, target: x86_64-pc-windows-msvc,   experimental: true }
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')[matrix.os] || matrix.os }}
     continue-on-error: ${{ matrix.experimental == true }}
     permissions:
       contents: read
@@ -384,7 +384,7 @@ jobs:
       !contains(github.ref_name, '-rc.') &&
       needs.docker-image.result == 'success' && needs.binaries.result == 'success'
     needs: [docker-image, binaries]
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')['ubuntu-latest'] || 'ubuntu-latest' }}
     permissions:
       contents: write # creates the Release
     steps:
@@ -421,7 +421,7 @@ jobs:
       (startsWith(github.ref_name, 'chart-v') ||
        (startsWith(github.ref_name, 'v') && !contains(github.ref_name, '-rc.')))
     needs: [docker-image]
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')['ubuntu-latest'] || 'ubuntu-latest' }}
     permissions:
       contents: read
       packages: write
