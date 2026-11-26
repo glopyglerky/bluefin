@@ -34,9 +34,8 @@
 //! ones). An empty `Genres`/`Tags` pair is NOT a predicate there, so an untagged
 //! seed matches every other item of its kind — as it does in C#.
 //!
-//! Accepted divergences from C#: `IsFavoriteOrLiked` is approximated as
-//! favorite-only (as elsewhere in the query layer); and the weighted path
-//! breaks equal scores **deterministically**, by (`SortName`, `Id`), where C# keeps whatever
+//! The weighted path breaks equal scores deterministically by SortName and Id,
+//! where C# keeps whatever
 //! dictionary order the candidates arrived in, so a client sees a stable answer.
 //! The flat path orders by `Random`, as C# does.
 

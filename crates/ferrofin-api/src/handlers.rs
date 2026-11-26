@@ -145,6 +145,7 @@ pub mod artists;
 pub mod audio;
 pub mod backup;
 pub mod bluefin;
+pub(crate) mod bluefin_home;
 pub(crate) mod bluefin_accounts;
 pub(crate) mod bluefin_passkeys;
 pub mod bluefin_mesh_accounts;
@@ -3937,7 +3938,7 @@ pub fn register(router: Router<AppState>) -> Router<AppState> {
     let router = branding::register(router);
     let router = localization::register(router);
     let router = display_preferences::register(router);
-    let router = sports::register(bluefin::register(router));
+    let router = sports::register(bluefin_home::register(bluefin::register(router)));
     let router = activity_log::register(router);
     let router = dashboard::register(router);
     let router = environment::register(router);

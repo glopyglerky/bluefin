@@ -322,6 +322,7 @@ pub struct AppState {
     request_culture: Arc<crate::request_culture::RequestCultureOptions>,
     file_system_calls: Arc<tokio::sync::Semaphore>,
     pub(crate) account_gate: Arc<tokio::sync::Mutex<crate::handlers::bluefin_accounts::SignupBudget>>,
+    pub(crate) home_history: Option<Arc<crate::handlers::bluefin_home::History>>,
     pub(crate) passkeys: Option<Arc<crate::handlers::bluefin_passkeys::Service>>,
     pub(crate) mesh_accounts: Option<Arc<crate::handlers::bluefin_mesh_accounts::Service>>,
     scoped_media: bool,
@@ -330,6 +331,12 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Home history uses the same durable database and account IDs as playback.
+    #[must_use]
+    pub fn with_bluefin_home(mut self, db: ferrofin_db::Database) -> Self {
+        self.home_history = Some(Arc::new(crate::handlers::bluefin_home::History::new(db)));
+        self
+    }
     /// Installs the live mesh account authority after its PQ transport is bound.
     #[must_use]
     pub fn with_mesh_accounts(mut self, service: Arc<crate::handlers::bluefin_mesh_accounts::Service>) -> Self {
@@ -381,6 +388,7 @@ impl AppState {
                 MAX_BLOCKING_FILE_SYSTEM_CALLS,
             )),
             account_gate: Arc::new(tokio::sync::Mutex::new(Default::default())),
+            home_history: None,
             passkeys: None,
             mesh_accounts: None,
             scoped_media: false,

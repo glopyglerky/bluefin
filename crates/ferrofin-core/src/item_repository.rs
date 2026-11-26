@@ -16302,3 +16302,43 @@ mod folder_sort_key_tests;
 #[cfg(test)]
 #[path = "item_repository/folder_sql_order_tests.rs"]
 mod folder_sql_order_tests;
+
+#[cfg(test)]
+mod home_favorite_or_liked_tests {
+    use super::*;
+    use crate::test_support::{seed_library_over, seed_named_item, seed_user_data, seed_user_with_defaults, test_db};
+
+    #[tokio::test]
+    async fn home_liked_baselines_include_rating_only_and_are_scoped_to_the_viewer() {
+        let db = test_db().await;
+        let a = Uuid::new_v4(); let b = Uuid::new_v4();
+        let user_a = Arc::new(seed_user_with_defaults(&db, a).await);
+        let user_b = Arc::new(crate::test_support::seed_named_user(&db, b, "other-home-user").await);
+        crate::test_support::grant_default_permissions(&db, b).await;
+        let liked = Uuid::new_v4(); let favorite = Uuid::new_v4(); let low = Uuid::new_v4();
+        for (id, name) in [(liked, "Liked"), (favorite, "Favorite"), (low, "Below threshold")] {
+            seed_named_item(&db, id, BaseItemKind::Movie, name).await;
+            seed_user_data(&db, a, id, false, None).await;
+        }
+        let library = seed_library_over(&db, &[liked, favorite, low]).await;
+        sqlx::query(r#"UPDATE "UserData" SET "Rating" = 6.5, "Likes" = 0 WHERE "UserId" = ? AND "ItemId" = ?"#)
+            .bind(guid_to_db(a)).bind(guid_to_db(liked)).execute(db.writer()).await.unwrap();
+        sqlx::query(r#"UPDATE "UserData" SET "IsFavorite" = 1 WHERE "UserId" = ? AND "ItemId" = ?"#)
+            .bind(guid_to_db(a)).bind(guid_to_db(favorite)).execute(db.writer()).await.unwrap();
+        sqlx::query(r#"UPDATE "UserData" SET "Rating" = 6.4, "Likes" = 1 WHERE "UserId" = ? AND "ItemId" = ?"#)
+            .bind(guid_to_db(a)).bind(guid_to_db(low)).execute(db.writer()).await.unwrap();
+        let repo = FerrofinItemRepository::new(db.clone(), Arc::new(crate::item_type_lookup::ItemTypeLookup::new()));
+        let query = |user, wanted| InternalItemsQuery {
+            parent_id: library, recursive: true, user: Some(user), is_favorite_or_liked: Some(wanted),
+            include_item_types: vec![BaseItemKind::Movie], ..Default::default()
+        };
+        let as_ids = |rows: Vec<BaseItemEntity>| rows.into_iter().map(|row| Uuid::parse_str(&row.id).unwrap())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(as_ids(repo.get_item_list(&query(user_a.clone(), true)).await.unwrap()),
+            std::collections::HashSet::from([liked, favorite]));
+        assert_eq!(as_ids(repo.get_item_list(&query(user_a, false)).await.unwrap()),
+            std::collections::HashSet::from([low]));
+        assert!(repo.get_item_list(&query(user_b, true)).await.unwrap().is_empty(),
+            "one account's ratings must never seed another account's Home");
+    }
+}
