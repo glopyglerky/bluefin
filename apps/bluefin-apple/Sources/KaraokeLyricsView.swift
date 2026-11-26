@@ -44,11 +44,14 @@ struct KaraokeLyricsView: View {
                         guard following, let id else { return }
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { reader.scrollTo(id, anchor: .center) }
                     }
+                    .onChange(of: following) { enabled in
+                        guard enabled, let id = active.first?.id else { return }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { reader.scrollTo(id, anchor: .center) }
+                    }
                     .overlay(alignment: .bottomTrailing) {
                         if !following {
                             Button("Follow lyrics") {
                                 following = true
-                                if let id = active.first?.id { reader.scrollTo(id, anchor: .center) }
                             }.padding(.horizontal, 16).padding(.vertical, 12)
                                 .modifier(BluefinGlassSurface(cornerRadius: 24)).padding()
                         }

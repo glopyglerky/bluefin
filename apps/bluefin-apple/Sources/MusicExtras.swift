@@ -88,11 +88,14 @@ struct MusicLyricsView: View {
                         guard following, let index else { return }
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { reader.scrollTo(index, anchor: .center) }
                     }
+                    .onChange(of: following) { enabled in
+                        guard enabled, let active else { return }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { reader.scrollTo(active, anchor: .center) }
+                    }
                     .overlay(alignment: .bottomTrailing) {
                         if !following && lyrics.Metadata.IsSynced == true {
                             Button("Follow lyrics") {
                                 following = true
-                                if let active { reader.scrollTo(active, anchor: .center) }
                             }.padding(.horizontal, 16).padding(.vertical, 12)
                                 .modifier(BluefinGlassSurface(cornerRadius: 24)).padding()
                         }
