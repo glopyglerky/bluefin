@@ -734,8 +734,8 @@ async fn serve_once(
             let published_url = config.published_url.as_deref()
                 .context("mesh passkeys require the configured HTTPS relying-party URL")?;
             let bound = mesh_connect::Bound::bind(mesh_config).await?;
-            let account = match ferrofin_api::handlers::bluefin_mesh_accounts::Service::new(
-                db.clone(), published_url, bound.address()?).await {
+            let account = match ferrofin_api::handlers::bluefin_mesh_accounts::Service::new_with_web_launch(
+                db.clone(), published_url, bound.address()?, mesh_config.web_launch_url.as_deref()).await {
                 Ok(account) => account,
                 Err(error) => { bound.close().await; return Err(anyhow::Error::from(error)); }
             };
