@@ -397,6 +397,8 @@ struct MusicPlayer: View {
             #endif
             if let failure = playback.failure { Text(failure).font(.callout).foregroundColor(.red) }
             if let failure = playback.reportingFailure { Text(failure).font(.footnote).foregroundColor(.orange) }
+            LocalAssistancePlayback(status: playback.failure != nil ? .failed : playback.isBuffering ? .buffering : playback.isStopped ? .stopped : playback.isPlaying ? .playing : .paused,
+                context: store.accountContext)
         }
     }
     private var qualityBadge: some View {

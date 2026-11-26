@@ -6,6 +6,7 @@ import SwiftUI
     @Published private(set) var channels: [MediaItem] = []
     @Published private(set) var total = 0
     @Published private(set) var loading = false
+    @Published private(set) var loadedContext: UUID?
     @Published private(set) var failures: [String] = []
     private var generation = UUID()
     private var channelCache: (account: String, date: Date, values: [MediaItem])?
@@ -13,6 +14,8 @@ import SwiftUI
 
     func load(query: String, store: LibraryStore) async {
         let current = UUID(); generation = current
+        let accountContext = store.accountContext
+        loadedContext = nil
         let account = store.session.map(OfflineLibrary.identity)
         let cached = channelCache.flatMap { $0.account == account && Date().timeIntervalSince($0.date) < 60 ? $0.values : nil }
         if channelCache?.account != account { channelCache = nil }
@@ -48,7 +51,8 @@ import SwiftUI
                 }
             }
             for await part in group {
-                guard generation == current, !Task.isCancelled, store.session.map(OfflineLibrary.identity) == account else { group.cancelAll(); continue }
+                guard generation == current, !Task.isCancelled, store.accountContext == accountContext, store.session.map(OfflineLibrary.identity) == account else { group.cancelAll(); continue }
+                loadedContext = accountContext
                 switch part {
                 case .library(let page): items = page.Items; total = page.TotalRecordCount ?? page.Items.count
                 case .artists(let page): artists = page.Items
@@ -86,6 +90,9 @@ struct UnifiedSearchResults: View {
     var body: some View {
         List {
             ServerDiscoverySection(query: query)
+            LocalAssistanceSearchSection(query: query, candidates: model.items + model.artists,
+                loadedContext: model.loadedContext)
+                .id(query + "|" + (model.loadedContext?.uuidString ?? "loading"))
             if !model.items.isEmpty {
                 Section("Your library") {
                     ForEach(model.items) { item in result(item) }

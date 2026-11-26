@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 use url::Url;
+mod local_assistance;
 mod client_platform;
 mod discovery;
 mod home_assistant;
@@ -511,6 +512,9 @@ fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
 /// JSON interface, also useful for non-FFI hosts. Synchronous and bounded.
 pub fn call(v: &Value) -> Result<Value> {
     let op = text(v, "operation")?;
+    if matches!(op, "localAssistPrepare" | "localAssistComplete" | "localAssistCancel") {
+        return local_assistance::call(v, op);
+    }
     if op == "androidSupport" {
         let implemented = cfg!(target_os = "android");
         return Ok(

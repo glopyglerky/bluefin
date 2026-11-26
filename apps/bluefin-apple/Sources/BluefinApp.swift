@@ -528,7 +528,10 @@ struct DetailView: View {
                 if current.isContainer {
                     MediaNavigationLink(destination: .collection(title: current.title, parent: current, types: nil)) { Label("Browse \(current.Type == "Series" ? "episodes" : "collection")", systemImage: "square.grid.2x2") }.buttonStyle(.borderedProminent)
                 } else { playActions }
-                if let overview { Text(overview).font(.body).lineSpacing(5).fixedSize(horizontal: false, vertical: true) }
+                if let overview {
+                    Text(overview).font(.body).lineSpacing(5).fixedSize(horizontal: false, vertical: true)
+                    LocalAssistanceSummary(item: current, description: overview, context: store.accountContext)
+                }
                 #endif
                 NativeIntegrationActions(item: current)
                 if !store.preview && ["Movie", "Series"].contains(current.Type ?? "") {
