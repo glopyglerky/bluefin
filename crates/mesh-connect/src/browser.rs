@@ -131,6 +131,12 @@ impl PqcEndpoint {
     pub async fn close(&self) { self.endpoint.close().await; }
 }
 
+#[derive(Clone)]
+pub struct CancelHandle { outer: iroh::endpoint::Connection }
+impl CancelHandle {
+    pub fn cancel(&self) { self.outer.close(0u32.into(), b"canceled"); }
+}
+
 pub struct PqcConnection {
     stream: TlsStream<QuicIo>,
     outer: iroh::endpoint::Connection,
@@ -140,6 +146,7 @@ pub struct PqcConnection {
 }
 impl PqcConnection {
     pub fn binding(&self) -> [u8; 32] { self.binding }
+    pub fn cancel_handle(&self) -> CancelHandle { CancelHandle { outer: self.outer.clone() } }
     pub async fn send<T: Serialize>(&mut self, value: &T) -> Result<()> {
         if self.failed { return Err(Error::Closed); }
         let bytes = protocol::encode(value)?;

@@ -395,6 +395,16 @@ fn view(app: &Bluefin) -> String {
         if app.model.fixture {
             h.push_str("<p>Original synthetic fixtures</p>");
         }
+        if !app.model.fixture {
+            h.push_str(&button("mesh-issue", "Connect another device", !ready(app)));
+            if let Some(invite) = app.mesh_invite.as_ref().filter(|invite| invite.current()) {
+                h.push_str("<p>Use this once to sign in to your account on another device. Your passkey is still required.</p>");
+                h.push_str(&format!("<img src=\"{}\" alt=\"One-use Bluefin device invitation\" style=\"width:min(100%,340px);height:auto\"><p><a href=\"{}\" download=\"bluefin-invitation.png\">Save QR image</a></p>",esc(&invite.image),esc(&invite.image)));
+                h.push_str(&button("mesh-copy-link","Copy launch link",!ready(app)));
+                h.push_str(&button("mesh-copy-code","Copy code",!ready(app)));
+                h.push_str(&format!("<details><summary>Manual connection code</summary><p><code>{}</code></p></details>",esc(&invite.code)));
+            }
+        }
         h.push_str(&button("logout", "Sign out", false));
         h.push_str("</section>");
     }
@@ -472,6 +482,9 @@ fn dispatch(app: &mut Bluefin, ctx: &egui::Context, action: &str) {
                 Err(e) => app.error = e,
             }
         }
+        "mesh-issue" if ready(app) => app.issue_mesh_invite(ctx),
+        "mesh-copy-link" if ready(app) => app.copy_mesh_invite(ctx, true),
+        "mesh-copy-code" if ready(app) => app.copy_mesh_invite(ctx, false),
         "mesh-connect" if ready(app) => app.begin_mesh(ctx),
         "mesh-resume" if ready(app) => app.resume_mesh(ctx),
         "mesh-proceed" if ready(app) => app.proceed_mesh(ctx),

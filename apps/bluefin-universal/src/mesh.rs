@@ -393,6 +393,7 @@ struct Connected {
 }
 async fn install(saved: Saved, descriptor: Descriptor) -> Result<Session> {
     validate_descriptor(&descriptor)?;
+    install_media_bridge();
     let endpoint = endpoint(&saved, &descriptor.server).await?;
     let token = format!("{HANDLE_PREFIX}{}", descriptor.id);
     let session = Session { base: origin(&descriptor.api_origin)?, token: token.clone(),
@@ -406,6 +407,25 @@ pub fn is_mesh(handle: &str) -> bool { handle.starts_with(HANDLE_PREFIX) }
 fn connected(handle: &str) -> Result<Rc<Connected>> {
     SESSIONS.with(|sessions| sessions.borrow().get(handle).cloned())
         .ok_or_else(|| "The device connection is not restored. Resume it before continuing.".into())
+}
+async fn retire_local(handle: &str, session: &Connected) {
+    session.closing.set(true);
+    stop_mesh_output(handle);
+    SESSIONS.with(|sessions| sessions.borrow_mut().remove(handle));
+    session.endpoint.close().await;
+}
+async fn ensure_current(session: &Connected) -> Result<()> {
+    let current = Vault::load().await;
+    let matches = current.as_ref().ok().and_then(|vault| vault.saved.as_ref())
+        .is_some_and(|saved| matches!(&saved.state,
+            Phase::Connected { descriptor, logout_id: None }
+                if descriptor.id == session.descriptor.id && saved.seed == session.saved.seed));
+    if !matches {
+        let handle = format!("{HANDLE_PREFIX}{}", session.descriptor.id);
+        retire_local(&handle, session).await;
+        return Err("This browser connection changed or is signing out. Resume its saved state.".into());
+    }
+    Ok(())
 }
 struct Permit(Rc<Connected>);
 impl Permit {
@@ -423,6 +443,7 @@ pub async fn request(base: &Url, handle: &str, method: &str, path: &str,
     if path == "Sessions/Logout" && method == "POST" { return logout(handle).await.map(|()| Value::Null); }
     let session = connected(handle)?;
     let _permit = Permit::acquire(session.clone())?;
+    ensure_current(&session).await?;
     if base.origin().ascii_serialization() != session.descriptor.api_origin { return Err("Paired origin mismatch.".into()); }
     let url = protocol::api_url(base, path, query)?;
     let body = body.map(|value| serde_json::to_vec(&value).map_err(|_| failure())).transpose()?;
@@ -493,7 +514,7 @@ async fn revoke_saved(vault: &mut Vault) -> Result<()> {
     let saved = vault.saved.as_ref().ok_or("No saved connection.")?.clone();
     let Phase::Connected { descriptor, logout_id: Some(request_id) } = &saved.state else { return Err("No saved sign-out request.".into()); };
     let endpoint = endpoint(&saved, &descriptor.server).await?;
-    let result = async {
+    let result: Result<()> = async {
         let mut connection = endpoint.connect_server(&descriptor.server).await.map_err(|_| failure())?;
         connection.send(&json!({"version":1,"body":{"type":"revoke_session","session_id":descriptor.id,
             "request_id":request_id,"binding":connection.binding()}})).await.map_err(|_| failure())?;
@@ -511,17 +532,193 @@ async fn revoke_saved(vault: &mut Vault) -> Result<()> {
     vault.save().await
 }
 async fn logout(handle: &str) -> Result<()> {
-    let _operation = Operation::enter()?;
     let session = connected(handle)?;
+    // Stop local output and network resources before any fallible storage or
+    // remote revocation step. Failure below retains an honest unknown outcome.
+    notify_mesh_retiring(handle);
     session.closing.set(true);
+    SESSIONS.with(|sessions| sessions.borrow_mut().remove(handle));
+    session.endpoint.close().await;
+    let _operation = Operation::enter()?;
     let mut vault = Vault::load().await?;
     let Some(Saved { state: Phase::Connected { descriptor, logout_id }, .. }) = &mut vault.saved else {
         return Err("The saved session changed before sign-out.".into());
     };
     if descriptor.id != session.descriptor.id { return Err("The saved account changed before sign-out.".into()); }
     if logout_id.is_none() { *logout_id = Some(random()?); vault.save().await?; }
-    let result = revoke_saved(&mut vault).await;
-    session.endpoint.close().await;
-    SESSIONS.with(|sessions| sessions.borrow_mut().remove(handle));
-    result
+    revoke_saved(&mut vault).await
+}
+
+
+/// One media response. The browser pulls one bounded chunk at a time. The
+/// service worker owns no device seed, account bearer or cryptographic handle.
+#[wasm_bindgen]
+pub struct MeshMediaStream { inner: Rc<MediaStream> }
+struct MediaStream {
+    session: Rc<Connected>,
+    _permit: Permit,
+    connection: RefCell<Option<PqcConnection>>,
+    cancel: mesh_connect::browser::CancelHandle,
+    head: String,
+    closed: Cell<bool>,
+}
+#[wasm_bindgen]
+impl MeshMediaStream {
+    pub fn head(&self) -> String { self.inner.head.clone() }
+    pub fn cancel(&self) {
+        self.inner.closed.set(true);
+        self.inner.cancel.cancel();
+        self.inner.connection.borrow_mut().take();
+    }
+    pub async fn next(&self) -> std::result::Result<JsValue, JsValue> {
+        let stream = self.inner.clone();
+        if stream.closed.get() || stream.session.closing.get()
+            || validate_descriptor(&stream.session.descriptor).is_err() {
+            self.cancel();
+            return Err(JsValue::from_str("Media connection closed"));
+        }
+        let mut connection = stream.connection.borrow_mut().take()
+            .ok_or_else(|| JsValue::from_str("A media read is already active"))?;
+        let result: Result<Option<Vec<u8>>> = async {
+            let frame: Value = connection.receive().await.map_err(|_| failure())?;
+            if frame["version"] != 1 { return Err(failure()); }
+            match frame["body"]["type"].as_str() {
+                Some("response_end") => Ok(None),
+                Some("response_chunk") => {
+                    let chunk: Vec<u8> = serde_json::from_value(frame["body"]["bytes"].clone()).map_err(|_| failure())?;
+                    if chunk.is_empty() || chunk.len() > 8192 { return Err("Invalid media chunk.".into()); }
+                    Ok(Some(chunk))
+                }
+                _ => Err(failure()),
+            }
+        }.await;
+        if stream.closed.get() || stream.session.closing.get() {
+            connection.close().await;
+            return Err(JsValue::from_str("Media connection canceled"));
+        }
+        match result {
+            Ok(Some(chunk)) => {
+                *stream.connection.borrow_mut() = Some(connection);
+                Ok(js_sys::Uint8Array::from(chunk.as_slice()).into())
+            }
+            Ok(None) => {
+                stream.closed.set(true);
+                connection.close().await;
+                Ok(JsValue::NULL)
+            }
+            Err(_) => {
+                stream.closed.set(true);
+                connection.close().await;
+                Err(JsValue::from_str("Media connection interrupted"))
+            }
+        }
+    }
+}
+impl Drop for MediaStream {
+    fn drop(&mut self) { self.cancel.cancel(); }
+}
+
+#[wasm_bindgen(module = "/mesh-platform.js")]
+extern "C" {
+    #[wasm_bindgen(js_name = notifyMeshRetiring)]
+    fn notify_mesh_retiring(handle: &str);
+    #[wasm_bindgen(js_name = stopMeshOutput)]
+    fn stop_mesh_output(handle: &str);
+    #[wasm_bindgen(js_name = setMeshLifecycleHandler)]
+    fn set_lifecycle_handler(handler: &js_sys::Function);
+    #[wasm_bindgen(js_name = setMeshMediaHandler)]
+    fn set_media_handler(handler: &js_sys::Function);
+}
+thread_local! { static MEDIA_INSTALLED: Cell<bool> = const { Cell::new(false) }; }
+fn install_media_bridge() {
+    if MEDIA_INSTALLED.with(|installed| installed.replace(true)) { return; }
+    let callback = Closure::<dyn Fn(String, String, String, String) -> js_sys::Promise>::new(
+        |handle, method, url, range| {
+            wasm_bindgen_futures::future_to_promise(async move {
+                open_media(handle,method,url,range).await.map(JsValue::from)
+                    .map_err(|_| JsValue::from_str("The paired media request was refused"))
+            })
+        });
+    use wasm_bindgen::JsCast;
+    set_media_handler(callback.as_ref().unchecked_ref());
+    let lifecycle = Closure::<dyn Fn(String) -> js_sys::Promise>::new(|handle| {
+        wasm_bindgen_futures::future_to_promise(async move {
+            let sessions: Vec<_> = SESSIONS.with(|sessions| sessions.borrow().values().cloned().collect());
+            for session in sessions {
+                let candidate = format!("{HANDLE_PREFIX}{}", session.descriptor.id);
+                if handle == candidate || (handle.is_empty() && ensure_current(&session).await.is_err()) {
+                    retire_local(&candidate, &session).await;
+                }
+            }
+            Ok(JsValue::UNDEFINED)
+        })
+    });
+    set_lifecycle_handler(lifecycle.as_ref().unchecked_ref());
+    lifecycle.forget();
+    // One callback belongs to this document, which also owns its Wasm instance.
+    callback.forget();
+}
+async fn open_media(handle: String, method: String, raw_url: String, range: String) -> Result<MeshMediaStream> {
+    if !matches!(method.as_str(), "GET" | "HEAD") || raw_url.len() > 8192 || range.len() > 128
+        || range.chars().any(char::is_control) {
+        return Err("Invalid media request.".into());
+    }
+    let url = Url::parse(&raw_url).map_err(|_| "Invalid media URL.")?;
+    let path = url.path().to_ascii_lowercase();
+    if !["/videos/", "/audio/", "/items/", "/livetv/"].iter().any(|prefix| path.starts_with(prefix))
+        || url.query_pairs().any(|(name, _)| protocol::credential(&name)) {
+        return Err("Unsupported paired media route.".into());
+    }
+    let session = connected(&handle)?;
+    let permit = Permit::acquire(session.clone())?;
+    ensure_current(&session).await?;
+    let headers = if range.is_empty() { vec![] } else { vec![("range".into(),range)] };
+    let (connection,status,headers) = open_request(&session,&method,&url,&headers,vec![],true).await?;
+    let cancel = connection.cancel_handle();
+    let head = json!({"status":status,"headers":headers}).to_string();
+    Ok(MeshMediaStream { inner: Rc::new(MediaStream { session, _permit: permit,
+        connection: RefCell::new(Some(connection)), cancel, head, closed: Cell::new(false) }) })
+}
+
+
+/// A code for another device of the current account. This is deliberately not
+/// labelled as granting another person access to the account or its resources.
+pub struct IssuedInvite {
+    pub code: String,
+    pub link: String,
+    pub image: String,
+    pub handle: String,
+    pub expires: u64,
+}
+impl IssuedInvite {
+    pub fn from_response(value: Value) -> Result<Self> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let raw = value["code"].as_str().ok_or("Invalid invitation response.")?;
+        let invite = ConnectInvite::parse_at(raw, now_ms().map_err(|_| failure())?)
+            .map_err(|_| "The returned invitation is invalid or expired.")?;
+        if invite.service != SERVICE || invite.intent != InviteIntent::Login
+            || value["singleUse"] != true || value["intent"] != "login" {
+            return Err("The returned invitation has the wrong purpose.".into());
+        }
+        let handle = value["handle"].as_str().filter(|handle| valid_id(handle))
+            .ok_or("Invalid invitation reference.")?.to_owned();
+        let mut page = Url::parse(&web_sys::window().ok_or("Browser unavailable.")?.location().href()
+            .map_err(|_| "Browser URL unavailable.")?).map_err(|_| "Invalid browser URL.")?;
+        page.set_query(None);
+        page.set_fragment(None);
+        let base = mesh_connect::launch::WebLaunchBase::parse(page.as_str())
+            .map_err(|_| "Open this application over trusted HTTPS before making a launch QR.")?;
+        let link = base.invitation_url(&invite).map_err(|_| "The launch link is too large.")?;
+        let png = mesh_connect::qr_png_for_web(&invite,&base,&mesh_connect::QrTheme::bluefin())
+            .map_err(|_| "This invitation is too large for a browser launch QR. Copy its code instead.")?;
+        Ok(Self { code: invite.to_code().map_err(|_| failure())?, link,
+            image: format!("data:image/png;base64,{}", STANDARD.encode(png)),
+            handle, expires: invite.expires_at_unix_ms })
+    }
+    pub fn current(&self) -> bool { now_ms().is_ok_and(|now| now < self.expires) }
+}
+#[wasm_bindgen(module = "/mesh-platform.js")]
+extern "C" {
+    #[wasm_bindgen(catch, js_name = copyMeshCode)]
+    pub async fn copy_code(value: &str) -> std::result::Result<JsValue, JsValue>;
 }

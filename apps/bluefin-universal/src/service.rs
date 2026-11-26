@@ -188,12 +188,17 @@ impl Backend {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = peer;
+            let mesh = crate::mesh::is_mesh(&session.token);
+            let authorization = if mesh { String::new() } else {
+                protocol::authorization(&session.token).map_err(StartupFailure::unconfirmed)?
+            };
             web::start_media(
                 session.base.as_str(),
-                &protocol::authorization(&session.token).map_err(StartupFailure::unconfirmed)?,
+                &authorization,
                 &serde_json::to_string(plan)
                     .map_err(|_| StartupFailure::unconfirmed("Invalid playback plan"))?,
                 fixture,
+                mesh.then(|| session.token.clone()),
             )
             .await
             .map_err(|_| {
@@ -654,6 +659,7 @@ mod web {
             auth: &str,
             plan: &str,
             fixture: bool,
+            mesh_handle: Option<String>,
         ) -> std::result::Result<JsValue, JsValue>;
         #[wasm_bindgen(catch,js_name=stopMedia)]
         pub async fn stop_media() -> std::result::Result<JsValue, JsValue>;

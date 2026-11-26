@@ -63,6 +63,10 @@ pub struct Bluefin {
     mesh_name: String,
     #[cfg(target_arch = "wasm32")]
     mesh_step: Option<crate::mesh::PairingStep>,
+    #[cfg(target_arch = "wasm32")]
+    mesh_invite: Option<crate::mesh::IssuedInvite>,
+    #[cfg(target_arch = "wasm32")]
+    mesh_invite_check: u64,
     previous_shelves: Vec<PreviousShelf>,
     error: String,
     tx: Sender<Completion>,
@@ -100,6 +104,10 @@ impl Default for Bluefin {
             mesh_name: String::new(),
             #[cfg(target_arch = "wasm32")]
             mesh_step: None,
+            #[cfg(target_arch = "wasm32")]
+            mesh_invite: None,
+            #[cfg(target_arch = "wasm32")]
+            mesh_invite_check: 0,
             previous_shelves: Vec::new(),
             error: String::new(),
             tx,
@@ -283,7 +291,7 @@ impl Bluefin {
         self.connected_server = None;
         self.device_sign_in = None;
         #[cfg(target_arch = "wasm32")]
-        { self.mesh_code.clear(); self.mesh_name.clear(); self.mesh_step = None; }
+        { self.mesh_code.clear(); self.mesh_name.clear(); self.mesh_step = None; self.mesh_invite = None; }
         self.query.clear();
         self.discovery = None;
         self.form = None;
@@ -338,6 +346,21 @@ impl Bluefin {
     #[cfg(target_arch = "wasm32")]
     fn proceed_mesh(&mut self, ctx: &egui::Context) {
         self.launch_sign_in(ctx, async { crate::mesh::proceed().await.map(Self::mesh_result) });
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn issue_mesh_invite(&mut self, ctx: &egui::Context) {
+        self.mesh_invite = None;
+        self.call(ctx, "meshInvite", "POST", "Bluefin/Accounts/Mesh/Invite".into(), vec![],
+            Some(serde_json::json!({"intent":"login","lifetimeSeconds":600})));
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn copy_mesh_invite(&mut self, ctx: &egui::Context, link: bool) {
+        let Some(invite) = self.mesh_invite.as_ref().filter(|invite| invite.current()) else { return };
+        let value = if link { invite.link.clone() } else { invite.code.clone() };
+        self.launch(ctx, async move {
+            crate::mesh::copy_code(&value).await.map_err(|_| "Copy was not allowed. Select and copy the code below.".to_string())?;
+            Ok(Outcome::Data("meshCopied",Value::Null))
+        });
     }
     #[cfg(target_arch = "wasm32")]
     fn import_mesh_image(&mut self, ctx: &egui::Context, file: web_sys::File) {
@@ -653,6 +676,15 @@ impl Bluefin {
         ));
     }
     fn poll(&mut self, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        if let Some(invite) = &self.mesh_invite {
+            if !invite.current() { self.mesh_invite = None; }
+            else if self.pending.is_none() && mesh_connect::browser::now_ms().unwrap_or(0) >= self.mesh_invite_check {
+                let handle = invite.handle.clone();
+                self.mesh_invite_check = mesh_connect::browser::now_ms().unwrap_or(0).saturating_add(3000);
+                self.call(ctx,"meshInviteStatus","GET",format!("Bluefin/Accounts/Mesh/Invites/{handle}"),vec![],None);
+            }
+        }
         while let Ok((epoch, result)) = self.rx.try_recv() {
             if !self.model.accepts(epoch) {
                 if let Ok(Outcome::Login(session)) = result {
@@ -685,6 +717,21 @@ impl Bluefin {
                         None,
                     );
                 }
+                #[cfg(target_arch = "wasm32")]
+                Ok(Outcome::Data("meshInvite", value)) => match crate::mesh::IssuedInvite::from_response(value) {
+                    Ok(invite) => {
+                        self.mesh_invite = Some(invite);
+                        self.mesh_invite_check = mesh_connect::browser::now_ms().unwrap_or(0).saturating_add(3000);
+                    }
+                    Err(error) => self.error = error,
+                },
+                #[cfg(target_arch = "wasm32")]
+                Ok(Outcome::Data("meshInviteStatus", value)) => {
+                    if value["state"] != "issued" { self.mesh_invite = None; }
+                    self.mesh_invite_check = mesh_connect::browser::now_ms().unwrap_or(0).saturating_add(3000);
+                }
+                #[cfg(target_arch = "wasm32")]
+                Ok(Outcome::Data("meshCopied", _)) => self.error = "Copied.".into(),
                 #[cfg(target_arch = "wasm32")]
                 Ok(Outcome::Data("meshImage", Value::String(code))) => {
                     self.mesh_code = code; self.error = "QR image read. Continue to connect.".into();

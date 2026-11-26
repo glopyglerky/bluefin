@@ -62,7 +62,7 @@ export function stopMedia() {
     if(mine===revision)status('Playback stopped; media-worker cleanup acknowledged');
   });
 }
-export function startMedia(base,authorization,serialized,fixture) {
+export function startMedia(base,authorization,serialized,fixture,meshHandle) {
   const mine=++revision;
   stopLocal();
   return sequential(async()=>{
@@ -70,9 +70,9 @@ export function startMedia(base,authorization,serialized,fixture) {
   active();
   await workerMessage({op:'clear'});
   active();
-  const plan=JSON.parse(serialized),ack=await workerMessage({op:'start',base,authorization,plan,fixture});
+  const plan=JSON.parse(serialized),ack=await workerMessage({op:'start',base,authorization,plan,fixture,meshHandle});
   if(mine!==revision){await workerMessage({op:'clear'});active();}
-  const state={generation:ack.generation,loaded:false,eof:false,failed:false,error:null,hls:null,renew:null};current=state;
+  const state={meshHandle,generation:ack.generation,loaded:false,eof:false,failed:false,error:null,hls:null,renew:null};current=state;
   const video=media();
   video.onloadedmetadata=()=>{if(current!==state)return;state.loaded=true;const start=Math.max(0,plan.selection.position-plan.offset);if(start && Number.isFinite(video.duration))video.currentTime=start;};
   video.onended=()=>{if(current===state)state.eof=true;};
@@ -107,3 +107,5 @@ export function interruptMedia() {
   // Local output stops synchronously. The lifecycle's awaited stopMedia owns
   // the cleanup acknowledgement and account revocation result.
 }
+
+addEventListener('bluefin-mesh-retired',event=>{if(current?.meshHandle===event.detail)stopMedia().catch(()=>status('Device sign-out cleanup is still pending'));});

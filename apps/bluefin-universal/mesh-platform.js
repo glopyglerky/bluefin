@@ -64,7 +64,7 @@ export async function saveMeshVault(expected, serialized) {
       if ((old.result?.revision || 0) !== expected) {transaction.abort();return;}
       store.put({revision:expected+1,iv,bytes},'record');
     };
-    transaction.oncomplete = () => resolve();
+    transaction.oncomplete = () => {lifecycleChannel?.postMessage({type:"journal"});resolve();};
     transaction.onabort = () => reject(Error('Connection changed in another tab. Resume the saved connection.'));
     transaction.onerror = () => reject(Error('Connection could not be saved'));
   });
@@ -116,4 +116,85 @@ export async function meshPasskey(serialized) {
     clientExtensionResults:credential.getClientExtensionResults(),
     response:enroll ? {clientDataJSON,attestationObject:encode(response.attestationObject),transports:response.getTransports?.()}
       : {clientDataJSON,authenticatorData:encode(response.authenticatorData),signature:encode(response.signature),userHandle:response.userHandle ? encode(response.userHandle) : null}});
+}
+
+
+let meshMediaHandler;
+const mediaStreams = new Set();
+export function setMeshMediaHandler(handler) { meshMediaHandler = handler; }
+navigator.serviceWorker?.addEventListener('message', async event => {
+  if (event.data?.op !== 'bluefin-mesh-read') return;
+  const port = event.ports?.[0];
+  if (!port) return;
+  const expected = new URL('./media-worker.js',document.baseURI).href;
+  if (!meshMediaHandler || event.source !== navigator.serviceWorker.controller
+      || event.source?.scriptURL !== expected || mediaStreams.size >= 4) {
+    port.postMessage({type:'error'});port.close();return;
+  }
+  const message = event.data;
+  if (typeof message.handle !== 'string' || !/^bluefin-mesh-v1:[a-f0-9]{64}$/.test(message.handle)
+      || !['GET','HEAD'].includes(message.method) || typeof message.url !== 'string'
+      || typeof message.range !== 'string') {
+    port.postMessage({type:'error'});port.close();return;
+  }
+  const operation = {};
+  mediaStreams.add(operation);
+  let stream,reading=false,closed=false,idle;
+  const finish = () => {
+    clearTimeout(idle);closed=true;stream?.cancel();
+    if (!reading && stream) {stream.free();stream=undefined;}
+    mediaStreams.delete(operation);port.close();
+  };
+  const arm = () => {clearTimeout(idle);idle=setTimeout(finish,30000);};
+  port.onmessage = async input => {
+    if (input.data?.op === 'cancel') {finish();return;}
+    if (input.data?.op !== 'pull' || reading || closed || !stream) {
+      port.postMessage({type:'error'});finish();return;
+    }
+    reading=true;clearTimeout(idle);
+    try {
+      const bytes=await stream.next();
+      if (closed) return;
+      if (bytes === null) {port.postMessage({type:'end'});finish();}
+      else if (bytes instanceof Uint8Array && bytes.byteLength > 0 && bytes.byteLength <= 8192) {
+        port.postMessage({type:'chunk',bytes},[bytes.buffer]);arm();
+      } else {port.postMessage({type:'error'});finish();}
+    } catch (_) {if(!closed)port.postMessage({type:'error'});finish();}
+    finally {
+      reading=false;
+      if (closed && stream) {stream.free();stream=undefined;}
+    }
+  };
+  arm();
+  try {
+    stream=await meshMediaHandler(message.handle,message.method,message.url,message.range);
+    if (closed) {stream.cancel();stream.free();stream=undefined;return;}
+    const head=JSON.parse(stream.head());
+    port.postMessage({type:'head',status:head.status,headers:head.headers});arm();
+  } catch (_) {if(!closed)port.postMessage({type:'error'});finish();}
+});
+
+let lifecycleHandler;
+const lifecycleChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('bluefin-mesh-lifecycle-v1') : null;
+function stopOutput(handle) {dispatchEvent(new CustomEvent('bluefin-mesh-retired',{detail:handle}));}
+export function setMeshLifecycleHandler(handler) { lifecycleHandler=handler; }
+export function notifyMeshRetiring(handle) {
+  stopOutput(handle);
+  lifecycleChannel?.postMessage({type:'retire',handle});
+}
+export function stopMeshOutput(handle) {stopOutput(handle);}
+lifecycleChannel?.addEventListener('message', event => {
+  const value=event.data;
+  if (value?.type === 'retire' && typeof value.handle === 'string'
+      && /^bluefin-mesh-v1:[a-f0-9]{64}$/.test(value.handle)) {
+    stopOutput(value.handle);lifecycleHandler?.(value.handle).catch(()=>{});
+  } else if (value?.type === 'journal') {lifecycleHandler?.('').catch(()=>{});}
+});
+document.addEventListener('visibilitychange',()=>{
+  if (document.visibilityState === 'visible') lifecycleHandler?.('').catch(()=>{});
+});
+
+export async function copyMeshCode(value) {
+  if (typeof value !== 'string' || value.length > 3072) throw Error('Invalid connection code');
+  await navigator.clipboard.writeText(value);
 }

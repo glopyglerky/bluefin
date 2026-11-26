@@ -77,6 +77,15 @@ mod tests {
         assert_eq!(parse_web_launch(&text).unwrap(), original);
     }
 
+    #[cfg(feature = "images")]
+    #[test]
+    fn browser_qr_decodes_to_the_same_native_invitation() {
+        let original = invite();
+        let base = WebLaunchBase::parse("https://app.example/web/bluefin/").unwrap();
+        let image = crate::qr_png_for_web(&original, &base, &crate::QrTheme::bluefin()).unwrap();
+        assert_eq!(crate::decode_qr_image(&image).unwrap(), original);
+    }
+
     #[test]
     fn launch_refuses_credential_urls_http_queries_and_ambiguous_fragments() {
         for base in ["http://app.example/", "https://user@app.example/", "https://app.example/?code=x",

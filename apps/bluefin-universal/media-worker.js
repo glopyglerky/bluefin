@@ -61,13 +61,16 @@ self.addEventListener('message', event => {
         lease(id, session); port.postMessage({ok:true}); return;
       }
       await retire(id);
-      if (message?.op !== 'start' || typeof message.authorization !== 'string' || message.authorization.length > 8192 || /[\x00-\x1f\x7f]/.test(message.authorization) || !message.authorization.startsWith('MediaBrowser Client=')) throw Error('Invalid authorization');
+      const mesh = typeof message?.meshHandle === 'string' && /^bluefin-mesh-v1:[a-f0-9]{64}$/.test(message.meshHandle);
+      if (message?.op !== 'start' || typeof message.authorization !== 'string' || message.authorization.length > 8192 || /[\x00-\x1f\x7f]/.test(message.authorization)
+          || (mesh ? message.authorization !== '' || message.fixture === true : !message.authorization.startsWith('MediaBrowser Client='))) throw Error('Invalid authorization');
+      if (!mesh && message.meshHandle != null) throw Error('Invalid mesh reference');
       const base = new URL(message.base), plan = message.plan;
       const localFixture = message.fixture === true && base.origin === self.location.origin && ['localhost','127.0.0.1','[::1]'].includes(base.hostname) && base.pathname.endsWith('/fixture/');
       if ((base.protocol !== 'https:' && !localFixture) || base.username || base.password || base.search || base.hash || typeof plan.prefix !== 'string' || !plan.prefix.startsWith(base.pathname) || !/^\/[A-Za-z0-9_./-]+\/$/.test(plan.prefix)) throw Error('Invalid server scope');
       const generation = crypto.randomUUID().replaceAll('-', '');
       const scope = new URL('./bluefin-media/', self.location.href).pathname;
-      const session = {origin:base.origin, prefix:plan.prefix, auth:message.authorization, resources:new Map(), active:new Map(), next:0, generation, route:`${scope}${generation}`};
+      const session = {clientId:id, meshHandle:mesh ? message.meshHandle : null, origin:base.origin, prefix:plan.prefix, auth:message.authorization, resources:new Map(), active:new Map(), next:0, generation, route:`${scope}${generation}`};
       const route = resource(session, plan.url, base);
       session.root=route;
       if(sessions.size>=64)await retire(sessions.keys().next().value);
@@ -86,6 +89,71 @@ async function boundedRead(reader, controller) {
   try { return await Promise.race([reader.read(), new Promise((_,reject) => { timer=setTimeout(() => {controller.abort(); reject(Error('Media read idle'));},idleMs); })]); }
   finally {clearTimeout(timer);}
 }
+
+async function meshFetch(session, upstream, method, range, signal) {
+  const client = await self.clients.get(session.clientId);
+  if (!client || new URL(client.url).origin !== self.location.origin || signal.aborted)
+    throw Error('Paired browser is unavailable');
+  return new Promise((resolve, reject) => {
+    const channel=new MessageChannel();
+    let closed=false,head=false,waiting,output;
+    const fail = () => {
+      if(closed)return;closed=true;
+      channel.port1.postMessage({op:'cancel'});channel.port1.close();
+      signal.removeEventListener('abort',fail);
+      waiting?.reject(Error('Paired media canceled'));waiting=undefined;
+      if(!head)reject(Error('Paired media request failed'));
+      else try {output?.error(Error('Paired media canceled'));} catch (_) {}
+    };
+    const finish = () => {
+      closed=true;channel.port1.close();signal.removeEventListener('abort',fail);
+    };
+    signal.addEventListener('abort',fail,{once:true});
+    channel.port1.onmessage = event => {
+      const message=event.data;
+      if (closed)return;
+      if (sessions.get(session.clientId) !== session) {fail();return;}
+      try {
+      if (message?.type === 'head' && !head) {
+        if (!Number.isInteger(message.status) || message.status<200 || message.status>599
+            || !Array.isArray(message.headers) || message.headers.length>64) {fail();return;}
+        const headers=new Headers();
+        for(const pair of message.headers) {
+          if(!Array.isArray(pair)||pair.length!==2||typeof pair[0]!=='string'||typeof pair[1]!=='string'){fail();return;}
+          if(/^(content-type|content-length|content-range|accept-ranges)$/i.test(pair[0]))
+            headers.set(pair[0],pair[1]);
+        }
+        head=true;
+        if(method==='HEAD'||[204,205,304].includes(message.status)) {
+          channel.port1.postMessage({op:'cancel'});finish();
+          resolve(new Response(null,{status:message.status,headers}));return;
+        }
+        const body=new ReadableStream({
+          start(controller){output=controller;},
+          pull(controller){
+            if(closed){controller.close();return;}
+            return new Promise((resolveRead,rejectRead)=>{
+              if(waiting){rejectRead(Error('Concurrent media pull'));fail();return;}
+              waiting={controller,resolve:resolveRead,reject:rejectRead};
+              channel.port1.postMessage({op:'pull'});
+            });
+          },
+          cancel(){fail();}
+        },{highWaterMark:0});
+        resolve(new Response(body,{status:message.status,headers}));
+      } else if (message?.type === 'chunk' && head && waiting) {
+        const current=waiting;waiting=undefined;
+        if(!(message.bytes instanceof Uint8Array)||!message.bytes.byteLength||message.bytes.byteLength>8192){current.reject(Error('Media chunk limit'));fail();return;}
+        current.controller.enqueue(message.bytes);current.resolve();
+      } else if (message?.type === 'end' && head && waiting) {
+        const current=waiting;waiting=undefined;finish();current.controller.close();current.resolve();
+      } else {fail();}
+      } catch (_) {head=false;fail();}
+    };
+    client.postMessage({op:'bluefin-mesh-read',handle:session.meshHandle,url:upstream,method,range:range||''},[channel.port2]);
+  });
+}
+
 async function media(event, session, upstream) {
   const controller = new AbortController(), active = {reader:null};
   session.active.set(controller, active);
@@ -93,15 +161,17 @@ async function media(event, session, upstream) {
   event.request.signal.addEventListener('abort',abort,{once:true});
   const finish = () => { session.active.delete(controller);event.request.signal.removeEventListener('abort',abort); };
   try {
-    const headers = new Headers({Authorization:session.auth});
+    const headers = new Headers();if(!session.meshHandle)headers.set('Authorization',session.auth);
     const range=event.request.headers.get('Range');if(range){if(range.length>128)throw Error('Invalid range');headers.set('Range',range);}
     const deadline=setTimeout(abort,idleMs);
     let response;
-    try {response=await fetch(upstream,{method:event.request.method,headers,redirect:'error',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});}
+    try {response=session.meshHandle
+      ? await meshFetch(session,upstream,event.request.method,range,controller.signal)
+      : await fetch(upstream,{method:event.request.method,headers,redirect:'error',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});}
     finally {clearTimeout(deadline);}
     const safe=new Headers({'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
     for(const key of ['Content-Type','Content-Length','Content-Range','Accept-Ranges'])if(response.headers.has(key))safe.set(key,response.headers.get(key));
-    if(!response.ok || !response.body || event.request.method==='HEAD'){finish();return new Response(null,{status:response.status,headers:safe});}
+    if(!response.ok || !response.body || event.request.method==='HEAD'){await response.body?.cancel();finish();return new Response(null,{status:response.status,headers:safe});}
     active.reader=response.body.getReader();
     if(new URL(upstream).pathname.endsWith('.m3u8') || /mpegurl/i.test(safe.get('Content-Type')||'')) {
       let total=0;const chunks=[];
