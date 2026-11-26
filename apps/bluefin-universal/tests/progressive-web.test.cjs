@@ -18,7 +18,7 @@ class Element{
  set textContent(v){this.text=String(v);this.children=[];}
  get textContent(){return this.text+this.children.map(c=>c.textContent||'').join(' ');}
 }
-function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false}={}){
+function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false,cookieStatus=200,cookieMalformed=false,cookieCreateStatus=200,tvAdvertisement=true}={}){
  const root=new Element('div'),video=new Element('video'),labels=new Map(),events={},requests=[],pending={};
  Object.assign(video,{paused:true,duration:60,currentTime:0,src:'',
   pause(){this.paused=true;},load(){},play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},canPlayType(){return 'probably';}});
@@ -31,16 +31,22 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  const fetch=async(url,options={})=>{
   const u=new URL(url);requests.push({url:u.href,options});
   let body;
+  if(u.pathname==='/Bluefin/Web/v1'&&cookieStatus!==200)return new Response('{}',{status:cookieStatus});
+  if(u.pathname==='/Bluefin/Web/v1/leases'&&cookieCreateStatus!==200)return new Response('{}',{status:cookieCreateStatus});
   if(u.pathname==='/Users/AuthenticateByName'&&holdLogin)await new Promise(resolve=>pending.login=resolve);
   if(u.pathname==='/Bluefin/Web/v1/leases'&&options.method==='POST'&&holdLease)await new Promise(resolve=>pending.lease=resolve);
   if(u.pathname==='/System/Info/Public')body={ServerName:'Bluefin'};
   else if(u.pathname==='/Bluefin/Accounts/Options')body={passkeys:true,quickConnect:true};
   else if(u.pathname==='/Users/AuthenticateByName')body={AccessToken:'synthetic-private-bearer',User:{Id:user,Name:'Listener'}};
   else if(u.pathname==='/Bluefin/Capabilities')body={protocolVersion:1,viewer:{userId:user}};
-  else if(u.pathname==='/Bluefin/Web/v1')body={version:1,cookieMediaLease:true};
+  else if(u.pathname==='/Bluefin/Web/v1')body={version:cookieMalformed?99:1,cookieMediaLease:true,expiresInSeconds:300,maxSessionSeconds:7200,idleSeconds:90};
   else if(u.pathname==='/Bluefin/Web/v1/leases')body={version:1,mediaUrl:leaseOrigin+'/Bluefin/Web/v1/media/'+'a'.repeat(64)+'/0',
    releaseUrl:'/Bluefin/Web/v1/leases/'+'a'.repeat(64),renewUrl:'/Bluefin/Web/v1/leases/'+'a'.repeat(64),
-   expiresInSeconds:300,playSessionId:'synthetic-play'};
+   expiresInSeconds:300,idleSeconds:90,playSessionId:'33333333333343338333333333333333'};
+  else if(u.pathname==='/Bluefin/TV/v1')body={version:1,mediaLease:tvAdvertisement,absoluteSeconds:7200,idleSeconds:90};
+  else if(u.pathname==='/Bluefin/TV/v1/leases'&&options.method==='POST')body={version:1,
+   mediaUrl:'/Bluefin/TV/v1/media/'+'b'.repeat(64)+'/0',releaseUrl:'/Bluefin/TV/v1/leases/'+'b'.repeat(64),
+   expiresInSeconds:7200,idleSeconds:90,playSessionId:'33333333333343338333333333333333'};
   else if(u.pathname.endsWith('/Views'))body={Items:[{...item,Type:'CollectionFolder',Name:'Music'}]};
   else if(u.pathname.endsWith('/Latest'))body=[item];
   else if(u.pathname.endsWith('/Resume')||u.pathname==='/Shows/NextUp')body={Items:[]};
@@ -57,7 +63,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  Object.defineProperty(context,'indexedDB',{get(){throw Error('Default view touched IndexedDB');}});
  Object.defineProperty(context,'localStorage',{get(){throw Error('Default view touched localStorage');}});
  Object.defineProperty(context,'sessionStorage',{get(){throw Error('Default view touched sessionStorage');}});
- const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath};})();');
+ const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest};})();');
  vm.runInContext(script,context);
  return {context,ui:context.contract,root,video,requests,events,item,pending};
 }
@@ -160,4 +166,31 @@ test('a throwing decoder still loses its local source and playback state',async(
  t.ui.state.player={mode:'https',hls:{destroy(){throw Error('decoder failure');}}};
  await assert.rejects(t.ui.stopPlayback(),/decoder failure/);
  assert.equal(t.video.src,'');assert.equal(t.video.paused,true);assert.equal(t.ui.state.player,null);
+});
+
+test('only advertised cookie-capability absence selects the old per-item TV capability',async()=>{
+ const t=setup({cookieStatus:404});await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.play(t.item);assert.equal(t.ui.state.player.lease.kind,'tv');
+ assert.match(t.video.src,/^https:\/\/bluefin.test\/Bluefin\/TV\/v1\/media\/[a-f0-9]{64}\/0$/);
+ assert(!t.video.src.includes('synthetic-private-bearer'));assert(!t.root.textContent.includes('b'.repeat(64)));
+ await assert.rejects(t.ui.leaseRequest(t.ui.state.player.lease.releaseUrl,'POST',t.ui.state.session,false,'tv'),/Invalid playback lease operation/);
+ await t.ui.signOut();
+ assert(t.requests.some(r=>r.options.method==='DELETE'&&r.url.includes('/Bluefin/TV/v1/leases/')));
+ assert(!t.requests.some(r=>r.options.method==='POST'&&r.url.includes('/Bluefin/TV/v1/leases/')));
+});
+test('permission failures and malformed cookie advertisements never select TV compatibility',async()=>{
+ for(const settings of [{cookieStatus:401},{cookieStatus:403},{cookieStatus:503},{cookieMalformed:true},{cookieCreateStatus:403}]){
+  const t=setup(settings);await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+  await assert.rejects(t.ui.play(t.item));assert.equal(t.video.src,'');
+  assert(!t.requests.some(r=>new URL(r.url).pathname.startsWith('/Bluefin/TV/')));
+ }
+});
+test('legacy compatibility requires its complete version and rejects secret-route escapes',async()=>{
+ const t=setup({cookieStatus:404,tvAdvertisement:false});await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await assert.rejects(t.ui.play(t.item),/does not advertise/);
+ assert(!t.requests.some(r=>r.options.method==='POST'&&new URL(r.url).pathname==='/Bluefin/TV/v1/leases'));
+ const secret='b'.repeat(64);
+ for(const raw of ['https://evil.test/Bluefin/TV/v1/media/'+secret+'/0','/Bluefin/TV/v1/media/'+secret+'/0?api_key=x',
+ '/Bluefin/TV/v1/media/'+secret+'/%30','/Bluefin/TV/v1/media/'+secret+'/../0','/Bluefin/Web/v1/media/'+secret+'/0'])
+  assert.throws(()=>t.ui.tvLeasePath(raw,'media',secret));
 });

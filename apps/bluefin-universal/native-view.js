@@ -54,7 +54,7 @@ async function http(path,method='GET',body,query=[],session=state.session,keepal
  try{
   const response=await fetch(url,{method,headers,body:body===undefined?undefined:JSON.stringify(body),
    credentials:'same-origin',redirect:'error',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal,keepalive});
-  if(!response.ok){if(response.status===401||response.status===403)throw Error('Account access was denied. Sign in again.');throw Error('The server returned HTTP '+response.status+'.');}
+  if(!response.ok){const error=Error(response.status===401||response.status===403?'Account access was denied. Sign in again.':'The server returned HTTP '+response.status+'.');error.status=response.status;throw error;}
   const value=await readJson(response);
   if(!keepalive&&!captureReply)assertLive();
   return value;
@@ -248,9 +248,43 @@ async function copy(value){try{await navigator.clipboard.writeText(value);state.
 async function issueInvite(){state.invitation=null;clearTimeout(state.inviteTimer);const response=await api('Bluefin/Accounts/Mesh/Invite','POST',{intent:'login',lifetimeSeconds:600});let result;if(state.mode==='mesh')result=JSON.parse((await runtime().engine()).webMeshInvitation(JSON.stringify(response)));else{const link=new URL(response.webLink||response.link),code=response.code,png=response.pngBase64;if(response.singleUse!==true||response.intent!=='login'||!/^MC1-[A-Z0-9-]+$/i.test(code||'')||code.length>2048||link.origin!==location.origin||link.protocol!=='https:'||!link.hash.startsWith('#bluefin-connect=')||typeof png!=='string'||png.length>1400000||!/^[A-Za-z0-9+/]*={0,2}$/.test(png)||!/^[a-f0-9]{64}$/.test(response.handle||''))throw Error('The server returned an invalid invitation.');result={webLink:link.href,code,image:'data:image/png;base64,'+png,handle:response.handle};}state.invitation=result;const epoch=state.epoch;const poll=async()=>{if(epoch!==state.epoch||state.sheet!=='connections'||state.invitation!==result)return;try{const status=await api('Bluefin/Accounts/Mesh/Invites/'+result.handle);if(status.state!=='issued'){state.invitation=null;state.notice='This invitation is no longer available. Create a new invitation for another device.';render();return;}}catch(_){state.invitation=null;state.notice='The invitation status could not be confirmed.';render();return;}state.inviteTimer=setTimeout(poll,3000);};state.inviteTimer=setTimeout(poll,3000);}
 function shuffled(items){const values=items.slice();for(let i=values.length-1;i>0;i--){const draw=new Uint32Array(1);crypto.getRandomValues(draw);const j=draw[0]%(i+1);[values[i],values[j]]=[values[j],values[i]];}return values;}
 function time(value){if(!Number.isFinite(value)||value<0)value=0;return Math.floor(value/60)+':'+String(Math.floor(value%60)).padStart(2,'0');}
-function nativeLeasePath(raw,kind,idValue){if(typeof raw!=='string'||raw.length>256||!raw.startsWith('/Bluefin/Web/v1/')||raw.includes('%')||raw.includes('?')||raw.includes('#'))throw Error('Invalid playback lease route.');const u=new URL(raw,location.origin);if(u.origin!==location.origin||u.username||u.password||u.hash||u.search)throw Error('Invalid playback lease origin.');const pattern=kind==='media'?/^\/Bluefin\/Web\/v1\/media\/([a-f0-9]{64})\/[0-9]+$/:/^\/Bluefin\/Web\/v1\/leases\/([a-f0-9]{64})$/;const match=u.pathname.match(pattern);if(!match||(idValue&&match[1]!==idValue))throw Error('Invalid playback lease scope.');return {url:u.href,id:match[1]};}
-async function leaseRequest(raw,method,session=state.session,keepalive=false){
- if(!keepalive)assertLive();const path=nativeLeasePath(raw,'lease');
+function nativeLeasePath(raw,kind,idValue){if(typeof raw!=='string'||raw.length>256||!raw.startsWith('/Bluefin/Web/v1/')||raw.includes('%')||raw.includes('?')||raw.includes('#')||raw.includes('\\')||raw.includes('..'))throw Error('Invalid playback lease route.');const u=new URL(raw,location.origin);if(u.origin!==location.origin||u.username||u.password||u.hash||u.search)throw Error('Invalid playback lease origin.');const pattern=kind==='media'?/^\/Bluefin\/Web\/v1\/media\/([a-f0-9]{64})\/[0-9]+$/:/^\/Bluefin\/Web\/v1\/leases\/([a-f0-9]{64})$/;const match=u.pathname.match(pattern);if(!match||(idValue&&match[1]!==idValue))throw Error('Invalid playback lease scope.');return {url:u.href,id:match[1]};}
+// The cookie adapter exposes a public route ID. The old TV adapter exposes a
+// secret per-item capability. Keep their validation and lifetimes distinct.
+function tvLeasePath(raw,resource,idValue){
+ if(typeof raw!=='string'||raw.length>256||!raw.startsWith('/Bluefin/TV/v1/')||/[?#%\\]/.test(raw)||raw.includes('..'))throw Error('Invalid TV playback capability.');
+ const u=new URL(raw,location.origin);
+ const pattern=resource==='media'?/^\/Bluefin\/TV\/v1\/media\/([a-f0-9]{64})\/[0-9]+$/:/^\/Bluefin\/TV\/v1\/leases\/([a-f0-9]{64})$/;
+ const match=u.pathname.match(pattern);
+ if(u.origin!==location.origin||u.username||u.password||u.hash||u.search||!match||(idValue&&match[1]!==idValue))throw Error('Invalid TV playback scope.');
+ return {url:u.href,id:match[1]};
+}
+function mediaLeasePath(kind,raw,resource,idValue){
+ if(kind==='cookie')return nativeLeasePath(raw,resource,idValue);
+ if(kind==='tv')return tvLeasePath(raw,resource,idValue);
+ throw Error('Unknown playback lease type.');
+}
+async function httpsMediaPolicy(session,base,epoch){
+ assertLive(epoch,session);
+ try{
+  const value=await http('Bluefin/Web/v1','GET',undefined,[],session,false,false,base);assertLive(epoch,session);
+  if(value?.version!==1||value.cookieMediaLease!==true||value.expiresInSeconds!==300||value.maxSessionSeconds!==7200||value.idleSeconds!==90)throw Error('The server returned an unsupported browser playback capability.');
+  return {kind:'cookie',create:'Bluefin/Web/v1/leases'};
+ }catch(error){
+  // Absence is the only compatibility selector. Auth failures, malformed
+  // advertisements, timeouts and failed creations never choose another path.
+  if(![404,405,501].includes(error.status))throw error;
+ }
+ assertLive(epoch,session);
+ const value=await http('Bluefin/TV/v1','GET',undefined,[],session,false,false,base);assertLive(epoch,session);
+ if(value?.version!==1||value.mediaLease!==true||value.absoluteSeconds!==7200||value.idleSeconds!==90)throw Error('This server does not advertise a supported browser media capability.');
+ return {kind:'tv',create:'Bluefin/TV/v1/leases'};
+}
+function releaseLease(lease,session,keepalive=false){return leaseRequest(lease.releaseUrl,'DELETE',session,keepalive,lease.kind);}
+async function leaseRequest(raw,method,session=state.session,keepalive=false,kind='cookie'){
+ if(!keepalive)assertLive();
+ if(!['DELETE','POST','HEAD'].includes(method)||(kind==='tv'&&method==='POST')||(kind==='cookie'&&method==='HEAD'))throw Error('Invalid playback lease operation.');
+ const path=mediaLeasePath(kind,raw,method==='HEAD'?'media':'lease');
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
  if(!keepalive)requestControllers.add(controller);
  try{const response=await fetch(path.url,{method,headers:{Authorization:authorization(session?.token||''),'Content-Type':'application/json'},
@@ -285,7 +319,7 @@ async function stopPlayback(remote=true){
  let failure=clearOutput(previous);
  try{
   if(previous?.mode==='mesh'){const engine=runtime()?.ready();if(engine)engine.webMeshControl(previous.handle,'stop',0);}
-  else if(previous?.lease&&remote)await leaseRequest(previous.lease.releaseUrl,'DELETE',previous.session);
+  else if(previous?.lease&&remote)await releaseLease(previous.lease,previous.session);
  }catch(error){failure=failure||error;}
  document.getElementById('media-status').textContent='';
  if(failure)throw failure;
@@ -315,30 +349,32 @@ async function play(item,queue=[item],index=0){
   },500);
  }else{
   const Hls=await hlsSupport();current();
-  const available=await http('Bluefin/Web/v1','GET',undefined,[],session,false,false,base);current();
-  if(available?.version!==1||available.cookieMediaLease!==true)throw Error('This installation does not yet provide browser playback without a media worker. Your library remains available.');
-  const lease=await http('Bluefin/Web/v1/leases','POST',{version:1,itemId:id(item.Id),
+  const policy=await httpsMediaPolicy(session,base,epoch);current();
+  const wire=await http(policy.create,'POST',{version:1,itemId:id(item.Id),
    playback:{kind:item.Type==='Audio'?'audio':'video',maxBitrate:8000000,startTicks:resumeTicks(item)}},[],session,false,true,base);
+  const lease={...wire,kind:policy.kind};
   let route;
   try{
-   route=nativeLeasePath(lease.mediaUrl,'media');nativeLeasePath(lease.releaseUrl,'lease',route.id);nativeLeasePath(lease.renewUrl,'lease',route.id);
-   if(lease.version!==1||lease.expiresInSeconds!==300)throw Error('Invalid playback lease.');
-  }catch(error){if(typeof lease?.releaseUrl==='string')await leaseRequest(lease.releaseUrl,'DELETE',session,true).catch(()=>{});throw error;}
+   route=mediaLeasePath(lease.kind,lease.mediaUrl,'media');mediaLeasePath(lease.kind,lease.releaseUrl,'lease',route.id);
+   if(lease.version!==1||!uuid(lease.playSessionId)||lease.idleSeconds!==90)throw Error('Invalid playback lease.');
+   if(lease.kind==='cookie'){nativeLeasePath(lease.renewUrl,'lease',route.id);if(lease.expiresInSeconds!==300)throw Error('Invalid browser lease lifetime.');}
+   else if(lease.expiresInSeconds!==7200||lease.renewUrl!==undefined)throw Error('Invalid TV capability lifetime.');
+  }catch(error){if(typeof lease?.releaseUrl==='string')await releaseLease(lease,session,true).catch(()=>{});throw error;}
   if(pageRetired||epoch!==state.epoch||session!==state.session||generation!==playbackGeneration){
-   await leaseRequest(lease.releaseUrl,'DELETE',session,true).catch(()=>{});current();
+   await releaseLease(lease,session,true).catch(()=>{});current();
   }
   state.player={mode:'https',item,lease,session,offset:resumeTicks(item)/10000000};
   if(Hls){
    const hls=new Hls({enableWorker:false,maxBufferLength:20,maxMaxBufferLength:40,backBufferLength:10,maxBufferSize:32*1024*1024,
     manifestLoadingTimeOut:10000,fragLoadingTimeOut:10000,fragLoadingMaxRetry:1,manifestLoadingMaxRetry:1,
-    xhrSetup(xhr,url){const target=new URL(url,location.origin);if(target.origin!==location.origin||target.search||target.hash||target.username||target.password)throw Error('Media left its lease origin.');nativeLeasePath(target.pathname,'media',route.id);}});
+    xhrSetup(xhr,url){const target=new URL(url,location.origin);if(target.origin!==location.origin||target.search||target.hash||target.username||target.password)throw Error('Media left its lease origin.');mediaLeasePath(lease.kind,target.pathname,'media',route.id);}});
    state.player.hls=hls;hls.on(Hls.Events.ERROR,(_event,data)=>{
     if(data.fatal&&!pageRetired&&generation===playbackGeneration){stopPlayback().catch(()=>{});state.error='The media decoder could not play this title.';render();}
    });hls.loadSource(route.url);hls.attachMedia(media);
   }else{media.src=route.url;media.load();}
   leaseRenew=setInterval(async()=>{
    if(pageRetired||generation!==playbackGeneration||session!==state.session)return;
-   try{await leaseRequest(lease.renewUrl,'POST',session);}
+   try{if(lease.kind==='cookie')await leaseRequest(lease.renewUrl,'POST',session);else if(!media.paused)await leaseRequest(lease.mediaUrl,'HEAD',session,false,'tv');}
    catch(_){if(pageRetired||generation!==playbackGeneration||session!==state.session)return;
     await stopPlayback(false).catch(()=>{});state.error='Playback stopped because its access lease could not be renewed.';render();}
   },60000);
@@ -349,7 +385,7 @@ async function play(item,queue=[item],index=0){
  current();document.body.classList.toggle('audio-playing',item.Type==='Audio');
  document.body.classList.toggle('video-playing',item.Type!=='Audio');document.body.classList.add('with-player');render();
 }
-async function reportProgress(phase){const p=state.player;if(!p||p.mode!=='https'||p.session!==state.session)return;await api('Sessions/Playing'+(phase==='started'?'':phase==='stopped'?'/Stopped':'/Progress'),'POST',{ItemId:p.item.Id,PlaySessionId:p.lease.playSessionId,PositionTicks:Math.floor((media.currentTime||0)*10000000),IsPaused:media.paused,CanSeek:true,PlayMethod:'Transcode'});}
+async function reportProgress(phase){const p=state.player;if(!p||p.mode!=='https'||p.session!==state.session)return;await api('Sessions/Playing'+(phase==='started'?'':phase==='stopped'?'/Stopped':'/Progress'),'POST',{ItemId:p.item.Id,PlaySessionId:p.lease.playSessionId,PositionTicks:Math.floor(((p.offset||0)+(media.currentTime||0))*10000000),IsPaused:media.paused,CanSeek:p.item.Type!=='TvChannel',PlayMethod:'Transcode'});}
 async function skip(forward,automatic=false){if(!state.player||!state.queue.length)return;let next=state.queueIndex+(forward?1:-1);if(automatic&&state.repeat==='one')next=state.queueIndex;if(next>=state.queue.length){if(state.repeat!=='all')return stopPlayback();next=0;}if(next<0){if(state.repeat!=='all')next=0;else next=state.queue.length-1;}await play(state.queue[next],state.queue,next);}
 function toggle(){if(media.paused)media.play().catch(()=>{state.error='Press Play in the media controls.';render();});else media.pause();updatePlayback();}
 function miniPlayer(){const p=state.player;if(!p||p.item.Type!=='Audio')return document.createDocumentFragment();const e=node('section',undefined,'mini-player');e.setAttribute('aria-label','Now playing');e.append(cover(p.item,true));const title=button('',()=>{state.expanded=true;render();},'grow');title.append(node('strong',p.item.Name),node('small',subtitle(p.item)));e.append(title);const playButton=button('',toggle,'plain',media.paused?'play':'pause');playButton.setAttribute('aria-label',media.paused?'Play':'Pause');playButton.dataset.playToggle='';e.append(playButton);const next=action('',()=>skip(true),'plain','next');next.setAttribute('aria-label','Next track');next.disabled=state.busy||(state.repeat!=='all'&&state.queueIndex+1>=state.queue.length);e.append(next);return e;}
@@ -407,7 +443,17 @@ document.addEventListener('keydown',event=>{
  else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
 });
 
-media.addEventListener('play',updatePlayback);media.addEventListener('pause',updatePlayback);media.addEventListener('timeupdate',updatePlayback);
+media.addEventListener('play',()=>{
+ const p=state.player;
+ if(!pageRetired&&p?.mode==='https'&&p.lease.kind==='tv'&&p.pausedAt&&Date.now()-p.pausedAt>70000){
+  const position=Math.floor(((p.offset||0)+(media.currentTime||0))*10000000);
+  const item={...p.item,UserData:{...p.item.UserData,PlaybackPositionTicks:position}};
+  p.pausedAt=null;media.pause();perform(()=>play(item,state.queue,state.queueIndex));return;
+ }
+ if(p)p.pausedAt=null;updatePlayback();
+});
+media.addEventListener('pause',()=>{if(state.player)state.player.pausedAt=Date.now();updatePlayback();});
+media.addEventListener('timeupdate',updatePlayback);
 media.addEventListener('ended',()=>{if(pageRetired||!state.player||!media.ended)return;perform(async()=>{await reportProgress('stopped').catch(()=>{});await skip(true,true);});});
 media.addEventListener('error',()=>{if(pageRetired||!media.getAttribute('src'))return;state.error='This media could not play. Try another title or refresh your library.';render();});
 window.addEventListener('pagehide',()=>{
@@ -419,7 +465,7 @@ window.addEventListener('pagehide',()=>{
  state.player=null;clearOutput(p);
  try{runtime()?.ready()?.webMeshPageExit();}catch(_){}
  if(mode!=='mesh'){
-  if(p?.lease)leaseRequest(p.lease.releaseUrl,'DELETE',p.session,true).catch(()=>{});
+  if(p?.lease)releaseLease(p.lease,p.session,true).catch(()=>{});
   if(session)http('Sessions/Logout','POST',undefined,[],session,true,true,base).catch(()=>{});
  }
  state.session=null;clearPrivateView();clearImages();

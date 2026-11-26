@@ -70,9 +70,21 @@ authorization, cancellation and ongoing parent-session checks. The view renews
 the lease while active and releases it on stop/sign-out. A page exit sends
 best-effort cleanup, which cannot promise that the server received it.
 
-Old servers can still supply sign-in and library browsing. They do not gain
-cookie media support because a client guesses a route. Media on those
-installations reports that a server update is needed.
+For the verified previous server build, an authenticated 404, 405 or 501 from
+the cookie capability endpoint permits a separate discovery of /Bluefin/TV/v1.
+Only its complete version-1, 7,200-second absolute / 90-second idle lease
+advertisement enables that adapter. A 401/403, malformed advertisement, timeout,
+or failed cookie lease creation never selects it.
+
+The older TV media route contains a secret capability for one selected item;
+it contains no account bearer. It remains only in player memory and the native
+media element, with no persistence, logging, copy/share UI or referrer. Its
+route parser and lifetime are distinct from the public cookie route. DELETE
+releases it; there is no POST renewal. A bounded HEAD while playing can keep
+the idle lease alive but cannot extend its absolute limit. Resuming after a
+long pause requests fresh authorization at the current playback position.
+Servers with neither supported advertisement retain sign-in/library browsing
+and report unavailable playback without guessing a stream URL.
 
 Strict mesh media continues through the Rust per-request PQ protocol and the
 existing client-bound service-worker bridge. It never calls the HTTPS cookie
