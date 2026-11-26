@@ -9,18 +9,13 @@ struct MusicLibraryView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
-                    #if !os(tvOS)
-                    Button { store.deviceMusicVisible = true } label: {
-                        Label("On this device", systemImage: "music.note.house").frame(maxWidth: .infinity, minHeight: 48)
-                    }
-                    #endif
-                    browse("Songs", type: "Audio", symbol: "music.note")
-                    browse("Albums", type: "MusicAlbum", symbol: "square.stack")
-                    browse("Artists", type: "MusicArtist", symbol: "music.mic")
-                    browse("Playlists", type: "Playlist", symbol: "music.note.list")
-                    NavigationLink(destination: DownloadsView(offline: store.offline)) { Label("Downloads", systemImage: "arrow.down.circle").frame(maxWidth: .infinity, minHeight: 48) }
+                #if os(tvOS)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 20)], spacing: 20) {
+                    navigationItems
                 }.buttonStyle(.bordered)
+                #else
+                VStack(spacing: 0) { navigationItems }.buttonStyle(.plain)
+                #endif
                 shelf("Recently added", model: recent, sort: .added)
                 shelf("Favorite albums", model: favorites, sort: .name, onlyFavorites: true)
                 if !recent.loading && !favorites.loading && recent.items.isEmpty && favorites.items.isEmpty && recent.problem == nil {
@@ -33,8 +28,37 @@ struct MusicLibraryView: View {
             await favorites.load(store: store, type: "MusicAlbum", parent: nil, favorites: true)
         }
     }
+    @ViewBuilder private var navigationItems: some View {
+        browse("Playlists", type: "Playlist", symbol: "music.note.list")
+        browse("Artists", type: "MusicArtist", symbol: "music.mic")
+        browse("Albums", type: "MusicAlbum", symbol: "square.stack")
+        browse("Songs", type: "Audio", symbol: "music.note")
+        NavigationLink(destination: DownloadsView(offline: store.offline)) {
+            navigationLabel("Downloads", symbol: "arrow.down.circle")
+        }
+        #if !os(tvOS)
+        Button { store.deviceMusicVisible = true } label: {
+            navigationLabel("On this device", symbol: "music.note.house")
+        }
+        #endif
+    }
     private func browse(_ title: String, type: String, symbol: String) -> some View {
-        NavigationLink(destination: MusicCollection(title: title, type: type)) { Label(title, systemImage: symbol).frame(maxWidth: .infinity, minHeight: 48) }
+        NavigationLink(destination: MusicCollection(title: title, type: type)) {
+            navigationLabel(title, symbol: symbol)
+        }
+    }
+    private func navigationLabel(_ title: String, symbol: String) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 20) {
+                Image(systemName: symbol).font(.title2).frame(width: 32).foregroundStyle(BluefinStyle.accent)
+                Text(title).font(.title3)
+                Spacer()
+                Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, minHeight: 58).padding(.vertical, 7).contentShape(Rectangle())
+            #if !os(tvOS)
+            Divider().padding(.leading, 52)
+            #endif
+        }
     }
     private func shelf(_ title: String, model: MusicLibraryModel, sort: MusicSort, onlyFavorites: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -230,8 +254,9 @@ struct MusicMiniPlayer: View {
             Button { Task { await store.skipMusic(1) } } label: { Image(systemName: "forward.fill").frame(width: 44, height: 44) }
                 .accessibilityLabel("Next track").disabled(store.startingPlayback || (store.musicRepeat != .all && store.musicIndex + 1 >= store.musicQueue.count))
         }.padding(.horizontal, nativeAccessory ? 12 : 20).padding(.vertical, nativeAccessory ? 4 : 10)
-            .background { if !nativeAccessory { Rectangle().fill(.regularMaterial) } }
-            .overlay(alignment: .top) { if !nativeAccessory { Divider() } }
+            .modifier(BluefinGlassSurface(enabled: !nativeAccessory, cornerRadius: 26))
+            .padding(.horizontal, nativeAccessory ? 0 : 12)
+            .padding(.vertical, nativeAccessory ? 0 : 5)
     }
 }
 
@@ -297,7 +322,8 @@ struct MusicPlayer: View {
     }
     private var playerHeader: some View {
         HStack {
-            Button { dismiss() } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }.accessibilityLabel("Close Now Playing")
+            Button { dismiss() } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }
+                .buttonStyle(.plain).modifier(BluefinGlassSurface(cornerRadius: 22)).accessibilityLabel("Close Now Playing")
             Spacer()
             Text("NOW PLAYING").font(.caption.weight(.semibold)).tracking(2).foregroundStyle(.secondary)
             Spacer()
@@ -321,7 +347,8 @@ struct MusicPlayer: View {
         Menu {
             Button { addToPlaylist = true } label: { Label("Add to playlist", systemImage: "music.note.list") }
             Button { integrationsVisible = true } label: { Label("Sharing and apps", systemImage: "square.and.arrow.up") }
-        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.accessibilityLabel("More music actions")
+        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+            .modifier(BluefinGlassSurface(cornerRadius: 22)).accessibilityLabel("More music actions")
     }
     @ViewBuilder private func playerLayout(size: CGSize) -> some View {
         #if os(tvOS)
@@ -382,17 +409,18 @@ struct MusicPlayer: View {
                         .foregroundStyle(store.musicRepeat == .off ? .secondary : BluefinStyle.accent)
                 }.accessibilityLabel("Repeat").accessibilityValue(store.musicRepeat == .one ? "One track" : store.musicRepeat == .all ? "All tracks" : "Off").frame(maxWidth: .infinity)
             }
-            HStack(spacing: 28) {
+            HStack(spacing: 16) {
                 Button { Task { await saveFavorite() } } label: { Image(systemName: favorite ? "star.fill" : "star").frame(width: 44, height: 44) }.accessibilityLabel(favorite ? "Remove favorite" : "Add favorite").disabled(favoriteBusy)
                 Spacer()
-                Button { lyricsVisible = true } label: { Image(systemName: "quote.bubble").frame(width: 44, height: 44) }.accessibilityLabel("Lyrics")
+                Button { lyricsVisible = true } label: { Image(systemName: "quote.bubble").frame(width: 44, height: 44) }.accessibilityLabel("Lyrics and Sing")
                 Spacer()
                 #if os(iOS)
                 MusicRoutePicker().frame(width: 44, height: 44).accessibilityLabel("Choose audio output")
                 #endif
                 Spacer()
                 Button { queueVisible = true } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }.accessibilityLabel("Up next queue")
-            }
+            }.buttonStyle(.plain).padding(.horizontal, 12).padding(.vertical, 5)
+                .modifier(BluefinGlassSurface(cornerRadius: 27))
             #if os(iOS)
             HStack(spacing: 12) {
                 Image(systemName: "speaker.fill").foregroundStyle(.secondary).accessibilityHidden(true)
@@ -408,16 +436,10 @@ struct MusicPlayer: View {
     }
     private var qualityBadge: some View {
         Button { qualityVisible = true } label: {
-                let stream = playback.audioSourceStream
-                VStack(alignment: .leading, spacing: 4) {
-                    Label(AudioQualitySummary.badge(stream: stream, method: playback.playMethod, singing: playback.karaoke != nil), systemImage: "waveform")
-                    if !AudioQualitySummary.format(stream).isEmpty { Text("Source · \(AudioQualitySummary.format(stream))") }
-                    Text("View audio details").font(.caption2)
-                }.font(.caption.weight(.medium)).foregroundStyle(.secondary).frame(minHeight: 44)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .overlay(alignment: .trailing) { Image(systemName: "chevron.right").font(.caption2).accessibilityHidden(true) }
-                    .contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityHint("View source format, conversion, audio processing and device output")
+            Label(AudioQualitySummary.badge(stream: playback.audioSourceStream, method: playback.playMethod,
+                                            singing: playback.karaoke != nil), systemImage: "waveform")
+                .font(.caption.weight(.medium)).foregroundStyle(.secondary).frame(minHeight: 28)
+        }.buttonStyle(.plain).accessibilityHint("View audio quality and output details")
     }
     private var queue: some View {
         NavigationView {

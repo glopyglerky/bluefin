@@ -41,29 +41,36 @@ enum BluefinStyle {
 }
 
 struct BluefinBackground: View {
+    var body: some View { BluefinStyle.background.ignoresSafeArea() }
+}
+
+/// Glass belongs to the floating controls; the media canvas stays quiet and solid.
+struct BluefinGlassSurface: ViewModifier {
+    var enabled = true
+    var cornerRadius: CGFloat = 24
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    var body: some View {
-        ZStack {
-            BluefinStyle.background
-            if !reduceTransparency {
-                // Static fine engraving belongs behind the layout, never over its contents.
-                Canvas { context, size in
-                    var lines = Path()
-                    for y in stride(from: CGFloat(0), through: size.height, by: 12) {
-                        lines.move(to: CGPoint(x: 0, y: y))
-                        lines.addQuadCurve(to: CGPoint(x: size.width, y: y + 2),
-                                           control: CGPoint(x: size.width * 0.5, y: y - 2))
-                    }
-                    context.stroke(lines, with: .color(BluefinStyle.text.opacity(0.025)), lineWidth: 0.5)
-                }
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @ViewBuilder func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if !enabled { content }
+        else if reduceTransparency || reduceMotion {
+            content.background(BluefinStyle.secondaryBackground, in: shape)
+                .overlay(shape.strokeBorder(BluefinStyle.border.opacity(0.3), lineWidth: 0.5))
+        } else {
+            #if !os(visionOS)
+            if #available(iOS 26.0, tvOS 26.0, macOS 26.0, watchOS 26.0, *) {
+                content.glassEffect(.regular, in: shape)
+            } else {
+                content.background(.regularMaterial, in: shape)
             }
-        }.ignoresSafeArea()
+            #else
+            content.background(.regularMaterial, in: shape)
+            #endif
+        }
     }
 }
 
-/// The original app-icon fin and waves, drawn at the existing wordmark size.
 struct BluefinMark: View {
     var body: some View {
         Canvas { context, size in

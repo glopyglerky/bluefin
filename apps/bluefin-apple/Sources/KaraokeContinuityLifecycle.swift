@@ -14,6 +14,7 @@ import Combine
     @Published private(set) var state: State = .off
     @Published private(set) var status = "Microphone off"
     @Published private(set) var gain: Float = 0.1
+    @Published private(set) var isMuted = true
     private let audio: KaraokeContinuityAudio
     private var generation = 0
     init(audio: KaraokeContinuityAudio) { self.audio = audio }
@@ -27,7 +28,7 @@ import Combine
     }
     func selected(token: Int) -> Bool {
         guard token == generation, state == .selecting else { return false }
-        state = .connectedMuted; status = "iPhone connected. Monitoring is off."
+        state = .connectedMuted; status = "iPhone connected · Microphone off"
         return true
     }
     func cancelSelection(token: Int) {
@@ -45,18 +46,24 @@ import Combine
         do {
             try audio.start(gain: gain)
             guard request == generation, !Task.isCancelled else { stop(); return }
-            state = .monitoring; status = "Monitoring iPhone locally with voice processing"
+            isMuted = false; state = .monitoring; status = "iPhone microphone live"
         } catch {
             stop(state: .failed, reason: "Monitoring unavailable. Check the selected input and TV audio route, then reconnect.")
         }
     }
     func setGain(_ value: Float) {
         gain = value.isFinite ? min(max(value, 0), 0.25) : 0
-        if state == .monitoring { audio.setGain(gain) }
+        if state == .monitoring { audio.setGain(isMuted ? 0 : gain) }
+    }
+    func setMuted(_ muted: Bool) {
+        guard state == .monitoring else { return }
+        isMuted = muted
+        audio.setGain(muted ? 0 : gain)
+        status = muted ? "iPhone microphone muted" : "iPhone microphone live"
     }
     func stop(state next: State = .off, reason: String = "Microphone off") {
         generation += 1
-        state = next; status = reason
+        isMuted = true; state = next; status = reason
         do { try audio.stop() }
         catch { state = .failed; status = "Microphone stopped. Audio session restoration failed; restart playback." }
     }

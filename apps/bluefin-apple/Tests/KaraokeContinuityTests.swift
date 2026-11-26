@@ -52,6 +52,22 @@ final class KaraokeContinuityTests: XCTestCase {
         await subject.enable()
         XCTAssertEqual(audio.starts, 1, "Interruption must require a new selection")
     }
+    @MainActor func testMutePersistsAcrossLevelChangesAndDisconnectCannotUnmute() async {
+        let audio = ContinuityAudioFake(), model = KaraokeContinuityLifecycle(audio: ContinuityAudioFake())
+        model.setMuted(false)
+        XCTAssertTrue(model.isMuted)
+        let subject = KaraokeContinuityLifecycle(audio: audio)
+        XCTAssertTrue(subject.selected(token: subject.beginSelection()))
+        await subject.enable()
+        XCTAssertFalse(subject.isMuted)
+        subject.setMuted(true); subject.setGain(0.2)
+        XCTAssertEqual(audio.gain, 0)
+        subject.setMuted(false)
+        XCTAssertEqual(audio.gain, 0.2)
+        subject.stop(); subject.setMuted(false)
+        XCTAssertTrue(subject.isMuted)
+        XCTAssertFalse(audio.active)
+    }
     @MainActor func testDeniedPermissionNeverStarts() async {
         let audio = ContinuityAudioFake(); audio.permission = false
         let model = KaraokeContinuityLifecycle(audio: audio)
