@@ -29,6 +29,7 @@ pub mod listen;
 mod log_lines;
 pub mod media_encoding;
 pub mod metrics_wiring;
+mod mesh_connect;
 pub mod planner;
 mod recording_library;
 pub mod seed;
@@ -335,6 +336,7 @@ async fn run_lifetimes(
     // `docker stop` that lands during the rebuild window of a restart.
     let signals = Signals::install();
     let iroh_config = bluefin_iroh_server::Config::from_env()?;
+    let mesh_config = mesh_connect::Config::from_env()?;
     loop {
         let started = std::time::Instant::now();
         match serve_once(
@@ -343,6 +345,7 @@ async fn run_lifetimes(
             &mut metrics,
             &signals,
             iroh_config.as_ref(),
+            mesh_config.as_ref(),
         )
         .await
         {
@@ -584,6 +587,7 @@ async fn serve_once(
     metrics: &mut Option<ProcessMetrics>,
     signals: &Signals,
     iroh_config: Option<&bluefin_iroh_server::Config>,
+    mesh_config: Option<&mesh_connect::Config>,
 ) -> anyhow::Result<bool> {
     // Process-wide SQLite setup must precede every open, the restore and the
     // existing-database check below included.
@@ -667,7 +671,7 @@ async fn serve_once(
 
     // Wire every concrete manager into the shared AppState (the composition root).
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let wired = build_app_state(&db, config, &ffmpeg, fpcalc, shutdown_tx)
+    let mut wired = build_app_state(&db, config, &ffmpeg, fpcalc, shutdown_tx)
         .await
         .context("failed to assemble application state")?;
     boot_stage(started, "app state wired");
@@ -725,6 +729,30 @@ async fn serve_once(
         .context("failed to verify the startup-wizard flag")?;
 
     boot_stage(started, "admin seeded");
+    let mesh = if let Some(mesh_config) = mesh_config {
+        let result = async {
+            let published_url = config.published_url.as_deref()
+                .context("mesh passkeys require the configured HTTPS relying-party URL")?;
+            let bound = mesh_connect::Bound::bind(mesh_config).await?;
+            let account = match ferrofin_api::handlers::bluefin_mesh_accounts::Service::new(
+                db.clone(), published_url, bound.address()?).await {
+                Ok(account) => account,
+                Err(error) => { bound.close().await; return Err(anyhow::Error::from(error)); }
+            };
+            Ok::<_, anyhow::Error>((bound, account))
+        }.await;
+        match result {
+            Ok((bound, account)) => {
+                wired.state = wired.state.clone().with_mesh_accounts(account);
+                Some(bound)
+            }
+            Err(error) => {
+                tear_down_host(wired, None, None).await;
+                db.close().await;
+                return Err(error.context("unable to initialize opted-in PQ mesh connection service"));
+            }
+        }
+    } else { None };
     let mut router = mount_web(
         ferrofin_api::create_router(wired.state.clone()),
         &config.web_dir,
@@ -803,7 +831,13 @@ async fn serve_once(
             None,
         )
     });
+    let mesh_app = mesh.as_ref().map(|_| lifetime_app(router.clone(), &config.base_url, None));
     let app = lifetime_app(router, &config.base_url, https_redirect(config, &wired));
+    let (mesh_stop, mesh_rx) = tokio::sync::watch::channel(false);
+    let mesh_job = mesh.zip(mesh_app).map(|(bound, app)| {
+        let state = wired.state.clone();
+        tokio::spawn(async move { bound.run(state, app, mesh_rx).await })
+    });
     let (iroh_stop, iroh_rx) = tokio::sync::watch::channel(false);
     let iroh_job = iroh.zip(iroh_app).map(|(server, app)| {
         let (endpoint_id, address) = server.address();
@@ -834,6 +868,7 @@ async fn serve_once(
     );
 
     let iroh_shutdown = iroh_stop.clone();
+    let mesh_shutdown = mesh_stop.clone();
     let shutdown = announce_shutdown(
         shutdown_rx,
         Arc::clone(&wired.state.sessions),
@@ -845,6 +880,7 @@ async fn serve_once(
             async move {
                 shutdown.await;
                 let _ = iroh_shutdown.send(true);
+                let _ = mesh_shutdown.send(true);
             },
             config.shutdown_timeout_secs,
         )
@@ -869,10 +905,18 @@ async fn serve_once(
     } else {
         Ok(())
     };
+    let _ = mesh_stop.send(true);
+    let mesh_result = if let Some(job) = mesh_job {
+        job.await.context("mesh lifetime task failed").and_then(|r| r).map(|receipt| {
+            tracing::info!(joined_connections = receipt.joined_connections,
+                endpoint_closed = receipt.endpoint_closed, "PQ mesh transport stopped");
+        })
+    } else { Ok(()) };
     let restart = wired.lifecycle.restart_requested() && !signals.fired();
     tear_down_host(wired, discovery, sampler).await;
     db.close().await;
     iroh_result?;
+    mesh_result?;
     serve_result?;
     tracing::info!(
         uptime_s = started.elapsed().as_secs(),

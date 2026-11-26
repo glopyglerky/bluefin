@@ -38,6 +38,7 @@ pub(crate) fn is_local_connection(
     extensions: &axum::http::Extensions,
     client: std::net::IpAddr,
 ) -> bool {
+    if extensions.get::<crate::mesh_transport::MeshOrigin>().is_some() { return false; }
     extensions
         .get::<ConnectionLocalAddr>()
         .is_some_and(|local| crate::state::normalize_ip(local.0.ip()) == client)
@@ -64,6 +65,13 @@ pub async fn ip_access_layer(
     mut request: Request,
     next: Next,
 ) -> Response {
+    if request.extensions().get::<crate::mesh_transport::MeshOrigin>().is_some() {
+        if crate::mesh_transport::require_network(&state).is_ok() {
+            return next.run(request).await;
+        }
+        return Response::builder().status(axum::http::StatusCode::SERVICE_UNAVAILABLE)
+            .body(axum::body::Body::empty()).unwrap_or_default();
+    }
     let direct = request
         .extensions()
         .get::<bluefin_iroh_server::DirectPeer>()

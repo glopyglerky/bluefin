@@ -965,6 +965,11 @@ impl AppState {
         extensions: &axum::http::Extensions,
         headers: &axum::http::HeaderMap,
     ) -> std::net::IpAddr {
+        if extensions.get::<crate::mesh_transport::MeshOrigin>().is_some() {
+            // The mesh peer is an authenticated key, not an IP. This sentinel
+            // never proves locality; the mesh origin has its own remote gate.
+            return std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED);
+        }
         if let Some(peer) = extensions.get::<bluefin_iroh_server::DirectPeer>() {
             return normalize_ip(peer.remote.ip());
         }
@@ -1039,6 +1044,7 @@ impl AppState {
     /// fallback, which is what the whole server used before.
     #[must_use]
     pub fn is_in_local_network(&self, ip: std::net::IpAddr) -> bool {
+        if ip.is_unspecified() { return false; }
         match self.inner.network.as_ref() {
             Some(network) => network.read().map_or_else(
                 |e| e.into_inner().is_in_local_network(ip),

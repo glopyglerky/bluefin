@@ -172,3 +172,78 @@ async fn mesh_new_epoch_fences_old_process_and_old_qr_but_retains_device_receipt
     assert!(restarted.invite_row(&used_invite).await.is_err());
     assert_eq!(restarted.handle(&f.state,&device.public_key(),request).await.unwrap(),result);
 }
+
+#[tokio::test]
+async fn mesh_transport_real_pq_passkey_owner_router_and_no_portable_bearer(){
+    use bluefin_mesh_connect::native::PqcEndpoint;
+    use ferrofin_core::authorization_context::{FerrofinAuthorizationContext,FerrofinAuthService};
+    use axum::{body::Body,http::Request as HttpRequest};
+    use tower::ServiceExt;
+    let mut f=Fixture::new().await;
+    let server=PqcEndpoint::server(&DeviceIdentity::from_seed([31;32]).unwrap(),
+        "127.0.0.1:0".parse().unwrap(),vec![],SERVICE).await.unwrap();
+    let address=server.server_address().unwrap();
+    f.service=Service::new(f.db.clone(),"https://accounts.example",address.clone()).await.unwrap();
+    let mut inner=(*f.state).clone();
+    let authorization=FerrofinAuthorizationContext::new(f.db.clone(),inner.users.clone(),
+        inner.app_host.clone(),inner.config.clone(),"mesh-test-server","1");
+    inner.auth_context=Arc::new(authorization.clone());
+    inner.auth_service=Arc::new(FerrofinAuthService::new(authorization));
+    f.state=AppState::from_inner(inner).with_mesh_accounts(f.service.clone());
+    let (user,mut authenticator)=f.login_account().await;
+    let invite=f.invite(InviteIntent::Login,Some(user)).await;
+    let router=crate::create_router(f.state.clone());
+    let (stop,stopping)=tokio::sync::watch::channel(false);
+    let listener=tokio::spawn(crate::mesh_transport::run(server,f.state.clone(),router.clone(),stopping));
+    let device=DeviceIdentity::from_seed([32;32]).unwrap();
+    let client=PqcEndpoint::client(&device).await.unwrap();
+    let mut connection=client.connect(&invite).await.unwrap();
+    connection.send(&envelope(Request::Begin{request_id:[41;32],invitation:invite,
+        device_public_key:device.public_key(),device_label:"Actual PQ peer".into(),account_name:None})).await.unwrap();
+    let start:Value=connection.receive().await.unwrap();
+    assert_eq!(start["body"]["type"],"begin_result");
+    let finish=finish_request(&start,&device,42,assertion(&mut authenticator,&start));
+    connection.send(&finish).await.unwrap();
+    let result:Value=connection.receive().await.unwrap();
+    let session=result["body"]["session"]["id"].as_str().unwrap();
+    let device_id:String=sqlx::query_scalar("SELECT DeviceId FROM BluefinMeshSessions WHERE Id=?")
+        .bind(session).fetch_one(f.db.pool()).await.unwrap();
+    // This synthetic server-only Devices row is test setup for the existing
+    // auth context. The invitation, passkey, PQ channel and grant are real.
+    let token="synthetic-mesh-private-bearer-for-test-only";
+    let now=chrono::Utc::now().to_rfc3339();
+    sqlx::query("INSERT INTO Devices(AccessToken,AppName,AppVersion,DateCreated,DateLastActivity,DateModified,DeviceId,DeviceName,IsActive,UserId) VALUES(?,?,?,?,?,?,?,?,1,?)")
+        .bind(token).bind("Bluefin").bind("1").bind(&now).bind(&now).bind(&now)
+        .bind(&device_id).bind("Actual PQ peer").bind(guid_to_db(user)).execute(f.db.writer()).await.unwrap();
+    let request=json!({"version":1,"body":{"type":"control","session_id":session,
+        "binding":connection.binding(),"request":{"method":"GET","path":"/Users/Me","headers":[],"body":[]}}});
+    connection.send(&request).await.unwrap();
+    let head:Value=connection.receive().await.unwrap();
+    assert_eq!(head["body"]["type"],"response_head");assert_eq!(head["body"]["status"],200);
+    let mut body=Vec::new();
+    loop{
+        let frame:Value=connection.receive().await.unwrap();
+        if frame["body"]["type"]=="response_end"{break;}
+        assert_eq!(frame["body"]["type"],"response_chunk");
+        body.extend(serde_json::from_value::<Vec<u8>>(frame["body"]["bytes"].clone()).unwrap());
+    }
+    let viewer:Value=serde_json::from_slice(&body).unwrap();assert_eq!(viewer["Name"],"viewer");
+    assert!(!String::from_utf8(body).unwrap().contains(token));
+    let http=router.oneshot(HttpRequest::builder().uri("/Users/Me")
+        .header("Authorization",format!("MediaBrowser Token=\"{token}\", Device=\"Bluefin\""))
+        .body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(http.status(),401,"server-only mesh bearer must not authenticate ordinary HTTP");
+    let mut wrong_binding=request.clone();
+    let mut binding=connection.binding();binding[0]^=1;wrong_binding["body"]["binding"]=json!(binding);
+    connection.send(&wrong_binding).await.unwrap();
+    assert!(connection.receive::<Value>().await.is_err());
+    let thief=PqcEndpoint::client(&DeviceIdentity::from_seed([33;32]).unwrap()).await.unwrap();
+    let mut other=thief.connect_server(&address).await.unwrap();
+    let mut stolen=request;stolen["body"]["binding"]=json!(other.binding());
+    other.send(&stolen).await.unwrap();
+    assert!(other.receive::<Value>().await.is_err(),"a copied public session descriptor grants nothing");
+    other.close().await;connection.close().await;
+    client.close().await;thief.close().await;
+    stop.send(true).unwrap();let receipt=listener.await.unwrap().unwrap();
+    assert!(receipt.endpoint_closed);assert!(receipt.joined_connections>=2);
+}

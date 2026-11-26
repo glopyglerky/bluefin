@@ -28,6 +28,14 @@ use tokio::{
 };
 use tower::ServiceExt;
 
+/// Opens the existing hardened, exclusively leased private seed store.
+/// The caller must retain the returned lease for its listener lifetime and
+/// must never log the seed. This shares file safety, not account authority.
+pub fn open_private_identity_seed(path: &std::path::Path) -> Result<([u8; 32], File)> {
+    let (key, lease) = identity::open(path)?;
+    Ok((key.to_bytes(), lease))
+}
+
 /// Native client protocol and fixed foreground-media flow limits.
 pub const ALPN: &[u8] = b"bluefin/http/1";
 const IDLE: Duration = Duration::from_secs(30);

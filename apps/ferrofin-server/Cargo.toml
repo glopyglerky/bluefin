@@ -20,6 +20,7 @@ name = "ferrofin-server"
 path = "src/main.rs"
 
 [dependencies]
+bluefin-mesh-connect = { package = "mesh-connect", path = "../../crates/mesh-connect", features = ["native"] }
 bluefin-iroh-server = { path = "../../crates/bluefin-iroh-server" }
 bluefin-contract = { path = "../../crates/bluefin-contract" }
 bluefin-discovery = { path = "../../crates/bluefin-discovery" }

@@ -142,13 +142,22 @@ pub async fn auth_context_layer(
     // session's `RemoteEndPoint` tracks a roaming client. Without it every
     // session reports an empty address and every activity-log `ShortOverview`
     // built from it is null.
-    let remote = state.client_address(&parts).to_string();
+    let mesh_origin = parts.extensions.get::<crate::mesh_transport::MeshOrigin>();
+    let remote = mesh_origin.map_or_else(|| state.client_address(&parts).to_string(),
+        |origin| origin.remote_endpoint().to_owned());
     let ctx = auth_request_context(&parts.headers, parts.uri.query(), Some(remote));
     let info = state
         .auth_context()
         .get_authorization_info(&ctx)
         .await
         .unwrap_or_default();
+    // Internal mesh bearer material is never a portable HTTP credential, even
+    // if a future handler accidentally discloses it. Only the live TLS bridge
+    // can construct this private request extension.
+    if info.device_id.as_deref().is_some_and(|id| id.starts_with("bluefin-mesh:"))
+        && mesh_origin.is_none() {
+        return Err(ApiError::Unauthorized("Device-bound mesh session required".into()));
+    }
     parts.extensions.insert(info);
     Ok(next.run(Request::from_parts(parts, body)).await)
 }
@@ -237,7 +246,8 @@ pub(crate) async fn user_authorization(
     if policy.is_disabled {
         return Err(ApiError::Unauthorized("account disabled".to_owned()));
     }
-    if !state.is_in_local_network(client) && !policy.enable_remote_access {
+    let mesh_device = info.device_id.as_deref().is_some_and(|id| id.starts_with("bluefin-mesh:"));
+    if (mesh_device || !state.is_in_local_network(client)) && !policy.enable_remote_access {
         return Err(ApiError::Forbidden(
             "remote access is not permitted for this user".to_owned(),
         ));

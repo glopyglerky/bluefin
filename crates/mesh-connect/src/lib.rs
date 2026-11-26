@@ -10,6 +10,7 @@
 mod capsule;
 mod error;
 pub mod protocol;
+pub mod discovery;
 #[cfg(feature = "images")]
 mod qr;
 #[cfg(feature = "native")]
