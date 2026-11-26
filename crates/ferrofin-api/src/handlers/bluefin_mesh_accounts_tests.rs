@@ -1,5 +1,8 @@
 //! Exercises real passkey and ML-DSA proofs against the production SQL owner.
 use super::*;
+#[path = "bluefin_mesh_session_fixture.rs"]
+mod session_fixture;
+
 use async_trait::async_trait;
 use bluefin_mesh_connect::native::DeviceIdentity;
 use ferrofin_core::user_manager::FerrofinUserManager;
@@ -25,18 +28,21 @@ impl ServerConfigurationManager for Config {
     async fn get_branding(&self)->Result<BrandingOptions,ServiceError>{Ok(Default::default())}
     async fn update_branding(&self,_:&BrandingOptions)->Result<(),ServiceError>{Ok(())}
 }
-struct Fixture { directory:tempfile::TempDir, state:AppState, service:Arc<Service>, db:Database }
+struct Fixture { directory:tempfile::TempDir, state:AppState, service:Arc<Service>, db:Database,
+    sessions:Arc<session_fixture::Sessions> }
 impl Fixture {
     async fn new()->Self {
         let directory=tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("bluefin-accounts.json"),r#"{"allowSignups":true,"meshSignupApproval":"manual"}"#).unwrap();
         let db=Database::connect_in_memory().await.unwrap();db.run_migrations().await.unwrap();
         let mut inner=(*crate::test_support::fake_state()).clone();
+        let sessions=Arc::new(session_fixture::Sessions::default());
+        inner.sessions=sessions.clone();
         inner.users=Arc::new(FerrofinUserManager::new(db.clone()));
         inner.config=Arc::new(Config(Arc::new(Paths(directory.path().to_string_lossy().into_owned()))));
         let state=AppState::from_inner(inner);
         let service=Service::new(db.clone(),"https://accounts.example",address()).await.unwrap();
-        Self{directory,state,service,db}
+        Self{directory,state,service,db,sessions}
     }
     async fn login_account(&self)->(Uuid,WebauthnAuthenticator<SoftPasskey>){
         let user=self.state.users.create_signup_user("viewer","A long test password only").await.unwrap();
@@ -210,6 +216,7 @@ async fn mesh_transport_real_pq_passkey_owner_router_and_no_portable_bearer(){
     let session=result["body"]["session"]["id"].as_str().unwrap();
     let device_id:String=sqlx::query_scalar("SELECT DeviceId FROM BluefinMeshSessions WHERE Id=?")
         .bind(session).fetch_one(f.db.pool()).await.unwrap();
+    f.sessions.add("wire-playback", user, &device_id);
     // This synthetic server-only Devices row is test setup for the existing
     // auth context. The invitation, passkey, PQ channel and grant are real.
     let token="synthetic-mesh-private-bearer-for-test-only";
@@ -269,6 +276,8 @@ async fn mesh_transport_real_pq_passkey_owner_router_and_no_portable_bearer(){
     retry.send(&revoke).await.unwrap();
     assert_eq!(retry.receive::<Value>().await.unwrap(), revoked);
     retry.close().await;
+    assert!(!f.sessions.contains("wire-playback"));
+    assert_eq!(f.sessions.close_attempts(), ["wire-playback"]);
     client.close().await;thief.close().await;
     stop.send(true).unwrap();let receipt=listener.await.unwrap().unwrap();
     assert!(receipt.endpoint_closed);assert!(receipt.joined_connections>=2);
@@ -315,8 +324,12 @@ async fn signed_in_mesh_session(f: &Fixture, device: &DeviceIdentity) -> String 
     let (user, mut authenticator) = f.login_account().await;
     let start = begin(f, f.invite(InviteIntent::Login, Some(user)).await, device, 81, None).await;
     let finish = finish_request(&start, device, 82, assertion(&mut authenticator, &start));
-    f.service.handle(&f.state, &device.public_key(), finish).await.unwrap()
-        ["body"]["session"]["id"].as_str().unwrap().to_owned()
+    let session = f.service.handle(&f.state, &device.public_key(), finish).await.unwrap()
+        ["body"]["session"]["id"].as_str().unwrap().to_owned();
+    let device_id: String = sqlx::query_scalar("SELECT DeviceId FROM BluefinMeshSessions WHERE Id=?")
+        .bind(&session).fetch_one(f.db.pool()).await.unwrap();
+    f.sessions.add("target-playback", user, &device_id);
+    session
 }
 
 async fn mesh_test_bearer(f: &Fixture, session: &str) {
@@ -338,6 +351,7 @@ async fn mesh_revoke_requires_original_device_and_retains_one_exact_receipt() {
     let key = device.public_key();
     let other = DeviceIdentity::from_seed([72;32]).unwrap().public_key();
     assert!(f.service.revoke_session(&f.state, &other, &session, [83;32]).await.is_err());
+    assert!(f.sessions.close_attempts().is_empty());
     let (first, retry) = tokio::join!(
         f.service.revoke_session(&f.state, &key, &session, [83;32]),
         f.service.revoke_session(&f.state, &key, &session, [83;32]),
@@ -345,6 +359,8 @@ async fn mesh_revoke_requires_original_device_and_retains_one_exact_receipt() {
     let receipt = first.unwrap();
     assert_eq!(receipt, retry.unwrap());
     assert_eq!(receipt["body"]["type"], "session_revoked");
+    assert!(!f.sessions.contains("target-playback"));
+    assert_eq!(f.sessions.close_attempts(), ["target-playback"]);
     assert!(f.service.revoke_session(&f.state, &key, &session, [84;32]).await.is_err());
     assert!(f.service.revoke_session(&f.state, &other, &session, [83;32]).await.is_err());
     assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM BluefinMeshSessionRevocations")
@@ -356,19 +372,39 @@ async fn mesh_revoke_requires_original_device_and_retains_one_exact_receipt() {
 }
 
 #[tokio::test]
-async fn mesh_revoke_removes_internal_bearer_and_survives_owner_restart() {
+async fn mesh_revoke_survives_cleanup_failure_and_exact_retry_after_owner_restart() {
     let f = Fixture::new().await;
     let device = DeviceIdentity::from_seed([73;32]).unwrap();
     let session = signed_in_mesh_session(&f, &device).await;
     mesh_test_bearer(&f, &session).await;
+    let row = sqlx::query("SELECT UserId,DeviceId FROM BluefinMeshSessions WHERE Id=?")
+        .bind(&session).fetch_one(f.db.pool()).await.unwrap();
+    let user = Uuid::parse_str(&row.get::<String, _>("UserId")).unwrap();
+    f.sessions.add("other-device", user, "different-device");
+    f.sessions.add("other-account", Uuid::new_v4(), &row.get::<String, _>("DeviceId"));
     assert!(f.service.authorization(&f.state, &device.public_key(), &session, "test").await.is_ok());
-    let response = f.service.revoke_session(&f.state, &device.public_key(), &session, [85;32]).await.unwrap();
+
+    f.sessions.fail_next_close();
+    assert!(f.service.revoke_session(&f.state, &device.public_key(), &session, [85;32]).await.is_err());
+    // The security mutation is durable even though cleanup prevented an ACK.
     assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM Devices")
         .fetch_one(f.db.pool()).await.unwrap(), 0);
     assert!(f.service.authorization(&f.state, &device.public_key(), &session, "test").await.is_err());
+    let saved: String = sqlx::query_scalar("SELECT Response FROM BluefinMeshSessionRevocations WHERE SessionId=?")
+        .bind(&session).fetch_one(f.db.pool()).await.unwrap();
+    let response: Value = serde_json::from_str(&saved).unwrap();
+    assert!(f.sessions.contains("target-playback"));
+    assert_eq!(f.sessions.close_attempts(), ["target-playback"]);
+
     let restarted = Service::new(f.db.clone(), "https://accounts.example", address()).await.unwrap();
     assert!(f.service.revoke_session(&f.state, &device.public_key(), &session, [85;32]).await.is_err());
     assert_eq!(restarted.revoke_session(&f.state, &device.public_key(), &session, [85;32]).await.unwrap(), response);
+    assert!(!f.sessions.contains("target-playback"));
+    assert!(f.sessions.contains("other-device"));
+    assert!(f.sessions.contains("other-account"));
+    assert_eq!(f.sessions.close_attempts(), ["target-playback", "target-playback"]);
+    assert_eq!(restarted.revoke_session(&f.state, &device.public_key(), &session, [85;32]).await.unwrap(), response);
+    assert_eq!(f.sessions.close_attempts(), ["target-playback", "target-playback"]);
     assert!(restarted.authorization(&f.state, &device.public_key(), &session, "test").await.is_err());
 }
 
@@ -386,6 +422,8 @@ async fn mesh_existing_bearer_deletion_terminally_revokes_the_device_grant() {
     assert!(f.service.authorization(&f.state, &device.public_key(), &session, "test").await.is_err());
     // A later explicit request can retain its receipt after ordinary logout.
     assert!(f.service.revoke_session(&f.state, &device.public_key(), &session, [86;32]).await.is_ok());
+    assert!(!f.sessions.contains("target-playback"));
+    assert_eq!(f.sessions.close_attempts(), ["target-playback"]);
 }
 
 #[tokio::test]
