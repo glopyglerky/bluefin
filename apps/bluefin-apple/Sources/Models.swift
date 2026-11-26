@@ -409,15 +409,19 @@ struct BluefinLyrics: Decodable {
     var Metadata: Metadata
     var Lyrics: [Line]
 
+    /// Older servers omit IsSynced while supplying real line timestamps.
+    var isSynced: Bool {
+        self.Metadata.IsSynced ?? Lyrics.contains { $0.Start.map { $0 >= 0 } == true }
+    }
     var offsetSeconds: Double { Double(self.Metadata.Offset ?? 0) / 10_000_000 }
     func activeIndex(at seconds: Double) -> Int? {
-        guard self.Metadata.IsSynced == true, seconds.isFinite, seconds >= 0 else { return nil }
+        guard isSynced, seconds.isFinite, seconds >= 0 else { return nil }
         return Lyrics.lastIndex { line in
             line.Start.map { $0 >= 0 && seconds >= Double($0) / 10_000_000 + offsetSeconds } == true
         }
     }
     func seekSeconds(for index: Int) -> Double? {
-        guard Lyrics.indices.contains(index), self.Metadata.IsSynced == true,
+        guard Lyrics.indices.contains(index), isSynced,
               let start = Lyrics[index].Start, start >= 0 else { return nil }
         return max(0, Double(start) / 10_000_000 + offsetSeconds)
     }

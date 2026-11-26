@@ -44,6 +44,16 @@ import Foundation
         precondition(guarded.last?.progress(at: 10) == 0, "Never invent final-cue duration")
         let plain = try JSONDecoder().decode(BluefinLyrics.self, from: Data(#"{"Metadata":{"IsSynced":false},"Lyrics":[{"Text":"Plain text","Start":0}]}"#.utf8))
         precondition(plain.activeIndex(at: 1) == nil && plain.seekSeconds(for: 0) == nil)
+        let missingFlag = try JSONDecoder().decode(BluefinLyrics.self, from: Data(#"{"Metadata":{},"Lyrics":[{"Text":"Timed line","Start":20000000,"Cues":[{"Position":0,"EndPosition":5,"Start":20000000,"End":30000000}]},{"Text":"Next line","Start":50000000}]}"#.utf8))
+        precondition(missingFlag.isSynced && missingFlag.activeIndex(at: 1.999) == nil)
+        precondition(missingFlag.activeIndex(at: 2) == 0 && missingFlag.activeIndex(at: 5) == 1)
+        precondition(missingFlag.seekSeconds(for: 1) == 5, "Empty server metadata must not discard actual line timing")
+        precondition(missingFlag.Lyrics[0].displayRuns[0].progress(at: 2.5) == 0.5)
+        let missingFlagPlain = try JSONDecoder().decode(BluefinLyrics.self, from: Data(#"{"Metadata":{},"Lyrics":[{"Text":"Plain text"}]}"#.utf8))
+        precondition(!missingFlagPlain.isSynced && missingFlagPlain.activeIndex(at: 1) == nil && missingFlagPlain.seekSeconds(for: 0) == nil)
+        let invalidTiming = try JSONDecoder().decode(BluefinLyrics.self, from: Data(#"{"Metadata":{},"Lyrics":[{"Text":"Invalid timing","Start":-1}]}"#.utf8))
+        precondition(!invalidTiming.isSynced && invalidTiming.activeIndex(at: 1) == nil && invalidTiming.seekSeconds(for: 0) == nil)
+
         let negative = try JSONDecoder().decode(BluefinLyrics.self, from: Data(#"{"Metadata":{"IsSynced":true,"Offset":-10000000},"Lyrics":[{"Text":"Early","Start":5000000}]}"#.utf8))
         precondition(negative.seekSeconds(for: 0) == 0 && negative.activeIndex(at: 0) == 0)
 
@@ -81,6 +91,6 @@ import Foundation
         await start.value
         precondition(delayed.starts == 0 && pending.state == .off)
         precondition(!pending.selected(token: token), "Dismissed/account-changed picker callback stays rejected")
-        print("PASS: lyric offset/seek boundaries, UTF-16 emoji ranges, supplied word progress, invalid cues, plain lyrics, mute/level/stop, interruption and late-permission cleanup")
+        print("PASS: absent sync metadata, lyric offset/seek boundaries, UTF-16 emoji ranges, supplied word progress, invalid cues, plain lyrics, mute/level/stop, interruption and late-permission cleanup")
     }
 }

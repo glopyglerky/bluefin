@@ -93,7 +93,7 @@ struct MusicLyricsView: View {
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { reader.scrollTo(active, anchor: .center) }
                     }
                     .overlay(alignment: .bottomTrailing) {
-                        if !following && lyrics.Metadata.IsSynced == true {
+                        if !following && lyrics.isSynced {
                             Button("Follow lyrics") {
                                 following = true
                             }.padding(.horizontal, 16).padding(.vertical, 12)
