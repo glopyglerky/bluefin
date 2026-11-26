@@ -680,3 +680,75 @@ test('clearing account artwork aborts its HTTP request and rejects the late resp
  t.ui.pumpArtwork();await until(()=>finish);t.context.document.querySelectorAll=()=>[];t.ui.clearImages();assert.equal(signal.aborted,true);
  finish();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(t.ui.state.images.size,0);assert.equal(target.children.length,0);
 });
+
+test('refinements stay lazy and publish studios while tags are still loading',async()=>{
+ const studio='44444444444444448444444444444444';let finishTags;
+ const t=setup({apiResponse:async u=>{
+  if(u.pathname==='/Studios')return jsonReply({Items:[{Id:studio,Name:'Account studio',Type:'Studio'}],TotalRecordCount:1});
+  if(u.pathname==='/Items/Filters2'){await new Promise(resolve=>finishTags=resolve);return jsonReply({Tags:['Service: Account']});}
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);await t.ui.openSearch();
+ const isFacet=request=>{const url=new URL(request.url);return ['/Studios','/Items/Filters2'].includes(url.pathname)||url.searchParams.get('IncludeItemTypes')==='BoxSet';};
+ assert.equal(t.requests.filter(isFacet).length,0);
+ t.ui.state.route.refine=true;const loading=t.ui.loadSearchFacets();
+ try{
+  await until(()=>finishTags);
+  assert.equal(t.requests.filter(isFacet).length,3);
+  await until(()=>t.ui.state.facets.studios.length===1);
+  assert.equal(t.ui.state.facets.loading,true);
+  const studioMenu=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-studio');
+  const tagMenu=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-tag');
+  assert(studioMenu.children.some(option=>option.textContent==='Account studio'));
+  assert.equal(studioMenu.disabled,false);assert.equal(tagMenu.disabled,true);
+ }finally{finishTags?.();await loading;}
+ assert.equal(t.ui.state.facets.loading,false);
+ assert.equal(findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-tag').disabled,false);
+ await t.ui.loadSearchFacets();assert.equal(t.requests.filter(isFacet).length,3);
+});
+
+test('pending refinements survive a search route change and preserve selected filters',async()=>{
+ const studio='44444444444444448444444444444444',releases=[],signals=[];
+ const t=setup({apiResponse:async(u,options)=>{
+  if(u.pathname==='/Studios')return jsonReply({Items:[{Id:studio,Name:'Account studio',Type:'Studio'}],TotalRecordCount:1});
+  if(u.pathname==='/Items/Filters2'){signals.push(options.signal);await new Promise(resolve=>releases.push(resolve));return jsonReply({Tags:['Service: Account']});}
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);await t.ui.openSearch();
+ t.ui.state.route.refine=true;const loading=t.ui.loadSearchFacets();
+ try{
+  await until(()=>releases.length===1);
+  await t.ui.startSearch('ocean',{scope:'movies',studioID:studio,tag:'Service: Account'});
+  assert.equal(signals[0].aborted,false);
+  assert.equal(t.requests.filter(request=>new URL(request.url).pathname==='/Items/Filters2').length,1);
+  const studioMenu=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-studio');
+  const tagMenu=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-tag');
+  assert.equal(studioMenu.value,studio);assert.equal(tagMenu.value,'Service: Account');
+  assert(tagMenu.children.some(option=>option.value==='Service: Account'));
+  assert.equal(t.ui.state.route.filters.studioID,studio);assert.equal(t.ui.state.route.filters.tag,'Service: Account');
+ }finally{for(const release of releases)release();await loading;await new Promise(setImmediate);}
+ assert.equal(findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-studio').value,studio);
+ assert.equal(findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-tag').value,'Service: Account');
+ assert.equal(t.ui.state.facets.tags[0],'Service: Account');
+});
+
+test('signout aborts account refinement requests and late tags cannot enter the next account',async()=>{
+ let finishOld,oldSignal,logins=0,tagCalls=0;
+ const t=setup({apiResponse:async(u,options)=>{
+  if(u.pathname==='/Users/AuthenticateByName'){logins++;return jsonReply({AccessToken:'synthetic-account-'+logins,User:{Id:logins===1?'11111111111141118111111111111111':'88888888888848888888888888888888',Name:'Listener'}});}
+  if(u.pathname==='/Studios')return jsonReply({Items:[],TotalRecordCount:0});
+  if(u.pathname==='/Items/Filters2'){
+   if(++tagCalls===1){oldSignal=options.signal;await new Promise(resolve=>finishOld=resolve);return jsonReply({Tags:['Old account private tag']});}
+   return jsonReply({Tags:['New account tag']});
+  }
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);await t.ui.openSearch();
+ t.ui.state.route.refine=true;const loading=t.ui.loadSearchFacets();
+ try{
+  await until(()=>finishOld);await t.ui.signOut();assert.equal(oldSignal.aborted,true);assert.equal(t.ui.state.facets,null);
+  await t.ui.signIn('Listener','example-password',false);await t.ui.openSearch();t.ui.state.route.refine=true;await t.ui.loadSearchFacets();
+ }finally{finishOld?.();await loading;}
+ t.ui.render();
+ assert.deepEqual(Array.from(t.ui.state.facets.tags),['New account tag']);
+ assert(!t.root.textContent.includes('Old account private tag'));
+ const latest=t.requests.filter(request=>new URL(request.url).pathname==='/Items/Filters2').at(-1);
+ assert.equal(new URL(latest.url).searchParams.get('UserId'),'88888888888848888888888888888888');
+});

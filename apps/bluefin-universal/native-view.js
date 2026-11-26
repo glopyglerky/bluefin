@@ -146,7 +146,8 @@ function toggleShuffle(){
 
 const artworkPending=new Map(),artworkMissing=new Set(),imageControllers=new Set(),requestControllers=new Set();let artworkActive=0,artworkScrollTimer;
 function assertLive(epoch=state.epoch,session){if(pageRetired||epoch!==state.epoch||(session!==undefined&&session!==state.session))throw Error('This page or account changed. Resume the current connection.');}
-function clearPrivateView(){routeController?.abort();routeController=null;state.featured=null;state.homeHistory=null;state.facets=null;state.search=null;state.rows=[];state.shelves=[];state.back=[];state.query='';state.route={kind:'home'};state.queue=[];state.unshuffledQueue=[];state.queueIndex=0;state.shuffle=false;state.local=false;state.localQuery='';state.localSnapshot=null;state.repeat='off';state.capabilities=null;state.capability=null;state.code='';state.meshName='';state.pairing=null;state.device=null;state.invitation=null;}
+function clearSearchFacets(){state.facets?.controller?.abort();state.facets=null;}
+function clearPrivateView(){routeController?.abort();routeController=null;state.featured=null;state.homeHistory=null;clearSearchFacets();state.search=null;state.rows=[];state.shelves=[];state.back=[];state.query='';state.route={kind:'home'};state.queue=[];state.unshuffledQueue=[];state.queueIndex=0;state.shuffle=false;state.local=false;state.localQuery='';state.localSnapshot=null;state.repeat='off';state.capabilities=null;state.capability=null;state.code='';state.meshName='';state.pairing=null;state.device=null;state.invitation=null;}
 const paths={
  waves:'M3 6c3-3 6 3 9 0s6 3 9 0M3 12c3-3 6 3 9 0s6 3 9 0M3 18c3-3 6 3 9 0s6 3 9 0',
  sports:'M4 4h16v16H4zM4 12h16M12 4v16M9 12a3 3 0 1 0 6 0 3 3 0 1 0-6 0',
@@ -228,7 +229,7 @@ async function connect(raw){
 function account(value){const token=value?.AccessToken,user=value?.User?.Id;if(!uuid(user)||!token)throw Error('The server returned an invalid account.');authorization(token);return {token,user:id(user),name:String(value.User.Name||'Your account')};}
 async function accept(value,mode='https',epoch=state.epoch){
  assertLive(epoch);state.epoch++;const accepted=state.epoch;
- state.featured=null;state.homeHistory=null;state.facets=null;state.search=null;state.session=value;state.mode=mode;state.phase='library';state.sheet=null;state.capability=null;state.meshName='';state.device=null;
+ state.featured=null;state.homeHistory=null;clearSearchFacets();state.search=null;state.session=value;state.mode=mode;state.phase='library';state.sheet=null;state.capability=null;state.meshName='';state.device=null;
  state.pairing=null;state.invitation=null;state.code='';state.tab='Home';state.back=[];state.route={kind:'home'};
  const capabilities=await api('Bluefin/Capabilities').catch(()=>null);assertLive(accepted,value);
  state.capabilities=capabilities;await loadRoute();assertLive(accepted,value);
@@ -483,27 +484,33 @@ async function loadMoreSearch(lane){
  finally{page.loading=false;if(route===state.route)render();}
 }
 async function loadSearchFacets(){
- const epoch=state.epoch,session=state.session,route=state.route,controller=routeController;
- if(!session||(state.facets?.epoch===epoch&&(!state.facets.loading||state.facets.controller===controller)))return;
- const facets=state.facets={epoch,controller,studios:[],tags:[],collections:[],loading:true,problems:[],truncated:false};render();
+ const epoch=state.epoch,session=state.session;if(!session)return;
+ if(state.facets?.epoch===epoch&&state.facets.session===session&&!state.facets.controller.signal.aborted)return state.facets.promise;
+ clearSearchFacets();
+ const controller=new AbortController();
+ const facets=state.facets={epoch,session,controller,studios:[],tags:[],collections:[],pending:new Set(['studios','tags','collections']),loading:true,problems:[],truncated:false};
+ const current=()=>!pageRetired&&epoch===state.epoch&&session===state.session&&facets===state.facets&&!controller.signal.aborted;
+ const publish=()=>{if(current()&&state.route.kind==='search'&&state.route.refine)render();};
+ publish();
  const calls=[
   ['studios','Studios',[['UserId',session.user],['Recursive',true],['Limit',200]]],
   ['tags','Items/Filters2',[['UserId',session.user]]],
   ['collections','Users/'+session.user+'/Items',[['Recursive',true],['IncludeItemTypes','BoxSet'],['Limit',200]]]];
- const settled=await Promise.allSettled(calls.map(async([kind,path,query])=>{
-  const value=await api(path,'GET',undefined,query,controller?.signal);assertLive(epoch,session);
-  if(kind==='tags'){
-   if(!Array.isArray(value?.Tags))throw Error('The server returned invalid tags.');
-   return {kind,values:[...new Set(value.Tags.filter(tag=>typeof tag==='string'&&tag.length<=512))].slice(0,512),truncated:value.Tags.length>512};
-  }
-  const values=items(value).map(item=>({id:id(item.Id),name:item.Name}));
-  return {kind,values,truncated:Number(value.TotalRecordCount)>values.length};
+ facets.promise=Promise.all(calls.map(async([kind,path,query])=>{
+  try{
+   const value=await api(path,'GET',undefined,query,controller.signal);if(!current())return;
+   let values,truncated;
+   if(kind==='tags'){
+    if(!Array.isArray(value?.Tags))throw Error('The server returned invalid tags.');
+    values=[...new Set(value.Tags.filter(tag=>typeof tag==='string'&&tag.length<=512))].slice(0,512);truncated=value.Tags.length>512;
+   }else{
+    values=items(value).map(item=>({id:id(item.Id),name:item.Name}));truncated=Number(value.TotalRecordCount)>values.length;
+   }
+   facets[kind]=values;facets.truncated||=truncated;
+  }catch(error){if(current()&&error.name!=='AbortError')facets.problems.push(String(error.message||error));}
+  finally{if(current()){facets.pending.delete(kind);facets.loading=facets.pending.size>0;publish();}}
  }));
- if(pageRetired||epoch!==state.epoch||session!==state.session||facets!==state.facets)return;
- for(const result of settled){if(result.status==='fulfilled'){facets[result.value.kind]=result.value.values;facets.truncated||=result.value.truncated;}
-  else if(result.reason.name!=='AbortError')facets.problems.push(String(result.reason.message||result.reason));}
- facets.loading=false;if(controller?.signal.aborted)state.facets=null;
- if(route===state.route)render();
+ await facets.promise;
 }
 async function homeRecommendations(get,user){
  let value;
@@ -685,10 +692,12 @@ function welcome(){const main=node('main',undefined,'welcome');main.id='content'
  else if(state.phase==='password'||state.phase==='create'){const create=state.phase==='create';const f=node('form');f.append(node('h2',create?'Create account':'Sign in'));const [nw,ni]=field('Username','text','', 'username'),[pw,pi]=field('Password','password','','password');ni.autocomplete='username';pi.autocomplete=create?'new-password':'current-password';ni.required=true;pi.required=true;f.append(nw,pw);let confirm;if(create){const [w,i]=field('Confirm password','password','','confirm');confirm=i;i.autocomplete='new-password';f.append(w,node('p','Use at least 15 characters.','secondary'));}const b=node('button',create?'Create account':'Sign in','primary');b.disabled=state.busy;f.append(b);f.onsubmit=e=>{e.preventDefault();const password=pi.value,name=ni.value.trim();if(create&&password!==confirm.value){state.error='The passwords do not match.';render();return;}pi.value='';if(confirm)confirm.value='';perform(()=>signIn(name,password,create));};stack.append(f,button('Back to sign-in options',()=>{state.phase='options';render();},'plain'));}
  else if(state.phase==='device'){const d=state.device;stack.append(node('h2',d?.kind==='passkey'?'Sign in with a passkey':'Quick Connect'),node('p',d?.code||'','confirmation-code'));if(d?.url){const link=node('a','Open passkey page');link.href=d.url;link.target='_blank';link.rel='noopener noreferrer';stack.append(link,node('p','After verifying, return here to finish.','secondary'));}else stack.append(node('p','Enter this code in another client signed in to your server.'));stack.append(action('Finish sign-in',finishDevice,'primary'),action('Cancel',cancelDevice));}
  if(state.busy)stack.append(node('p','Connecting…','loading'));stack.append(status());main.append(stack,sourceFooter());return main;}
-function searchChoice(label,key,value,choices,changed){
+function searchChoice(label,key,value,choices,changed,loading=false){
  const wrap=node('div'),name='search-'+key,lab=node('label',label),select=node('select');
  lab.htmlFor=name;select.id=name;select.setAttribute('aria-label',label);
  for(const [id,title]of choices){const option=node('option',title);option.value=id;select.append(option);}
+ if(value&&!choices.some(([id])=>id===value)){const selected=node('option',label==='Tag'?value:'Selected '+label.toLowerCase());selected.value=value;select.append(selected);}
+ select.disabled=loading;select.setAttribute('aria-busy',String(loading));
  select.value=value||'';select.onchange=()=>changed(select.value);wrap.append(lab,select);return wrap;
 }
 function searchView(main){
@@ -706,16 +715,16 @@ function searchView(main){
  if(route.refine){
   const panel=node('section',undefined,'search-refinements'),facets=state.facets;
   panel.append(searchChoice('Studio','studio',filters.studioID,[['','All studios'],...(facets?.studios||[]).map(value=>[value.id,value.name])],
-   studioID=>startSearch(state.query,{...filters,studioID})));
+   studioID=>startSearch(state.query,{...filters,studioID}),facets?.pending?.has('studios')||false));
   panel.append(searchChoice('Tag','tag',filters.tag,[['','All tags'],...(facets?.tags||[]).map(value=>[value,value])],
-   tag=>startSearch(state.query,{...filters,tag})));
+   tag=>startSearch(state.query,{...filters,tag}),facets?.pending?.has('tags')||false));
   panel.append(searchChoice('Collection','collection',filters.collectionID,[['','All collections'],...(facets?.collections||[]).map(value=>[value.id,value.name])],
-   collectionID=>startSearch(state.query,{...filters,collectionID})));
+   collectionID=>startSearch(state.query,{...filters,collectionID}),facets?.pending?.has('collections')||false));
   main.append(panel);
-  if(facets?.loading)main.append(node('p','Loading your server’s refinements…','loading'));
+  if(facets?.loading)main.append(node('p','Loading '+[...facets.pending].join(', ')+'…','loading'));
   main.append(node('p','Studios, tags, and collections come from your server. Its tags can identify services or custom groups. Refinements search the metadata of titles in your account’s library.','secondary'));
   if(facets?.truncated)main.append(node('p','Your server has more refinements than this menu shows. Open Collections to browse all groups.','secondary'));
-  if(facets?.problems.length){main.append(node('p',facets.problems.join(' '),'error'),button('Reload refinements',()=>{state.facets=null;loadSearchFacets();}));}
+  if(facets?.problems.length){main.append(node('p',facets.problems.join(' '),'error'),button('Reload refinements',()=>{clearSearchFacets();loadSearchFacets();}));}
  }
  if(hasSearchFacets(filters))main.append(node('p','Filtering your library. The live guide is searched when these refinements are cleared.','secondary'),
   button('Clear refinements',()=>startSearch(state.query,{scope:filters.scope}),'plain'));
