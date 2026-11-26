@@ -29,7 +29,7 @@
         'The encrypted connection module took too long to load. Your current library view is still available.');
       await bounded(module.default(),12000,
         'The encrypted connection module did not start in time. Your current library view is still available.');
-      for (const name of ['webMeshBegin','webMeshResume','webMeshProceed','webMeshRequest','webMeshPlay','webMeshLogout'])
+      for (const name of ['webMeshBegin','webMeshResume','webMeshProceed','webMeshRequest','webMeshPlay','webMeshStop','webMeshLogout'])
         if (typeof module[name] !== 'function') throw Error('This web bundle is incomplete. Reload after the installation is updated.');
       loaded=module;
       return module;

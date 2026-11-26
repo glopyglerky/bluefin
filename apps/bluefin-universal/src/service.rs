@@ -32,6 +32,8 @@ pub enum Command {
     Seek(f64),
     Volume(f64),
     Stop,
+    /// Per-command receipt; a previous cleanup flag cannot acknowledge this stop.
+    StopReceipt(mpsc::Sender<Result<()>>),
     Logout,
 }
 pub struct Service {
@@ -100,7 +102,7 @@ impl Service {
     pub fn send(&self, command: Command) {
         if matches!(
             &command,
-            Command::Play(..) | Command::Stop | Command::Logout
+            Command::Play(..) | Command::Stop | Command::StopReceipt(_) | Command::Logout
         ) {
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -143,6 +145,8 @@ struct Sample {
     error: Option<String>,
 }
 struct Backend {
+    #[cfg(target_arch = "wasm32")]
+    owner: wasm_bindgen::JsValue,
     #[cfg(not(target_arch = "wasm32"))]
     player: Arc<crate::player::Player>,
 }
@@ -192,7 +196,7 @@ impl Backend {
             let authorization = if mesh { String::new() } else {
                 protocol::authorization(&session.token).map_err(StartupFailure::unconfirmed)?
             };
-            web::start_media(
+            let owner = web::start_media(
                 session.base.as_str(),
                 &authorization,
                 &serde_json::to_string(plan)
@@ -201,12 +205,15 @@ impl Backend {
                 mesh.then(|| session.token.clone()),
             )
             .await
-            .map_err(|_| {
-                StartupFailure::unconfirmed(
-                    "Browser media preparation failed; cleanup must be checked",
-                )
+            .map_err(|cause| {
+                let retired = js_sys::Reflect::get(&cause, &wasm_bindgen::JsValue::from_str("retired"))
+                    .ok().and_then(|value| value.as_bool()).unwrap_or(false);
+                StartupFailure {
+                    message: "Browser media preparation failed or was canceled".into(),
+                    retired,
+                }
             })?;
-            Ok(Self {})
+            Ok(Self { owner })
         }
     }
     fn sample(&self) -> Sample {
@@ -226,7 +233,7 @@ impl Backend {
         #[cfg(target_arch = "wasm32")]
         {
             let value: serde_json::Value =
-                serde_json::from_str(&web::sample_media()).unwrap_or_default();
+                serde_json::from_str(&web::sample_media(&self.owner)).unwrap_or_default();
             Sample {
                 position: value["position"].as_f64().unwrap_or(0.0),
                 duration: value["duration"].as_f64().unwrap_or(0.0),
@@ -251,7 +258,7 @@ impl Backend {
             Ok(())
         }
         #[cfg(target_arch = "wasm32")]
-        web::control_media(kind, value).map_err(|_| "Browser media command failed".into())
+        web::control_media(&self.owner, kind, value).map_err(|_| "Browser media command failed".into())
     }
     async fn stop(self) -> Result<()> {
         #[cfg(not(target_arch = "wasm32"))]
@@ -267,7 +274,7 @@ impl Backend {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            web::stop_media()
+            web::stop_media(Some(self.owner))
                 .await
                 .map(|_| ())
                 .map_err(|_| "Media-worker cleanup was not acknowledged".into())
@@ -310,6 +317,8 @@ async fn run(
     let mut active: Option<Active> = None;
     let mut queued = None;
     let mut logout = revoke_only;
+    let mut receipts: Vec<mpsc::Sender<Result<()>>> = Vec::new();
+    let mut cleanup_result: Result<()> = Ok(());
     loop {
         let mut stop = false;
         for command in rx.try_iter() {
@@ -325,6 +334,11 @@ async fn run(
                     stop = true;
                 }
                 Command::Stop => {
+                    queued = None;
+                    stop = true;
+                }
+                Command::StopReceipt(receipt) => {
+                    receipts.push(receipt);
                     queued = None;
                     stop = true;
                 }
@@ -365,6 +379,7 @@ async fn run(
         if stop && let Some(a) = active.take() {
             state.lock().unwrap().busy = true;
             let result = close(&session, a).await;
+            cleanup_result = result.clone();
             let mut s = state.lock().unwrap();
             s.plan = None;
             s.cleanup_acknowledged = result.is_ok();
@@ -380,7 +395,8 @@ async fn run(
         }
         if logout {
             #[cfg(target_arch = "wasm32")]
-            if !revoke_only && active.is_none() && web::stop_media().await.is_err() {
+            if !revoke_only && active.is_none() && web::stop_media(None).await.is_err() {
+                cleanup_result = Err("Media-worker cleanup was not acknowledged".into());
                 state.lock().unwrap().message = "Media-worker cleanup was not acknowledged".into();
                 state.lock().unwrap().cleanup_acknowledged = false;
             }
@@ -405,6 +421,7 @@ async fn run(
                 s.message
                     .push_str("; server session revocation acknowledged");
             }
+            for receipt in receipts.drain(..) { let _ = receipt.send(cleanup_result.clone()); }
             return;
         }
         if active.is_none()
@@ -450,6 +467,11 @@ async fn run(
                                 canceled = true;
                                 queued = None;
                             }
+                            Command::StopReceipt(receipt) => {
+                                receipts.push(receipt);
+                                canceled = true;
+                                queued = None;
+                            }
                             Command::Play(i, s, q) => {
                                 canceled = true;
                                 queued = Some((
@@ -469,6 +491,7 @@ async fn run(
                             preparation.lock().unwrap().cancel = None;
                         }
                         let released = playback::release(&session, &plan).await;
+                        cleanup_result = released.clone();
                         let mut s = state.lock().unwrap();
                         s.busy = false;
                         s.cleanup_acknowledged = released.is_ok();
@@ -525,7 +548,8 @@ async fn run(
                                     let stopped = backend.stop().await;
                                     let released = playback::release(&session, &plan).await;
                                     let mut status = state.lock().unwrap();
-                                    status.cleanup_acknowledged = stopped.and(released).is_ok();
+                                    cleanup_result = stopped.and(released);
+                                    status.cleanup_acknowledged = cleanup_result.is_ok();
                                     status.message = if status.cleanup_acknowledged {
                                         "Canceled preparation cleanup acknowledged".into()
                                     } else {
@@ -539,6 +563,7 @@ async fn run(
                                     preparation.lock().unwrap().cancel = None;
                                 }
                                 let released = playback::release(&session, &plan).await;
+                                cleanup_result = if e.retired { released.clone() } else { Err(e.message.clone()) };
                                 let mut s = state.lock().unwrap();
                                 s.cleanup_acknowledged = e.retired && released.is_ok();
                                 s.message = if released.is_ok() {
@@ -611,6 +636,7 @@ async fn run(
                     None
                 };
                 let result = close(&session, a).await;
+                cleanup_result = result.clone();
                 let acknowledged = result.is_ok();
                 {
                     let mut s = state.lock().unwrap();
@@ -639,6 +665,21 @@ async fn run(
                 }
             }
         }
+        if !receipts.is_empty() && active.is_none() {
+            let result = if queued.is_some() {
+                Err("Playback changed before retirement completed".into())
+            } else {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let local = web::stop_media(None).await
+                        .map(|_| ())
+                        .map_err(|_| "Media-worker cleanup was not acknowledged".to_owned());
+                    cleanup_result = cleanup_result.and(local);
+                }
+                cleanup_result.clone()
+            };
+            for receipt in receipts.drain(..) { let _ = receipt.send(result.clone()); }
+        }
         delay().await;
     }
 }
@@ -662,11 +703,11 @@ mod web {
             mesh_handle: Option<String>,
         ) -> std::result::Result<JsValue, JsValue>;
         #[wasm_bindgen(catch,js_name=stopMedia)]
-        pub async fn stop_media() -> std::result::Result<JsValue, JsValue>;
+        pub async fn stop_media(owner: Option<JsValue>) -> std::result::Result<JsValue, JsValue>;
         #[wasm_bindgen(js_name=sampleMedia)]
-        pub fn sample_media() -> String;
+        pub fn sample_media(owner: &JsValue) -> String;
         #[wasm_bindgen(catch,js_name=controlMedia)]
-        pub fn control_media(kind: &str, value: f64) -> std::result::Result<(), JsValue>;
+        pub fn control_media(owner: &JsValue, kind: &str, value: f64) -> std::result::Result<(), JsValue>;
         #[wasm_bindgen(js_name=interruptMedia)]
         pub fn interrupt_media();
         pub async fn delay(ms: u32);

@@ -510,7 +510,9 @@ async fn mesh_existing_bearer_deletion_terminally_revokes_the_device_grant() {
 #[tokio::test]
 async fn mesh_web_native_and_rendered_qr_share_one_live_invitation() {
     use base64::Engine;
-    let f=Fixture::new().await;
+    let mut f=Fixture::new().await;
+    f.service=Service::new_with_web_launch(f.db.clone(), "https://accounts.example",
+        address(), Some("https://app.example/web/bluefin/")).await.unwrap();
     let (user,mut authenticator)=f.login_account().await;
     let issued=f.service.issue(&f.state,InviteIntent::Login,Some(user),600).await.unwrap();
     let original=ConnectInvite::parse(issued["code"].as_str().unwrap()).unwrap();
@@ -518,7 +520,7 @@ async fn mesh_web_native_and_rendered_qr_share_one_live_invitation() {
         assert_eq!(ConnectInvite::parse(issued[field].as_str().unwrap()).unwrap(),original);
     }
     let url=Url::parse(issued["webLink"].as_str().unwrap()).unwrap();
-    assert_eq!(url.origin().ascii_serialization(),"https://accounts.example");
+    assert_eq!(url.origin().ascii_serialization(),"https://app.example");
     assert_eq!(url.path(),"/web/bluefin/");
     assert!(url.query().is_none());
     assert!(url.fragment().unwrap().starts_with("bluefin-connect="));
@@ -528,6 +530,10 @@ async fn mesh_web_native_and_rendered_qr_share_one_live_invitation() {
         .fetch_one(f.db.pool()).await.unwrap(),1);
     let device=DeviceIdentity::from_seed([90;32]).unwrap();
     let first=begin(&f,ConnectInvite::parse(issued["webLink"].as_str().unwrap()).unwrap(),&device,91,None).await;
+    assert_eq!(first["body"]["passkey_options"]["origin"], "https://accounts.example");
+    assert_eq!(first["body"]["passkey_options"]["rpId"], "accounts.example");
+    let ceremony=Url::parse(first["body"]["passkey_options"]["browserUrl"].as_str().unwrap()).unwrap();
+    assert_eq!(ceremony.origin().ascii_serialization(), "https://accounts.example");
     let other=DeviceIdentity::from_seed([92;32]).unwrap();
     let reused=envelope(Request::Begin{request_id:[93;32],
         invitation:ConnectInvite::parse(issued["nativeLink"].as_str().unwrap()).unwrap(),
@@ -535,4 +541,16 @@ async fn mesh_web_native_and_rendered_qr_share_one_live_invitation() {
     assert!(f.service.handle(&f.state,&other.public_key(),reused).await.is_err());
     let finish=finish_request(&first,&device,94,assertion(&mut authenticator,&first));
     assert!(f.service.handle(&f.state,&device.public_key(),finish).await.is_ok());
+}
+
+
+#[tokio::test]
+async fn mesh_invalid_web_launch_cannot_retire_the_live_issuer() {
+    let f=Fixture::new().await;
+    for url in ["http://app.example/", "https://user@app.example/",
+        "https://app.example/?code=secret", "https://app.example/#secret", "https://192.0.2.1/"] {
+        assert!(Service::new_with_web_launch(f.db.clone(), "https://accounts.example",
+            address(), Some(url)).await.is_err());
+        assert!(f.service.live().await.is_ok());
+    }
 }
