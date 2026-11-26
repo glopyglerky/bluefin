@@ -79,25 +79,27 @@ fn registration(authenticator:&mut WebauthnAuthenticator<SoftPasskey>,begin:&Val
     serde_json::to_value(authenticator.do_registration(Url::parse("https://accounts.example").unwrap(),options).unwrap()).unwrap()
 }
 #[tokio::test]
-async fn mesh_login_consumes_once_across_devices_and_only_exact_device_retry_recovers(){
+async fn mesh_login_claims_once_across_devices_and_only_exact_device_retry_recovers(){
     let f=Fixture::new().await;let (user,mut authenticator)=f.login_account().await;
     let invite=f.invite(InviteIntent::Login,Some(user)).await;
     let first=DeviceIdentity::from_seed([7;32]).unwrap();
     let second=DeviceIdentity::from_seed([8;32]).unwrap();
-    let a=begin(&f,invite.clone(),&first,1,None).await;
-    let b=begin(&f,invite.clone(),&second,2,None).await;
-    let ra=finish_request(&a,&first,3,assertion(&mut authenticator,&a));
-    let rb=finish_request(&b,&second,4,assertion(&mut authenticator,&b));
+    let start=|device:&DeviceIdentity,id:u8|envelope(Request::Begin{request_id:[id;32],
+        invitation:invite.clone(),device_public_key:device.public_key(),device_label:"Test device".into(),account_name:None});
+    let ar=start(&first,1);let br=start(&second,2);
     let first_key=first.public_key();let second_key=second.public_key();
-    let (a,b)=tokio::join!(
-        f.service.handle(&f.state,&first_key,ra.clone()),
-        f.service.handle(&f.state,&second_key,rb.clone())
-    );
-    assert_ne!(a.is_ok(),b.is_ok(),"only one proof may spend a code");
-    let (key,request,result,other)=if let Ok(a)=a {(first_key,ra,a,second_key)}else{(second_key,rb,b.unwrap(),first_key)};
-    assert_eq!(f.service.handle(&f.state,&key,request.clone()).await.unwrap(),result);
+    let (a,b)=tokio::join!(f.service.handle(&f.state,&first_key,ar.clone()),f.service.handle(&f.state,&second_key,br.clone()));
+    assert_ne!(a.is_ok(),b.is_ok(),"only one device may claim a code");
+    let (device,key,other,begin_request,begin)=if let Ok(a)=a {(first,first_key,second_key,ar,a)}else{(second,second_key,first_key,br,b.unwrap())};
+    assert_eq!(f.service.handle(&f.state,&key,begin_request.clone()).await.unwrap(),begin);
+    assert!(f.service.handle(&f.state,&other,begin_request).await.is_err());
+    assert!(sqlx::query("UPDATE BluefinMeshInvites SET State='issued'").execute(f.db.writer()).await.is_err());
+    let request=finish_request(&begin,&device,3,assertion(&mut authenticator,&begin));
+    let (a,b)=tokio::join!(f.service.handle(&f.state,&key,request.clone()),f.service.handle(&f.state,&key,request.clone()));
+    let result=a.unwrap();assert_eq!(result,b.unwrap());
     assert!(f.service.handle(&f.state,&other,request.clone()).await.is_err());
-    let mut changed=request;changed["body"]["device_signature"][0]=json!(0);
+    let mut changed=request;let byte=changed["body"]["device_signature"][0].as_u64().unwrap();
+    changed["body"]["device_signature"][0]=json!(byte^1);
     assert!(f.service.handle(&f.state,&key,changed).await.is_err());
     assert!(!serde_json::to_string(&result).unwrap().contains("AccessToken"));
     assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshSessions").fetch_one(f.db.pool()).await.unwrap(),1);
@@ -246,4 +248,41 @@ async fn mesh_transport_real_pq_passkey_owner_router_and_no_portable_bearer(){
     client.close().await;thief.close().await;
     stop.send(true).unwrap();let receipt=listener.await.unwrap().unwrap();
     assert!(receipt.endpoint_closed);assert!(receipt.joined_connections>=2);
+}
+
+#[tokio::test]
+async fn mesh_browser_capability_is_single_use_and_callback_alone_cannot_finish(){
+    use tower::ServiceExt;
+    use axum::{body::Body,http::Request as HttpRequest};
+    let f=Fixture::new().await;let (user,mut authenticator)=f.login_account().await;
+    let device=DeviceIdentity::from_seed([7;32]).unwrap();
+    let start=begin(&f,f.invite(InviteIntent::Login,Some(user)).await,&device,1,None).await;
+    let request=finish_request(&start,&device,2,json!({"browser":true}));
+    // An early/forged callback does not create a session or discard the claim.
+    assert!(f.service.handle(&f.state,&device.public_key(),request.clone()).await.is_err());
+    let url=Url::parse(start["body"]["passkey_options"]["browserUrl"].as_str().unwrap()).unwrap();
+    let (challenge,secret)=url.fragment().unwrap().split_once('.').unwrap();
+    let body=json!({"challenge":challenge,"secret":secret,"credential":assertion(&mut authenticator,&start)});
+    let router=web::routes().with_state(f.state.clone().with_mesh_accounts(f.service.clone()));
+    let post=||HttpRequest::builder().method("POST").uri("/Bluefin/Accounts/Mesh/Passkey/Verify")
+        .header("content-type","application/json").header("origin","https://accounts.example")
+        .body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap();
+    assert_eq!(router.clone().oneshot(post()).await.unwrap().status(),axum::http::StatusCode::NO_CONTENT);
+    assert!(!router.oneshot(post()).await.unwrap().status().is_success());
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshSessions").fetch_one(f.db.pool()).await.unwrap(),0);
+    let completed=f.service.handle(&f.state,&device.public_key(),request).await.unwrap();
+    assert_eq!(completed["body"]["session"]["kind"],"session");
+}
+#[tokio::test]
+async fn mesh_signup_uses_current_approval_policy_at_finish(){
+    let f=Fixture::new().await;let device=DeviceIdentity::from_seed([7;32]).unwrap();
+    std::fs::write(f.directory.path().join("bluefin-accounts.json"),r#"{"allowSignups":true,"meshSignupApproval":"automatic"}"#).unwrap();
+    let invite=f.invite(InviteIntent::Signup,None).await;
+    let start=begin(&f,invite,&device,1,Some("policyviewer")).await;
+    std::fs::write(f.directory.path().join("bluefin-accounts.json"),r#"{"allowSignups":true,"meshSignupApproval":"manual"}"#).unwrap();
+    let mut authenticator=WebauthnAuthenticator::new(SoftPasskey::new(true));
+    let request=finish_request(&start,&device,2,registration(&mut authenticator,&start));
+    let completed=f.service.handle(&f.state,&device.public_key(),request).await.unwrap();
+    assert_eq!(completed["body"]["session"]["state"],"pending");
+    assert!(f.state.users.get_user_by_name("policyviewer").await.unwrap().is_none());
 }

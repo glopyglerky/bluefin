@@ -172,7 +172,7 @@ async fn signup(
 
 async fn settings_page() -> Response {
     ([
-        (header::CONTENT_SECURITY_POLICY, "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"),
+        (header::CONTENT_SECURITY_POLICY, "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self' blob:; style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"),
         (header::REFERRER_POLICY, "no-referrer"),
     ], Html(include_str!("bluefin_account_web/settings.html"))).into_response()
 }

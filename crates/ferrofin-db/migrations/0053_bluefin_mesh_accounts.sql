@@ -13,8 +13,8 @@ CREATE TABLE BluefinMeshInvites (
  Intent TEXT NOT NULL CHECK(Intent IN ('login','signup')),
  UserId TEXT REFERENCES Users(Id) ON DELETE CASCADE,
  Expires INTEGER NOT NULL,
- State TEXT NOT NULL CHECK(State IN ('issued','consumed','revoked')),
- OutcomeId TEXT,
+ State TEXT NOT NULL CHECK(State IN ('issued','claimed','consumed','revoked')),
+ OutcomeId TEXT, ClaimedDevice BLOB, ClaimRequestId BLOB, ClaimRequestHash BLOB,
  CHECK((Intent='login' AND UserId IS NOT NULL) OR (Intent='signup' AND UserId IS NULL))
 );
 CREATE INDEX BluefinMeshInviteExpiry ON BluefinMeshInvites(Epoch,State,Expires);
@@ -42,7 +42,8 @@ CREATE TABLE BluefinMeshReceipts (
  RequestHash BLOB NOT NULL CHECK(length(RequestHash)=32), Response TEXT NOT NULL
 );
 CREATE TRIGGER BluefinMeshSpendIsTerminal BEFORE UPDATE OF State ON BluefinMeshInvites
-WHEN OLD.State IN ('consumed','revoked') AND NEW.State!=OLD.State
+WHEN (OLD.State IN ('consumed','revoked') AND NEW.State!=OLD.State)
+ OR (OLD.State='claimed' AND NEW.State='issued')
 BEGIN SELECT RAISE(ABORT,'mesh invitation is terminal'); END;
 CREATE TRIGGER BluefinMeshSignupIsTerminal BEFORE UPDATE OF State ON BluefinMeshSignups
 WHEN OLD.State IN ('approved','denied') AND NEW.State!=OLD.State

@@ -43,11 +43,12 @@ enum Ceremony { Login { user:Uuid, state:PasskeyAuthentication }, Signup { usern
 struct Pending {
     begin_id:[u8;32], begin_hash:[u8;32], invite:ConnectInvite, peer:Vec<u8>,
     label:String, expires:i64, proof:String, ceremony:Ceremony, response:Value,
+    browser_secret_hash:[u8;32], browser_response:Option<Value>, browser_used:bool,
 }
 /// This is an adapter over the account database, not another identity store.
 pub struct Service {
     db:Database, address:ServerAddress, authority:[u8;32], epoch:[u8;32], generation:u64,
-    webauthn:Webauthn, rp_id:String, origin:String,
+    webauthn:Webauthn, rp_id:String, origin:String, browser_page:Url,
     pending:Mutex<HashMap<String,Pending>>, gate:Mutex<()>, operations:Semaphore,
 }
 impl Service {
@@ -61,19 +62,21 @@ impl Service {
         let origin=origin_url.origin().ascii_serialization();
         let webauthn=WebauthnBuilder::new(&rp_id,&Url::parse(&origin).map_err(|_|failed())?)
             .map_err(|_|failed())?.rp_name("Bluefin").build().map_err(|_|failed())?;
+        let mut browser_page=origin_url.clone();
+        browser_page.path_segments_mut().map_err(|_|failed())?.pop_if_empty().extend(["Bluefin","Accounts","Mesh","Passkey"]);
         let epoch=random()?;
         let mut tx=db.writer().begin_with("BEGIN IMMEDIATE").await.map_err(storage)?;
         sqlx::query("INSERT INTO BluefinMeshAuthority(Id,AuthorityId,LiveEpoch,Generation) VALUES(1,?,?,1) ON CONFLICT(Id) DO NOTHING")
             .bind(random()?.to_vec()).bind(epoch.to_vec()).execute(&mut *tx).await.map_err(storage)?;
         sqlx::query("UPDATE BluefinMeshAuthority SET LiveEpoch=? WHERE Id=1").bind(epoch.to_vec()).execute(&mut *tx).await.map_err(storage)?;
-        sqlx::query("UPDATE BluefinMeshInvites SET State='revoked' WHERE State='issued' AND Epoch!=?")
+        sqlx::query("UPDATE BluefinMeshInvites SET State='revoked' WHERE State IN ('issued','claimed') AND Epoch!=?")
             .bind(epoch.to_vec()).execute(&mut *tx).await.map_err(storage)?;
         let row=sqlx::query("SELECT AuthorityId,Generation FROM BluefinMeshAuthority WHERE Id=1").fetch_one(&mut *tx).await.map_err(storage)?;
         let authority:Vec<u8>=row.get("AuthorityId");
         let authority=authority.try_into().map_err(|_|failed())?;
         let generation=u64::try_from(row.get::<i64,_>("Generation")).map_err(storage)?;
         tx.commit().await.map_err(storage)?;
-        Ok(Arc::new(Self {db,address,authority,epoch,generation,webauthn,rp_id,origin,
+        Ok(Arc::new(Self {db,address,authority,epoch,generation,webauthn,rp_id,origin,browser_page,
             pending:Mutex::new(HashMap::new()),gate:Mutex::new(()),operations:Semaphore::new(16)}))
     }
     pub fn address(&self)->&ServerAddress {&self.address}
@@ -146,7 +149,7 @@ impl Service {
             || invite.authority_epoch!=self.epoch || invite.endpoint_id!=self.address.endpoint_id
             || invite.server_certificate_sha256!=self.address.server_certificate_sha256 {return Err(used());}
         let code=invite.to_code().map_err(|_|used())?;
-        sqlx::query("SELECT UserId FROM BluefinMeshInvites WHERE Id=? AND Epoch=? AND CapsuleHash=? AND State='issued' AND Expires>?")
+        sqlx::query("SELECT UserId,State,ClaimedDevice,ClaimRequestId,ClaimRequestHash FROM BluefinMeshInvites WHERE Id=? AND Epoch=? AND CapsuleHash=? AND State IN ('issued','claimed') AND Expires>?")
             .bind(invite.invitation_id.to_vec()).bind(self.epoch.to_vec()).bind(digest(code.as_bytes()).to_vec()).bind(now())
             .fetch_optional(self.db.pool()).await.map_err(storage)?.ok_or_else(used)
     }
@@ -170,7 +173,15 @@ impl Service {
         if let Some(row)=sqlx::query("SELECT DevicePublicKey,RequestHash,Response FROM BluefinMeshReceipts WHERE RequestId=?")
             .bind(request_id.to_vec()).fetch_optional(self.db.pool()).await.map_err(storage)? {
             if row.get::<Vec<u8>,_>("DevicePublicKey")!=peer || row.get::<Vec<u8>,_>("RequestHash")!=request_hash {return Err(failed());}
-            return serde_json::from_str(&row.get::<String,_>("Response")).map_err(storage);
+            let saved:Value=serde_json::from_str(&row.get::<String,_>("Response")).map_err(storage)?;
+            if saved["body"]["session"]["kind"]=="session" {
+                let id=saved["body"]["session"]["id"].as_str().ok_or_else(failed)?;
+                let active:Option<String>=sqlx::query_scalar("SELECT UserId FROM BluefinMeshSessions WHERE Id=? AND DevicePublicKey=? AND Revoked=0 AND Expires>?")
+                    .bind(id).bind(peer).bind(now()).fetch_optional(self.db.pool()).await.map_err(storage)?;
+                let user=Uuid::parse_str(&active.ok_or_else(failed)?).map_err(|_|failed())?;
+                self.account_allowed(state,user).await?;
+            }
+            return Ok(saved);
         }
         match envelope.body {
             Request::Begin {request_id,invitation,device_public_key,device_label,account_name}=>{
@@ -192,6 +203,7 @@ impl Service {
             return Err(ApiError::ServiceUnavailable("Too many active connection requests.".into()));
         }
         let row=self.invite_row(&invite).await?;
+        if row.get::<String,_>("State")!="issued" {return Err(used());}
         let (public,ceremony,kind)=match invite.intent {
             InviteIntent::Login=>{
                 if name.is_some(){return Err(failed());}
@@ -211,14 +223,23 @@ impl Service {
             },
         };
         let challenge=hex(&random()?);
+        let browser_secret=hex(&random()?);
+        let browser_url=format!("{}#{}.{}",self.browser_page,challenge,browser_secret);
         let expires=std::cmp::min(now()+300_000,invite.expires_at_unix_ms as i64);
         let proof=format!("bluefin-mesh-device-v1:{}:{}:{}:{}",hex(&self.authority),hex(&self.epoch),challenge,hex(&request_hash));
         let response=serde_json::to_value(Envelope::new(Response::BeginResult {
             request_id,challenge_id:challenge.clone(),expires_at_unix_ms:expires as u64,
-            passkey_options:json!({"kind":kind,"rpId":self.rp_id,"origin":self.origin,"publicKey":public["publicKey"]}),
+            passkey_options:json!({"kind":kind,"rpId":self.rp_id,"origin":self.origin,"publicKey":public["publicKey"],"browserUrl":browser_url}),
             device_proof_message:proof.clone(),
         })).map_err(storage)?;
-        pending.insert(challenge,Pending {begin_id:request_id,begin_hash:request_hash,invite,peer:peer.to_vec(),label,expires,proof,ceremony,response:response.clone()});
+        let mut tx=self.db.writer().begin_with("BEGIN IMMEDIATE").await.map_err(storage)?;
+        self.live_tx(&mut tx).await?;
+        let changed=sqlx::query("UPDATE BluefinMeshInvites SET State='claimed',ClaimedDevice=?,ClaimRequestId=?,ClaimRequestHash=? WHERE Id=? AND Epoch=? AND State='issued' AND Expires>?")
+            .bind(peer).bind(request_id.to_vec()).bind(request_hash.to_vec()).bind(invite.invitation_id.to_vec())
+            .bind(self.epoch.to_vec()).bind(now()).execute(&mut *tx).await.map_err(storage)?.rows_affected();
+        if changed!=1{return Err(used());}
+        tx.commit().await.map_err(storage)?;
+        pending.insert(challenge,Pending {begin_id:request_id,begin_hash:request_hash,invite,peer:peer.to_vec(),label,expires,proof,ceremony,response:response.clone(),browser_secret_hash:digest(browser_secret.as_bytes()),browser_response:None,browser_used:false});
         Ok(response)
     }
 
@@ -227,10 +248,20 @@ impl Service {
             let mut map=self.pending.lock().await;
             let current=map.get(challenge).filter(|v|v.expires>now()&&v.peer==peer).ok_or_else(used)?;
             verify_device_signature(peer,current.proof.as_bytes(),signature).map_err(|_|failed())?;
+            if response==json!({"browser":true}) && current.browser_response.is_none() {
+                return Err(ApiError::Conflict("Complete the passkey request in your browser, then retry.".into()));
+            }
             // Invalid passkeys discard this ceremony without spending the invitation.
             map.remove(challenge).ok_or_else(used)?
         };
-        self.invite_row(&pending.invite).await?;
+        let claim=self.invite_row(&pending.invite).await?;
+        if claim.get::<String,_>("State")!="claimed"
+            || claim.get::<Option<Vec<u8>>,_>("ClaimedDevice").as_deref()!=Some(peer)
+            || claim.get::<Option<Vec<u8>>,_>("ClaimRequestId").as_deref()!=Some(pending.begin_id.as_slice())
+            || claim.get::<Option<Vec<u8>>,_>("ClaimRequestHash").as_deref()!=Some(pending.begin_hash.as_slice()) {
+            return Err(used());
+        }
+        let response=if response==json!({"browser":true}) { pending.browser_response.clone().ok_or_else(failed)? } else {response};
         let (user,registration,username,credential_update)=match pending.ceremony {
             Ceremony::Login {user,state:ceremony}=>{
                 self.account_allowed(state,user).await?;
@@ -261,7 +292,7 @@ impl Service {
         self.live_tx(&mut tx).await?;
         let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM BluefinMeshReceipts").fetch_one(&mut *tx).await.map_err(storage)?;
         if count>=MAX_RECORDS {return Err(ApiError::ServiceUnavailable("The connection receipt store is full.".into()));}
-        let changed=sqlx::query("UPDATE BluefinMeshInvites SET State='consumed',OutcomeId=? WHERE Id=? AND Epoch=? AND State='issued' AND Expires>?")
+        let changed=sqlx::query("UPDATE BluefinMeshInvites SET State='consumed',OutcomeId=? WHERE Id=? AND Epoch=? AND State='claimed' AND Expires>?")
             .bind(&outcome).bind(pending.invite.invitation_id.to_vec()).bind(self.epoch.to_vec()).bind(created)
             .execute(&mut *tx).await.map_err(storage)?.rows_affected();
         if changed!=1{return Err(used());}
@@ -292,7 +323,7 @@ impl Service {
     async fn descriptor(&self,state:&AppState,id:&str,user:Uuid,expires:i64)->Result<Value,ApiError>{
         let account=state.users.get_user_by_id(user).await?.ok_or_else(failed)?;
         Ok(json!({"kind":"session","id":id,"userId":user.simple().to_string(),"username":account.username,
-            "expiresAtUnixMs":expires,"server":self.address,"authentication":"mldsa65-device"}))
+            "expiresAtUnixMs":expires,"server":self.address,"apiOrigin":self.origin,"authentication":"mldsa65-device"}))
     }
     async fn insert_session(&self,tx:&mut sqlx::Transaction<'_,sqlx::Sqlite>,id:&str,user:Uuid,peer:&[u8],label:&str,created:i64)->Result<(),ApiError>{
         sqlx::query("INSERT INTO BluefinMeshSessions(Id,UserId,DevicePublicKey,DeviceLabel,DeviceId,Created,Expires) VALUES(?,?,?,?,?,?,?)")
@@ -405,12 +436,12 @@ async fn invite_status(State(state):State<AppState>,RequireAuth(auth):RequireAut
     let own=auth.user.as_ref().map(|user|user.id.as_str());
     if !is_administrator_identity(&state,&auth).await? && bound.as_deref()!=own {return Err(failed());}
     let stored:String=row.get("State");let expires:i64=row.get("Expires");
-    let status=if stored=="consumed" {"used"} else if stored=="revoked" || expires<=now()
+    let status=if matches!(stored.as_str(),"claimed"|"consumed") {"used"} else if stored=="revoked" || expires<=now()
         || row.get::<Vec<u8>,_>("Epoch")!=service.epoch {"expired"} else {"issued"};
     Ok(Json(json!({"state":status,"expiresAtUnixMs":expires})))
 }
 pub(crate) fn routes()->Router<AppState>{
-    Router::new().route("/Bluefin/Accounts/Mesh/Invite",post(issue))
+    web::routes().route("/Bluefin/Accounts/Mesh/Invite",post(issue))
         .route("/Bluefin/Accounts/Mesh/Invites/{id}",get(invite_status))
         .route("/Bluefin/Accounts/Mesh/Requests",get(requests))
         .route("/Bluefin/Accounts/Mesh/Requests/{id}/Approve",post(approve))
@@ -420,3 +451,6 @@ pub(crate) fn routes()->Router<AppState>{
 #[cfg(test)]
 #[path = "bluefin_mesh_accounts_tests.rs"]
 mod tests;
+
+#[path = "bluefin_mesh_web.rs"]
+mod web;
