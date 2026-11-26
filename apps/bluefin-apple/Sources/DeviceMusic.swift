@@ -132,11 +132,20 @@ private struct DeviceMusicSearch: Decodable, Sendable {
                     throw BluefinError.message("Choose regular audio files smaller than 2 GiB.")
                 }
                 let root = try self.directory()
+                #if os(tvOS)
+                // tvOS exposes ordinary free capacity, without the important-usage API.
+                let capacity = try root.resourceValues(forKeys: [.volumeAvailableCapacityKey])
+                if let free = capacity.volumeAvailableCapacity.map(Int64.init),
+                   free < Int64(size) + 512 * 1024 * 1024 {
+                    throw BluefinError.message("Free more storage before importing. This import needs room for the file plus 512 MiB of spare space.")
+                }
+                #else
                 let capacity = try root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
                 if let free = capacity.volumeAvailableCapacityForImportantUsage,
                    free < Int64(size) + 512 * 1024 * 1024 {
                     throw BluefinError.message("Free more storage before importing. This import needs room for the file plus 512 MiB of spare space.")
                 }
+                #endif
                 var request = try self.fields(changing: true)
                 request["title"] = Self.title(url.deletingPathExtension().lastPathComponent)
                 let result = try await DeviceMusicFileInput.importFile(url, fields: request)
