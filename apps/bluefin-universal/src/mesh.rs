@@ -736,7 +736,7 @@ fn install_media_bridge() {
         });
     use wasm_bindgen::JsCast;
     set_media_handler(callback.as_ref().unchecked_ref());
-    let lifecycle = Closure::<dyn Fn(String) -> js_sys::Promise>::new(|handle| {
+    let lifecycle = Closure::<dyn Fn(String) -> js_sys::Promise>::new(|handle: String| {
         wasm_bindgen_futures::future_to_promise(async move {
             let sessions: Vec<_> = SESSIONS.with(|sessions| sessions.borrow().values().cloned().collect());
             for session in sessions {
