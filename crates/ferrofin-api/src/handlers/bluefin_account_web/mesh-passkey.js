@@ -53,7 +53,10 @@ proceed.addEventListener("click", async () => {
         back.href = "bluefin://mesh-passkey/" + challenge;
         back.hidden = false;
         status.textContent = "Passkey verified. Return to Bluefin to finish connecting this device.";
-        location.href = back.href;
+        if (new URLSearchParams(location.search).get("client") === "web") {
+            back.hidden = true;
+            status.textContent = "Passkey verified. Return to the Bluefin browser tab and finish connecting.";
+        } else { location.href = back.href; }
     } catch (error) {
         status.textContent = error.name === "NotAllowedError" ? "Passkey canceled. You can try again." : error.message;
         proceed.disabled = false;

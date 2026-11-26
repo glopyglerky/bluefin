@@ -30,7 +30,7 @@ trap 'rm -rf -- "$scratch"' EXIT
 trap 'exit 1' HUP INT TERM
 wasm-bindgen --target web --out-dir "$scratch" \
     "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/bluefin_universal.wasm"
-cp "$app/index.html" "$app/media-worker.js" "$root/LICENSE" "$scratch/"
+cp "$app/index.html" "$app/media-worker.js" "$app/mesh-policy.json" "$root/LICENSE" "$scratch/"
 cp -R "$app/vendor" "$scratch/vendor"
 find "$scratch" -type d -exec chmod 755 {} +
 find "$scratch" -type f -exec chmod 644 {} +

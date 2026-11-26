@@ -17,6 +17,7 @@ direct = ["dep:bluefin-iroh-modern"]
 
 [dependencies]
 bluefin-contract = { path = "../../crates/bluefin-contract" }
+mesh-connect = { path = "../../crates/mesh-connect", default-features = false, features = ["images"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["serde", "v4", "js"] }
@@ -37,10 +38,14 @@ getrandom = "0.3"
 bluefin-iroh-modern = { path = "../bluefin-apple/iroh-modern", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+mesh-connect = { path = "../../crates/mesh-connect", default-features = false, features = ["images", "browser"] }
+n0-future = "=0.3.2"
+getrandom = { version = "=0.4.3", features = ["wasm_js"] }
+zeroize = "1"
 wgpu = { version = "27", default-features = false, features = ["webgpu", "webgl"] }
 wasm-bindgen = "=0.2.126"
 wasm-bindgen-futures = "=0.4.76"
-web-sys = { version = "=0.3.103", features = ["Location", "AbortController", "AbortSignal", "Window", "Document", "Node", "Event", "HtmlInputElement", "HtmlSelectElement", "Element", "HtmlElement", "CssStyleDeclaration", "EventTarget", "HtmlCanvasElement", "HtmlMediaElement", "Navigator", "ServiceWorkerContainer", "ServiceWorker", "ServiceWorkerRegistration"] }
+web-sys = { version = "=0.3.103", features = ["Location", "AbortController", "AbortSignal", "Window", "Document", "Node", "Event", "HtmlInputElement", "HtmlSelectElement", "Element", "HtmlElement", "CssStyleDeclaration", "EventTarget", "HtmlCanvasElement", "HtmlMediaElement", "Navigator", "ServiceWorkerContainer", "ServiceWorker", "ServiceWorkerRegistration", "History", "File", "FileList", "Blob"] }
 js-sys = "=0.3.103"
 
 [[bin]]

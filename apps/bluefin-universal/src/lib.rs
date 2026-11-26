@@ -11,6 +11,8 @@ pub mod player;
 pub mod protocol;
 pub mod service;
 pub mod state;
+#[cfg(target_arch = "wasm32")]
+pub mod mesh;
 #[cfg(feature = "ui")]
 pub mod ui;
 #[cfg(all(target_arch = "wasm32", feature = "ui"))]

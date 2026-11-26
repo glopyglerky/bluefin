@@ -62,7 +62,7 @@ fn reconcile(old: &web_sys::Node, new: &web_sys::Node, document: &web_sys::Docum
         }
         if let Some(input) = a.dyn_ref::<HtmlInputElement>() {
             let focused = document.active_element().is_some_and(|e| e == *a);
-            if input.type_() != "password" && !focused {
+            if !matches!(input.type_().as_str(), "password" | "file") && !focused {
                 let value = b.get_attribute("value").unwrap_or_default();
                 if input.value() != value {
                     input.set_value(&value);
@@ -185,6 +185,24 @@ fn view(app: &Bluefin) -> String {
     });
     h.push_str("</h1>");
     if !connected {
+        h.push_str("<section class=\"card login\" aria-label=\"Connect with an invitation\"><h2>Connect with an invitation</h2>");
+        if let Some(step) = &app.mesh_step {
+            if step.awaiting_approval { h.push_str("<p>Your signup request is waiting for administrator approval.</p>"); }
+            if let Some(url) = &step.external_url {
+                h.push_str(&format!("<p><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">Open passkey page</a></p><p>After verifying, return here to finish.</p>", esc(url)));
+            }
+            let label = if step.awaiting_approval { "Check approval" } else if step.needs_begin_retry { "Retry saved request" } else { "Verify and finish" };
+            h.push_str(&button("mesh-proceed", label, !ready(app)));
+        } else {
+            h.push_str("<form data-form=\"mesh-connect\">");
+            h.push_str(&field("mesh-code", "Paste a connection code or launch link", "password", ""));
+            if !app.mesh_code.is_empty() { h.push_str("<p role=\"status\">An invitation is ready to connect.</p>"); }
+            h.push_str(&field("mesh-name", "Username for a signup invitation", "text", &app.mesh_name));
+            h.push_str(if ready(app) { "<button>Connect</button></form>" } else { "<button disabled>Connect</button></form>" });
+            h.push_str("<label for=\"mesh-image\">Import QR image or screenshot</label><input id=\"mesh-image\" type=\"file\" accept=\"image/png,image/jpeg\"><label for=\"mesh-camera\">Take a photo of a QR code</label><input id=\"mesh-camera\" type=\"file\" accept=\"image/jpeg,image/png\" capture=\"environment\">");
+        }
+        h.push_str(&button("mesh-resume", "Resume saved connection", !ready(app)));
+        h.push_str("<p>Passkeys approve this browser. Invitations are used once.</p></section>");
         h.push_str("<section class=\"card login\" aria-label=\"Sign in\">");
         if let Some(request) = &app.device_sign_in {
             h.push_str(&format!("<p>Confirmation code <strong>{}</strong></p>", esc(&request.code)));
@@ -369,7 +387,11 @@ fn view(app: &Bluefin) -> String {
                 );
             }
         }
-        h.push_str("<section id=\"account\" class=\"card\"><h2>Account</h2><p>Browser transport: authenticated HTTPS. This client has no browser Iroh adapter.</p>");
+        h.push_str("<section id=\"account\" class=\"card\"><h2>Account</h2>");
+        if app.model.session.as_ref().is_some_and(|session| crate::mesh::is_mesh(&session.token)) {
+            h.push_str("<p>Connected through the encrypted device mesh.</p>");
+        } else { h.push_str("<p>Connected through HTTPS.</p>"); }
+
         if app.model.fixture {
             h.push_str("<p>Original synthetic fixtures</p>");
         }
@@ -450,6 +472,9 @@ fn dispatch(app: &mut Bluefin, ctx: &egui::Context, action: &str) {
                 Err(e) => app.error = e,
             }
         }
+        "mesh-connect" if ready(app) => app.begin_mesh(ctx),
+        "mesh-resume" if ready(app) => app.resume_mesh(ctx),
+        "mesh-proceed" if ready(app) => app.proceed_mesh(ctx),
         "connect" if ready(app) => app.connect_server(ctx),
         "change-server" if ready(app) => {
             app.connected_server = None;
@@ -643,6 +668,14 @@ pub(crate) fn start() -> Result<(), JsValue> {
             if matches!(event.type_().as_str(), "input" | "change") {
                 if let Some(input) = target.dyn_ref::<HtmlInputElement>() {
                     match id.as_str() {
+                        "mesh-code" => app.mesh_code = input.value(),
+                        "mesh-name" => app.mesh_name = input.value(),
+                        "mesh-image" | "mesh-camera" => {
+                            if let Some(file) = input.files().and_then(|files| files.item(0)) {
+                                app.import_mesh_image(&ctx, file);
+                                input.set_value("");
+                            }
+                        }
                         "server" => app.server = input.value(),
                         "name" => app.name = input.value(),
                         "password" => app.password = input.value(),

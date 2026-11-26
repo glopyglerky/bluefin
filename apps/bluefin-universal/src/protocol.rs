@@ -70,6 +70,9 @@ pub fn device_id() -> String {
     }
 }
 pub fn authorization(token: &str) -> Result<String> {
+    if token.starts_with("bluefin-mesh-v1:") {
+        return Err("A device mesh connection cannot use an HTTP bearer fallback".into());
+    }
     if token.len() > 4096 || token.bytes().any(|c| !(0x20..=0x7e).contains(&c)) {
         return Err("Invalid account token".into());
     }
@@ -417,6 +420,9 @@ pub async fn request(
     query: &[(&str, String)],
     body: Option<Value>,
 ) -> Result<Value> {
+    if crate::mesh::is_mesh(token) {
+        return crate::mesh::request(base, token, method, path, query, body).await;
+    }
     struct Guard(web_sys::AbortController);
     impl Drop for Guard {
         fn drop(&mut self) {

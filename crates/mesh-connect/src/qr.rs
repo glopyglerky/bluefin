@@ -51,7 +51,15 @@ fn hex(c:[u8;3])->String{format!("#{:02x}{:02x}{:02x}",c[0],c[1],c[2])}
 /// Deterministic SVG without external resources, embedded scripts or secrets
 /// in metadata. The code itself is secret-bearing and must be handled as such.
 pub fn qr_svg(invite:&ConnectInvite,theme:&QrTheme)->Result<String>{
-    theme.validate()?;let qr=code(invite)?;
+    render_svg(code(invite)?,theme)
+}
+pub fn qr_svg_for_web(invite:&ConnectInvite,base:&crate::launch::WebLaunchBase,theme:&QrTheme)->Result<String>{
+    let text=base.invitation_url(invite)?;
+    let qr=QrCode::with_error_correction_level(text.as_bytes(),EcLevel::H).map_err(|_|Error::TooLarge)?;
+    render_svg(qr,theme)
+}
+fn render_svg(qr:QrCode,theme:&QrTheme)->Result<String>{
+    theme.validate()?;
     let q=theme.quiet_zone_modules as usize;
     let side=qr.width()+2*q;
     let footer=if theme.bluefin_branding {12}else{0};
@@ -73,7 +81,15 @@ pub fn qr_svg(invite:&ConnectInvite,theme:&QrTheme)->Result<String>{
 }
 /// Lossless PNG, including a small fin below the full quiet zone.
 pub fn qr_png(invite:&ConnectInvite,theme:&QrTheme)->Result<Vec<u8>>{
-    theme.validate()?;let qr=code(invite)?;
+    render_png(code(invite)?,theme)
+}
+pub fn qr_png_for_web(invite:&ConnectInvite,base:&crate::launch::WebLaunchBase,theme:&QrTheme)->Result<Vec<u8>>{
+    let text=base.invitation_url(invite)?;
+    let qr=QrCode::with_error_correction_level(text.as_bytes(),EcLevel::H).map_err(|_|Error::TooLarge)?;
+    render_png(qr,theme)
+}
+fn render_png(qr:QrCode,theme:&QrTheme)->Result<Vec<u8>>{
+    theme.validate()?;
     let q=theme.quiet_zone_modules;
     let scale=theme.module_pixels;
     let side=(qr.width() as u32+2*q)*scale;

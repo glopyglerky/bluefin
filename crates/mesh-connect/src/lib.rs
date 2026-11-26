@@ -22,4 +22,4 @@ pub mod browser;
 pub use capsule::{ConnectInvite, ConnectInviteV1, InviteIntent, ServerAddress, MAX_CODE_BYTES};
 pub use error::{Error, Result};
 #[cfg(feature = "images")]
-pub use qr::{QrTheme, decode_qr_image, decode_qr_image_at, qr_png, qr_svg};
+pub use qr::{QrTheme, decode_qr_image, decode_qr_image_at, qr_png, qr_svg, qr_png_for_web, qr_svg_for_web};

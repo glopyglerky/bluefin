@@ -37,6 +37,10 @@ enum Outcome {
     Connected(protocol::ConnectedServer),
     DeviceSignIn(protocol::DeviceSignIn),
     Waiting,
+    #[cfg(target_arch = "wasm32")]
+    MeshStep(crate::mesh::PairingStep),
+    #[cfg(target_arch = "wasm32")]
+    MeshEmpty,
     Data(&'static str, Value),
 }
 type Completion = (u64, Result<Outcome, String>);
@@ -53,6 +57,12 @@ pub struct Bluefin {
     connected_server: Option<protocol::ConnectedServer>,
     device_sign_in: Option<protocol::DeviceSignIn>,
     query: String,
+    #[cfg(target_arch = "wasm32")]
+    mesh_code: String,
+    #[cfg(target_arch = "wasm32")]
+    mesh_name: String,
+    #[cfg(target_arch = "wasm32")]
+    mesh_step: Option<crate::mesh::PairingStep>,
     previous_shelves: Vec<PreviousShelf>,
     error: String,
     tx: Sender<Completion>,
@@ -84,6 +94,12 @@ impl Default for Bluefin {
             connected_server: None,
             device_sign_in: None,
             query: String::new(),
+            #[cfg(target_arch = "wasm32")]
+            mesh_code: crate::mesh::launch_code(),
+            #[cfg(target_arch = "wasm32")]
+            mesh_name: String::new(),
+            #[cfg(target_arch = "wasm32")]
+            mesh_step: None,
             previous_shelves: Vec::new(),
             error: String::new(),
             tx,
@@ -266,6 +282,8 @@ impl Bluefin {
         self.password.clear();
         self.connected_server = None;
         self.device_sign_in = None;
+        #[cfg(target_arch = "wasm32")]
+        { self.mesh_code.clear(); self.mesh_name.clear(); self.mesh_step = None; }
         self.query.clear();
         self.discovery = None;
         self.form = None;
@@ -297,6 +315,48 @@ impl Bluefin {
             Ok(base) => self.launch(ctx, async move { protocol::connect(base).await.map(Outcome::Connected) }),
             Err(error) => self.error = error,
         }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn mesh_result(progress: crate::mesh::Progress) -> Outcome {
+        match progress {
+            crate::mesh::Progress::Empty => Outcome::MeshEmpty,
+            crate::mesh::Progress::Pairing(step) => Outcome::MeshStep(step),
+            crate::mesh::Progress::Connected(session) => Outcome::Login(session),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn begin_mesh(&mut self, ctx: &egui::Context) {
+        let code = self.mesh_code.clone();
+        let name = self.mesh_name.clone();
+        self.launch_sign_in(ctx, async move { crate::mesh::begin(code, name).await.map(Self::mesh_result) });
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn resume_mesh(&mut self, ctx: &egui::Context) {
+        self.launch_sign_in(ctx, async { crate::mesh::resume().await.map(Self::mesh_result) });
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn proceed_mesh(&mut self, ctx: &egui::Context) {
+        self.launch_sign_in(ctx, async { crate::mesh::proceed().await.map(Self::mesh_result) });
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn import_mesh_image(&mut self, ctx: &egui::Context, file: web_sys::File) {
+        let tx = self.tx.clone();
+        let epoch = self.model.epoch;
+        let ctx = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = if file.size() > 8.0 * 1024.0 * 1024.0 {
+                Err("Choose a QR image smaller than 8 MiB.".into())
+            } else {
+                match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
+                    Ok(value) => crate::mesh::image_code(&js_sys::Uint8Array::new(&value).to_vec())
+                        .map(|code| Outcome::Data("meshImage", Value::String(code))),
+                    Err(_) => Err("The QR image could not be read.".into()),
+                }
+            };
+            let _ = tx.send((epoch, result));
+            ctx.request_repaint();
+        });
     }
 
     fn submit_account(&mut self, ctx: &egui::Context, create: bool) {
@@ -602,11 +662,19 @@ impl Bluefin {
             }
             self.pending = None;
             match result {
+                #[cfg(target_arch = "wasm32")]
+                Ok(Outcome::MeshStep(step)) => {
+                    self.mesh_step = Some(step); self.mesh_code.clear(); self.connected_server = None;
+                }
+                #[cfg(target_arch = "wasm32")]
+                Ok(Outcome::MeshEmpty) => { self.mesh_step = None; self.error = "No saved browser connection.".into(); }
                 Ok(Outcome::Connected(server)) => self.connected_server = Some(server),
                 Ok(Outcome::DeviceSignIn(request)) => self.device_sign_in = Some(request),
                 Ok(Outcome::Waiting) => self.error = "Finish approving the request first.".into(),
                 Ok(Outcome::Login(s)) => {
                     self.device_sign_in = None;
+                    #[cfg(target_arch = "wasm32")]
+                    { self.mesh_step = None; self.mesh_code.clear(); }
                     self.model.session = Some(s);
                     self.call(
                         ctx,
@@ -616,6 +684,10 @@ impl Bluefin {
                         vec![],
                         None,
                     );
+                }
+                #[cfg(target_arch = "wasm32")]
+                Ok(Outcome::Data("meshImage", Value::String(code))) => {
+                    self.mesh_code = code; self.error = "QR image read. Continue to connect.".into();
                 }
                 Ok(Outcome::Data(tag, v)) => match self.apply(tag, v) {
                     Err(e) => self.error = e,
@@ -913,6 +985,23 @@ impl eframe::App for Bluefin {
                 ui.add_space(12.0);
                 let ready = self.pending.is_none() && self.auth_drains.load(Ordering::Acquire) == 0
                     && self.retired.iter().all(|service| service.snapshot().finished);
+                #[cfg(target_arch = "wasm32")]
+                {
+                    ui.heading("Connect with an invitation");
+                    if let Some(step) = self.mesh_step.clone() {
+                        if let Some(url) = &step.external_url { ui.hyperlink_to("Open passkey page", url); }
+                        let label = if step.awaiting_approval { "Check approval" } else if step.needs_begin_retry { "Retry saved request" } else { "Verify and finish" };
+                        if ui.add_enabled(ready, egui::Button::new(label)).clicked() { self.proceed_mesh(ctx); }
+                    } else {
+                        ui.label("Paste a connection code or launch link");
+                        ui.add(egui::TextEdit::singleline(&mut self.mesh_code).password(true).desired_width(f32::INFINITY));
+                        ui.label("Username for a signup invitation");
+                        ui.add(egui::TextEdit::singleline(&mut self.mesh_name).desired_width(f32::INFINITY));
+                        if ui.add_enabled(ready && !self.mesh_code.is_empty(), egui::Button::new("Connect")).clicked() { self.begin_mesh(ctx); }
+                    }
+                    if ui.add_enabled(ready, egui::Button::new("Resume saved connection")).clicked() { self.resume_mesh(ctx); }
+                    ui.separator();
+                }
                 if let Some(request) = &self.device_sign_in {
                     ui.heading(if request.page.is_some() { "Sign in with a passkey" } else { "Quick Connect" });
                     ui.monospace(&request.code);

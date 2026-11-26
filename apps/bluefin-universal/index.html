@@ -1,4 +1,5 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Bluefin</title>
+<script>(()=>{let code='';if(location.hash.startsWith('#bluefin-connect=')){code=location.hash.slice("#bluefin-connect=".length);history.replaceState(null,'',location.pathname+location.search);}globalThis.takeBluefinLaunch=()=>{const value=code;code='';return value;};})();</script>
 <script src="./vendor/hls.light.min.js"></script>
 <script type="module">import init from "./bluefin_universal.js"; init().catch(() => { document.querySelector("#media-status").textContent = "Application startup failed. Check browser WebAssembly support and reload."; });</script>
 
