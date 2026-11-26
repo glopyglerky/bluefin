@@ -4,7 +4,7 @@
 //! so restoring an older database cannot make an old code usable.
 use std::{collections::HashMap, sync::Arc};
 use axum::{Json, Router, extract::{Path, State}, routing::{get, post}};
-use bluefin_mesh_connect::{ConnectInvite, InviteIntent, ServerAddress, QrTheme, qr_png, qr_svg};
+use bluefin_mesh_connect::{ConnectInvite, InviteIntent, ServerAddress, QrTheme, qr_png_for_web, qr_svg_for_web, launch::WebLaunchBase};
 use bluefin_mesh_connect::native::verify_device_signature;
 use bluefin_mesh_connect::protocol::{Envelope, Request, Response};
 use ferrofin_db::{Database, store::guid_to_db};
@@ -48,7 +48,7 @@ struct Pending {
 /// This is an adapter over the account database, not another identity store.
 pub struct Service {
     db:Database, address:ServerAddress, authority:[u8;32], epoch:[u8;32], generation:u64,
-    webauthn:Webauthn, rp_id:String, origin:String, browser_page:Url,
+    webauthn:Webauthn, rp_id:String, origin:String, browser_page:Url, web_launch:WebLaunchBase,
     pending:Mutex<HashMap<String,Pending>>, gate:Mutex<()>, operations:Semaphore,
 }
 impl Service {
@@ -64,6 +64,7 @@ impl Service {
             .map_err(|_|failed())?.rp_name("Bluefin").build().map_err(|_|failed())?;
         let mut browser_page=origin_url.clone();
         browser_page.path_segments_mut().map_err(|_|failed())?.pop_if_empty().extend(["Bluefin","Accounts","Mesh","Passkey"]);
+        let web_launch=WebLaunchBase::parse(&format!("{origin}/web/bluefin/")).map_err(|_|failed())?;
         let epoch=random()?;
         let mut tx=db.writer().begin_with("BEGIN IMMEDIATE").await.map_err(storage)?;
         sqlx::query("INSERT INTO BluefinMeshAuthority(Id,AuthorityId,LiveEpoch,Generation) VALUES(1,?,?,1) ON CONFLICT(Id) DO NOTHING")
@@ -76,7 +77,7 @@ impl Service {
         let authority=authority.try_into().map_err(|_|failed())?;
         let generation=u64::try_from(row.get::<i64,_>("Generation")).map_err(storage)?;
         tx.commit().await.map_err(storage)?;
-        Ok(Arc::new(Self {db,address,authority,epoch,generation,webauthn,rp_id,origin,browser_page,
+        Ok(Arc::new(Self {db,address,authority,epoch,generation,webauthn,rp_id,origin,browser_page,web_launch,
             pending:Mutex::new(HashMap::new()),gate:Mutex::new(()),operations:Semaphore::new(16)}))
     }
     pub fn address(&self)->&ServerAddress {&self.address}
@@ -127,6 +128,15 @@ impl Service {
             relay_urls:self.address.relay_urls.clone(),direct_addresses:self.address.direct_addresses.clone(),
         };
         let code=invite.to_code().map_err(|_|failed())?;
+        let web_link=self.web_launch.invitation_url(&invite).map_err(|_|failed())?;
+        let native_link=format!("bluefin://connect/{code}");
+        let theme=QrTheme::bluefin();
+        // Prepare every representation before committing an invitation that
+        // could otherwise be stranded by an image/URL size failure.
+        use base64::Engine;
+        let png=base64::engine::general_purpose::STANDARD
+            .encode(qr_png_for_web(&invite,&self.web_launch,&theme).map_err(|_|failed())?);
+        let svg=qr_svg_for_web(&invite,&self.web_launch,&theme).map_err(|_|failed())?;
         let mut tx=self.db.writer().begin_with("BEGIN IMMEDIATE").await.map_err(storage)?;
         self.live_tx(&mut tx).await?;
         let changed=sqlx::query("INSERT INTO BluefinMeshInvites(Id,Epoch,CapsuleHash,Intent,UserId,Expires,State) SELECT ?,?,?,?,?,?,'issued' WHERE (SELECT COUNT(*) FROM BluefinMeshInvites)<?")
@@ -136,11 +146,8 @@ impl Service {
             .execute(&mut *tx).await.map_err(storage)?.rows_affected();
         if changed!=1 {return Err(ApiError::ServiceUnavailable("The connection receipt store is full.".into()));}
         tx.commit().await.map_err(storage)?;
-        use base64::Engine;
-        let theme=QrTheme::bluefin();
-        Ok(json!({"code":code,"link":format!("bluefin://connect/{}",invite.to_code().map_err(|_|failed())?),
-            "pngBase64":base64::engine::general_purpose::STANDARD.encode(qr_png(&invite,&theme).map_err(|_|failed())?),
-            "svg":qr_svg(&invite,&theme).map_err(|_|failed())?,"expiresAtUnixMs":invite.expires_at_unix_ms,
+        Ok(json!({"code":code,"link":web_link,"webLink":web_link,"nativeLink":native_link,
+            "pngBase64":png,"svg":svg,"expiresAtUnixMs":invite.expires_at_unix_ms,
             "intent":match intent {InviteIntent::Login=>"login",InviteIntent::Signup=>"signup"},"singleUse":true,"handle":hex(&invite.invitation_id)}))
     }
     async fn invite_row(&self,invite:&ConnectInvite)->Result<sqlx::sqlite::SqliteRow,ApiError>{

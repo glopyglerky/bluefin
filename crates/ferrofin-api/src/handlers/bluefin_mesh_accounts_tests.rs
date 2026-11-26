@@ -387,3 +387,33 @@ async fn mesh_existing_bearer_deletion_terminally_revokes_the_device_grant() {
     // A later explicit request can retain its receipt after ordinary logout.
     assert!(f.service.revoke_session(&f.state, &device.public_key(), &session, [86;32]).await.is_ok());
 }
+
+#[tokio::test]
+async fn mesh_web_native_and_rendered_qr_share_one_live_invitation() {
+    use base64::Engine;
+    let f=Fixture::new().await;
+    let (user,mut authenticator)=f.login_account().await;
+    let issued=f.service.issue(&f.state,InviteIntent::Login,Some(user),600).await.unwrap();
+    let original=ConnectInvite::parse(issued["code"].as_str().unwrap()).unwrap();
+    for field in ["link","webLink","nativeLink"] {
+        assert_eq!(ConnectInvite::parse(issued[field].as_str().unwrap()).unwrap(),original);
+    }
+    let url=Url::parse(issued["webLink"].as_str().unwrap()).unwrap();
+    assert_eq!(url.origin().ascii_serialization(),"https://accounts.example");
+    assert_eq!(url.path(),"/web/bluefin/");
+    assert!(url.query().is_none());
+    assert!(url.fragment().unwrap().starts_with("bluefin-connect="));
+    let png=base64::engine::general_purpose::STANDARD.decode(issued["pngBase64"].as_str().unwrap()).unwrap();
+    assert_eq!(bluefin_mesh_connect::decode_qr_image(&png).unwrap(),original);
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshInvites")
+        .fetch_one(f.db.pool()).await.unwrap(),1);
+    let device=DeviceIdentity::from_seed([90;32]).unwrap();
+    let first=begin(&f,ConnectInvite::parse(issued["webLink"].as_str().unwrap()).unwrap(),&device,91,None).await;
+    let other=DeviceIdentity::from_seed([92;32]).unwrap();
+    let reused=envelope(Request::Begin{request_id:[93;32],
+        invitation:ConnectInvite::parse(issued["nativeLink"].as_str().unwrap()).unwrap(),
+        device_public_key:other.public_key(),device_label:"Second representation".into(),account_name:None});
+    assert!(f.service.handle(&f.state,&other.public_key(),reused).await.is_err());
+    let finish=finish_request(&first,&device,94,assertion(&mut authenticator,&first));
+    assert!(f.service.handle(&f.state,&device.public_key(),finish).await.is_ok());
+}
