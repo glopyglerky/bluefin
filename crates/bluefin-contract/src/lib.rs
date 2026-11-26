@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub mod discovery;
+pub mod owned_library;
 pub mod sports;
 pub mod transport;
 
