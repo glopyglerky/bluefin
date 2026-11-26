@@ -9,12 +9,15 @@
 
 mod capsule;
 mod error;
+pub mod launch;
 pub mod protocol;
 pub mod discovery;
 #[cfg(feature = "images")]
 mod qr;
-#[cfg(feature = "native")]
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 pub mod native;
+#[cfg(all(feature = "browser", target_arch = "wasm32"))]
+pub mod browser;
 
 pub use capsule::{ConnectInvite, ConnectInviteV1, InviteIntent, ServerAddress, MAX_CODE_BYTES};
 pub use error::{Error, Result};

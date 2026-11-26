@@ -253,8 +253,10 @@ impl ConnectInviteV1 {
     /// Accept only documented wrappers, ASCII case, hyphens and whitespace.
     /// Ambiguous Crockford O/I/L aliases are deliberately not accepted.
     pub fn parse(input: &str) -> Result<Self> {
-        if input.len() > MAX_CODE_BYTES { return Err(Error::TooLarge); }
+        if input.len() > crate::launch::MAX_WEB_LAUNCH_BYTES { return Err(Error::TooLarge); }
         let input = input.trim_matches(|c: char| c.is_ascii_whitespace());
+        if input.starts_with("https://") { return crate::launch::parse_web_launch(input); }
+        if input.len() > MAX_CODE_BYTES { return Err(Error::TooLarge); }
         let payload = input.strip_prefix("mesh-connect://invite/")
             .or_else(|| input.strip_prefix("bluefin://connect/")).unwrap_or(input);
         if !payload.is_ascii() { return Err(Error::InvalidCode); }

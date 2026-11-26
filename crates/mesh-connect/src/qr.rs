@@ -144,5 +144,6 @@ pub fn decode_qr_image_at(input:&[u8],now_unix_ms:u64)->Result<ConnectInvite>{
 fn looks_like_invitation(text: &str) -> bool {
     let text = text.trim_ascii().to_ascii_lowercase();
     text.starts_with("mesh-connect://invite/") || text.starts_with("bluefin://connect/")
+        || (text.starts_with("https://") && text.contains("#bluefin-connect="))
         || (text.starts_with("mc") && text.as_bytes().get(2).is_some_and(u8::is_ascii_digit))
 }
