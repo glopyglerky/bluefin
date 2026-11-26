@@ -6,3 +6,5 @@
 
 .video-toolbar{display:none}body.video-playing #media-host{position:fixed;inset:0;z-index:24;max-width:none;margin:0;padding:calc(52px + env(safe-area-inset-top)) 0 env(safe-area-inset-bottom);background:#000;display:flex;align-items:center;justify-content:center}body.video-playing #media{display:block;max-height:100%;height:100%;width:100%;object-fit:contain}body.video-playing .video-toolbar{display:flex;justify-content:space-between;position:absolute;top:env(safe-area-inset-top);left:0;right:0;padding:4px 16px;background:#000;color:#fff}.video-toolbar button{color:inherit}
 .now-art img{width:100%;height:100%;object-fit:cover;border-radius:18px}
+
+.source-links{display:flex;justify-content:center;gap:1.25rem;font-size:.85rem;color:var(--secondary);padding:1rem}.source-links a{color:inherit}

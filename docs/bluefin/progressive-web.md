@@ -140,3 +140,19 @@ physical playback, passkey enrollment, a live approved relay, or visual parity.
 The web bundle now builds the optional Rust protocol adapter without the
 eframe UI feature for the ordinary page. The old native/canvas implementation
 remains source-compatible and is a separate regression compile target.
+
+## Release consistency
+
+The build-only package helper takes the admitted bindgen directory, a new output
+path and the reviewed source root. It hashes the complete Rust engine (Wasm,
+JavaScript glue and platform snippets) into one engine directory. Styles, shell
+scripts and the vendored HLS decoder use content-addressed file names. Every
+service-worker consumer uses the same worker hash in its registration URL.
+The document base and worker scope remain at the original app path.
+
+The package emits asset-manifest.json with each file's SHA-256 and byte length,
+and fails when any asset exceeds 25 MiB. Deployment adds the exact corresponding
+source archive and source revision from the admission receipt, updates SOURCE.txt,
+and recalculates the final inventory. The account and welcome views link to that
+source notice and the license. API routes on an assets-only host must return real
+404 responses; they must never be rewritten to the application document.

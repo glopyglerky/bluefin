@@ -28,15 +28,13 @@ cargo build --manifest-path "$app/Cargo.toml" --locked --release \
 scratch=$(mktemp -d "$(dirname -- "$output")/.bluefin-web.XXXXXX")
 trap 'rm -rf -- "$scratch"' EXIT
 trap 'exit 1' HUP INT TERM
-wasm-bindgen --target web --out-dir "$scratch" \
+wasm-bindgen --target web --out-dir "$scratch/engine-unversioned" \
     "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/bluefin_universal.wasm"
-cp "$app/index.html" "$app/bluefin.css" "$app/bootstrap.js" "$app/native-view.js" "$app/media-worker.js" "$app/mesh-policy.json" "$root/LICENSE" "$scratch/"
-cp -R "$app/vendor" "$scratch/vendor"
-find "$scratch" -type d -exec chmod 755 {} +
-find "$scratch" -type f -exec chmod 644 {} +
-mv -T -n -- "$scratch" "$output"
-if [ -d "$scratch" ]; then
+node "$root/scripts/package-bluefin-web.cjs" "$scratch/engine-unversioned" "$scratch/bundle" "$root"
+mv -T -n -- "$scratch/bundle" "$output"
+if [ -d "$scratch/bundle" ]; then
     echo "Output directory was created during the build: $output" >&2
     exit 2
 fi
+rm -rf -- "$scratch"
 trap - EXIT HUP INT TERM
