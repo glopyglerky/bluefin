@@ -13,13 +13,15 @@ pub mod service;
 pub mod state;
 #[cfg(target_arch = "wasm32")]
 pub mod mesh;
+#[cfg(target_arch = "wasm32")]
+pub mod web_client;
 #[cfg(feature = "ui")]
 pub mod ui;
 #[cfg(all(target_arch = "wasm32", feature = "ui"))]
 mod web_input;
 
 #[cfg(all(target_arch = "wasm32", feature = "ui"))]
-#[wasm_bindgen::prelude::wasm_bindgen(start)]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = startBluefinCanvas)]
 pub async fn start() -> Result<(), wasm_bindgen::JsValue> {
     // Semantic browser presentation requires neither a GPU nor a canvas.
     if web_sys::window().unwrap().location().search()? != "?presentation=canvas" {

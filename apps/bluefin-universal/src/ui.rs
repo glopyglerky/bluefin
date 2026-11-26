@@ -337,7 +337,7 @@ impl Bluefin {
     fn begin_mesh(&mut self, ctx: &egui::Context) {
         let code = self.mesh_code.clone();
         let name = self.mesh_name.clone();
-        self.launch_sign_in(ctx, async move { crate::mesh::begin(code, name).await.map(Self::mesh_result) });
+        self.launch_sign_in(ctx, async move { crate::mesh::begin(code, name, false).await.map(Self::mesh_result) });
     }
     #[cfg(target_arch = "wasm32")]
     fn resume_mesh(&mut self, ctx: &egui::Context) {

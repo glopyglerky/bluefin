@@ -23,14 +23,14 @@ if [ "$(wasm-bindgen --version)" != "wasm-bindgen 0.2.126" ]; then
     exit 2
 fi
 cargo build --manifest-path "$app/Cargo.toml" --locked --release \
-    --target wasm32-unknown-unknown --no-default-features --features ui --lib
+    --target wasm32-unknown-unknown --no-default-features --lib
 
 scratch=$(mktemp -d "$(dirname -- "$output")/.bluefin-web.XXXXXX")
 trap 'rm -rf -- "$scratch"' EXIT
 trap 'exit 1' HUP INT TERM
 wasm-bindgen --target web --out-dir "$scratch" \
     "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/bluefin_universal.wasm"
-cp "$app/index.html" "$app/media-worker.js" "$app/mesh-policy.json" "$root/LICENSE" "$scratch/"
+cp "$app/index.html" "$app/bluefin.css" "$app/bootstrap.js" "$app/native-view.js" "$app/media-worker.js" "$app/mesh-policy.json" "$root/LICENSE" "$scratch/"
 cp -R "$app/vendor" "$scratch/vendor"
 find "$scratch" -type d -exec chmod 755 {} +
 find "$scratch" -type f -exec chmod 644 {} +

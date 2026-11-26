@@ -1,10 +1,37 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Bluefin</title>
-<script>(()=>{let code='';if(location.hash.startsWith('#bluefin-connect=')){code=location.hash.slice("#bluefin-connect=".length);history.replaceState(null,'',location.pathname+location.search);}globalThis.takeBluefinLaunch=()=>{const value=code;code='';return value;};})();</script>
-<script src="./vendor/hls.light.min.js"></script>
-<script type="module">import init from "./bluefin_universal.js"; init().catch(() => { document.querySelector("#media-status").textContent = "Application startup failed. Check browser WebAssembly support and reload."; });</script>
-
-<style>
-:root{color-scheme:dark}html,body{margin:0;background:#0f131b;color:#e9eff8;font-family:system-ui;min-height:100%;}body{display:flex;flex-direction:column;min-height:100dvh}.view-switch{display:flex;justify-content:flex-end;padding:10px 16px;font-size:14px}.view-switch a{padding:5px 8px}canvas{width:100%;height:calc(100dvh - 38px);display:block;min-height:320px}video{display:none;width:100%;max-height:42dvh;background:#080d13;object-fit:contain}video[src]:not([src=""]){display:block}body:has(video[src]:not([src=""])) canvas{height:58dvh}#media-status{display:block;overflow-wrap:anywhere;background:#171e2a;font-size:14px;line-height:1.5}#media-status:not(:empty){padding:10px 16px}canvas:focus-visible,video:focus-visible{outline:2px solid #95d3ff;outline-offset:-3px}
-[hidden]{display:none!important}#semantic{width:min(100%,1200px);margin:auto;box-sizing:border-box;padding:16px}header,nav{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:16px}.brand{font-size:26px;font-weight:750;color:#74c0ff}a{color:#95d3ff}nav a{padding:12px}h1{font-size:clamp(24px,5vw,32px)}h2{font-size:21px}p{line-height:1.5;overflow-wrap:anywhere}button,input,select{font:inherit;color:inherit;background:#202938;border:1px solid #53677f;border-radius:8px;box-sizing:border-box;min-height:44px;max-width:100%}button{padding:10px 16px;cursor:pointer;white-space:normal;overflow-wrap:anywhere;margin:4px}button[aria-current=page]{background:#1a5b9e;border-color:#95d3ff}button:disabled{opacity:.55;cursor:default}input,select{padding:10px;width:100%;margin:6px 0 14px}input[type=checkbox]{width:24px;min-height:24px;vertical-align:middle;margin:10px}label{display:block}form button{background:#1a5b9e}*:focus-visible{outline:3px solid #95d3ff;outline-offset:3px}.card{background:#171e2a;border:1px solid #2b3e55;border-radius:16px;padding:20px;margin:16px 0;min-width:0}.login{max-width:440px;margin:24px auto}.catalog{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr));gap:16px}.catalog .card{margin:0}.catalog button{margin:0;width:100%;text-align:left}.detail{background:#192739}#media{flex:none}#playback-status{padding:8px 16px}#playback-status:empty{display:none}@media(max-height:450px){#semantic{padding:12px}.login{margin:12px auto}.card{padding:14px}header{margin-bottom:8px}nav{gap:4px}video[src]:not([src=""]){max-height:70svh}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
-</style></head><body><div class="view-switch"><a id="presentation-switch" href="./">Accessible view</a></div><div id="semantic" hidden></div><canvas id="bluefin" hidden></canvas><video id="media" controls playsinline aria-label="Media player"></video><p id="playback-status" role="status"></p><output id="media-status" aria-live="polite"></output><noscript>Bluefin requires JavaScript and WebAssembly to connect to your library.</noscript>
-<script>navigator.serviceWorker?.register('./media-worker.js').catch(()=>document.querySelector('#media-status').textContent='Secure-context media worker unavailable.');document.querySelector('#media').onerror=()=>{if(document.querySelector('#media').getAttribute('src'))document.querySelector('#media-status').textContent='Playback failed. Check codec support, HTTPS, CORS and account access.';};</script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>Bluefin</title>
+<script>(()=>{let code='';if(location.hash.startsWith('#bluefin-connect=')){code=location.hash.slice('#bluefin-connect='.length);try{history.replaceState(null,'',location.pathname+location.search);}catch(_){code='';}}globalThis.takeBluefinLaunch=()=>{const value=code;code='';return value;};})();</script>
+<link rel="stylesheet" href="./bluefin.css">
+<script defer src="./bootstrap.js"></script>
+<script defer src="./native-view.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<div id="app">
+<main id="content" class="welcome">
+<div class="wordmark"><svg aria-hidden="true" viewBox="0 0 48 48"><path d="M3 12c7-8 14 8 21 0s14 8 21 0M3 24c7-8 14 8 21 0s14 8 21 0M3 36c7-8 14 8 21 0s14 8 21 0"/></svg><h1>Bluefin</h1></div>
+<section class="account-stack" aria-label="Connect Bluefin">
+<button id="initial-invite" type="button">Connect with QR or invitation</button>
+<form id="initial-connect">
+<h2>Connect to your server</h2>
+<label for="initial-server" class="visually-hidden">Server address</label>
+<input id="initial-server" name="server" type="url" placeholder="https://media.example.com" autocomplete="url" spellcheck="false" required>
+<button type="submit" class="primary">Continue</button>
+</form>
+<p id="startup-status" class="secondary" role="status">Preparing connection controls…</p>
+</section>
+</main>
+</div>
+<div id="semantic" hidden></div><canvas id="bluefin" hidden></canvas>
+<div id="media-host"><video id="media" controls playsinline preload="metadata" aria-label="Media player"></video></div>
+<p id="playback-status" role="status"></p><output id="media-status" aria-live="polite"></output>
+<noscript><section class="notice"><h2>Bluefin is ready to connect</h2><p>JavaScript is needed for sign-in and playback. WebAssembly is optional for the HTTPS library view. A device invitation can also be opened in the installed Bluefin app.</p></section></noscript>
+<script>setTimeout(()=>{const s=document.getElementById('startup-status');if(s)s.textContent='The connection controls did not load. Reload this trusted HTTPS page. Your invitation has not been sent.';},6000);</script>
+</body>
+</html>

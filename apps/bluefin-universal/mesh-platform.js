@@ -2,18 +2,56 @@
 // authority and media routes are implemented in Rust.
 const journalLimit = 131072;
 let databasePromise;
+// A scanned invitation creates a temporary browser device by default. Opening
+// the page never touches IndexedDB or asks for storage permissions.
+let storageMode = 'memory';
+let memoryJournal = {revision:0,value:null};
+let journalTouched = false;
+export async function selectMeshStorage(remember) {
+  if (typeof remember !== 'boolean') throw Error('Invalid connection storage choice');
+  const next = remember ? 'persistent' : 'memory';
+  if (next === storageMode) return;
+  if (journalTouched) {
+    const current = storageMode === 'memory' ? memoryJournal : JSON.parse(await loadPersistentMeshVault());
+    if (current.value !== null) throw Error('A connection is already active in this tab');
+  }
+  if (remember) {await database();persistentLifecycle();} // Explicit opt-in only; failures stay visible.
+  storageMode=next;journalTouched=false;
+}
+export async function loadMeshVault() {
+  journalTouched=true;
+  if (storageMode === 'persistent') return loadPersistentMeshVault();
+  return JSON.stringify(memoryJournal);
+}
+export async function saveMeshVault(expected, serialized) {
+  if (!Number.isSafeInteger(expected) || expected < 0 || expected >= Number.MAX_SAFE_INTEGER
+      || (serialized !== null && (typeof serialized !== 'string' || !serialized.length
+          || new TextEncoder().encode(serialized).byteLength > journalLimit))) throw Error('Invalid connection journal');
+  journalTouched=true;
+  if (storageMode === 'persistent') return savePersistentMeshVault(expected,serialized);
+  if (memoryJournal.revision !== expected) throw Error('Connection changed in this tab');
+  memoryJournal={revision:expected+1,value:serialized};
+}
+export function meshRemembered() {return storageMode === 'persistent';}
+export function clearEphemeralMeshVault() {
+  if (storageMode === 'memory') memoryJournal={revision:memoryJournal.revision+1,value:null};
+}
+
 const request = value => new Promise((resolve,reject) => {
-  value.onsuccess = () => resolve(value.result);
-  value.onerror = () => reject(Error('Protected connection storage unavailable'));
+  const timer=setTimeout(()=>reject(Error('Protected connection storage did not respond')),5000);
+  value.onsuccess = () => {clearTimeout(timer);resolve(value.result);};
+  value.onerror = () => {clearTimeout(timer);reject(Error('Protected connection storage unavailable'));};
 });
 function database() {
   if (!globalThis.isSecureContext || location.protocol !== 'https:') throw Error('Use a trusted HTTPS address');
   return databasePromise ||= new Promise((resolve,reject) => {
     const open = indexedDB.open('bluefin-mesh-v1', 1);
+    let expired=false;
+    const timer=setTimeout(()=>{expired=true;reject(Error('Protected connection storage did not respond'));},5000);
     open.onupgradeneeded = () => open.result.createObjectStore('vault');
-    open.onsuccess = () => resolve(open.result);
-    open.onerror = () => reject(Error('Protected connection storage unavailable'));
-    open.onblocked = () => reject(Error('Close older Bluefin tabs and retry'));
+    open.onsuccess = () => {clearTimeout(timer);if(expired)open.result.close();else resolve(open.result);};
+    open.onerror = () => {clearTimeout(timer);reject(Error('Protected connection storage unavailable'));};
+    open.onblocked = () => {clearTimeout(timer);expired=true;reject(Error('Close older Bluefin tabs and retry'));};
   });
 }
 async function key(db) {
@@ -32,7 +70,7 @@ async function key(db) {
   if (!stored) throw Error('Protected connection key unavailable');
   return stored;
 }
-export async function loadMeshVault() {
+async function loadPersistentMeshVault() {
   const db = await database(), secret = await key(db);
   const record = await request(db.transaction('vault').objectStore('vault').get('record'));
   if (!record) return JSON.stringify({revision:0,value:null});
@@ -45,7 +83,7 @@ export async function loadMeshVault() {
   try {return JSON.stringify({revision:record.revision,value:new TextDecoder('utf-8',{fatal:true}).decode(bytes)});}
   finally {bytes.fill(0);}
 }
-export async function saveMeshVault(expected, serialized) {
+async function savePersistentMeshVault(expected, serialized) {
   if (!Number.isSafeInteger(expected) || expected < 0 || expected >= Number.MAX_SAFE_INTEGER) throw Error('Invalid connection revision');
   const db = await database(), secret = await key(db);
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -64,7 +102,7 @@ export async function saveMeshVault(expected, serialized) {
       if ((old.result?.revision || 0) !== expected) {transaction.abort();return;}
       store.put({revision:expected+1,iv,bytes},'record');
     };
-    transaction.oncomplete = () => {lifecycleChannel?.postMessage({type:"journal"});resolve();};
+    transaction.oncomplete = () => {persistentLifecycle()?.postMessage({type:"journal"});resolve();};
     transaction.onabort = () => reject(Error('Connection changed in another tab. Resume the saved connection.'));
     transaction.onerror = () => reject(Error('Connection could not be saved'));
   });
@@ -175,21 +213,28 @@ navigator.serviceWorker?.addEventListener('message', async event => {
 });
 
 let lifecycleHandler;
-const lifecycleChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('bluefin-mesh-lifecycle-v1') : null;
+let lifecycleChannel = null;
+function persistentLifecycle() {
+  if (!lifecycleChannel && typeof BroadcastChannel === 'function') {
+    try {lifecycleChannel=new BroadcastChannel('bluefin-mesh-lifecycle-v1');lifecycleChannel.addEventListener('message',receiveLifecycle);} catch (_) {}
+  }
+  return lifecycleChannel;
+}
 function stopOutput(handle) {dispatchEvent(new CustomEvent('bluefin-mesh-retired',{detail:handle}));}
 export function setMeshLifecycleHandler(handler) { lifecycleHandler=handler; }
 export function notifyMeshRetiring(handle) {
   stopOutput(handle);
-  lifecycleChannel?.postMessage({type:'retire',handle});
+  if (storageMode === 'persistent') persistentLifecycle()?.postMessage({type:'retire',handle});
 }
 export function stopMeshOutput(handle) {stopOutput(handle);}
-lifecycleChannel?.addEventListener('message', event => {
+function receiveLifecycle(event) {
+  if (storageMode !== 'persistent') return;
   const value=event.data;
   if (value?.type === 'retire' && typeof value.handle === 'string'
       && /^bluefin-mesh-v1:[a-f0-9]{64}$/.test(value.handle)) {
     stopOutput(value.handle);lifecycleHandler?.(value.handle).catch(()=>{});
   } else if (value?.type === 'journal') {lifecycleHandler?.('').catch(()=>{});}
-});
+}
 document.addEventListener('visibilitychange',()=>{
   if (document.visibilityState === 'visible') lifecycleHandler?.('').catch(()=>{});
 });

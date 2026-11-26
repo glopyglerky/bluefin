@@ -1,3 +1,5 @@
+> Current progressive presentation and temporary-by-default sessions are documented in [progressive-web.md](progressive-web.md). The transport and protocol details below remain applicable; remembered storage is now explicit opt-in.
+
 # Browser mesh connections
 
 ## What this source adds

@@ -92,7 +92,9 @@ impl PqcEndpoint {
         let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
             .clear_address_lookup().clear_relay_transports()
             .relay_mode(relay_policy.mode()?)
-            .secret_key(identity.iroh_secret()?)
+            // Each tab/endpoint has its own relay registration. The stable
+            // device identity is authenticated by the inner pinned PQ TLS layer.
+            // Reusing the outer key would let restored tabs displace one another.
             .transport_config(transport)
             .bind().await.map_err(|_| Error::Network)?;
         Ok(Self { endpoint, identity: identity.clone(), relay_policy })

@@ -26,6 +26,8 @@ extern "C" {
     fn take_launch() -> String;
     #[wasm_bindgen(catch, js_name = readMeshPolicy)]
     async fn read_policy() -> std::result::Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = selectMeshStorage)]
+    async fn select_storage(remember: bool) -> std::result::Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = meshPasskey)]
     async fn passkey(options: &str) -> std::result::Result<JsValue, JsValue>;
 }
@@ -89,7 +91,7 @@ struct VaultReply { revision: u64, value: Option<String> }
 struct Vault { revision: u64, saved: Option<Saved> }
 impl Vault {
     async fn load() -> Result<Self> {
-        let value = load_vault().await.map_err(|_| "Protected browser connection storage is unavailable.")?;
+        let value = load_vault().await.map_err(|_| "Browser connection state is unavailable.")?;
         let record: VaultReply = serde_json::from_str(&value.as_string().ok_or("Invalid connection journal.")?)
             .map_err(|_| "Invalid connection journal.")?;
         if record.revision > 9_007_199_254_740_990 { return Err("Connection revision limit.".into()); }
@@ -209,8 +211,9 @@ async fn endpoint(saved: &Saved, server: &ServerAddress) -> Result<PqcEndpoint> 
     PqcEndpoint::client_with_policy(&device, policy).await.map_err(|_| failure())
 }
 
-pub async fn begin(code: String, account_name: String) -> Result<Progress> {
+pub async fn begin(code: String, account_name: String, remember: bool) -> Result<Progress> {
     let _operation = Operation::enter()?;
+    select_storage(remember).await.map_err(|_| "Finish or sign out of this tab's current connection before changing storage.")?;
     let invite = ConnectInvite::parse_at(&code, now_ms().map_err(|_| failure())?)
         .map_err(|_| "This connection code is invalid or expired.")?;
     invite.require_service(SERVICE).map_err(|_| "This invitation belongs to another application.")?;
@@ -277,7 +280,16 @@ async fn begin_saved(vault: &mut Vault) -> Result<()> {
 }
 
 pub async fn resume() -> Result<Progress> {
+    resume_with_storage(None).await
+}
+pub async fn resume_remembered() -> Result<Progress> {
+    resume_with_storage(Some(true)).await
+}
+async fn resume_with_storage(remember: Option<bool>) -> Result<Progress> {
     let _operation = Operation::enter()?;
+    if let Some(remember) = remember {
+        select_storage(remember).await.map_err(|_| "Finish this tab's current connection before restoring a remembered device.")?;
+    }
     let mut vault = Vault::load().await?;
     let Some(saved) = vault.saved.clone() else { return Ok(Progress::Empty); };
     match &saved.state {
@@ -404,6 +416,12 @@ async fn install(saved: Saved, descriptor: Descriptor) -> Result<Session> {
     Ok(session)
 }
 pub fn is_mesh(handle: &str) -> bool { handle.starts_with(HANDLE_PREFIX) }
+pub(crate) fn restored_session(handle: &str) -> Result<Session> {
+    let current = connected(handle)?;
+    if current.closing.get() { return Err("This device is signing out.".into()); }
+    Ok(Session { base: origin(&current.descriptor.api_origin)?, token: handle.to_owned(),
+        user: uuid::Uuid::parse_str(&current.descriptor.user_id).map_err(|_| failure())? })
+}
 fn connected(handle: &str) -> Result<Rc<Connected>> {
     SESSIONS.with(|sessions| sessions.borrow().get(handle).cloned())
         .ok_or_else(|| "The device connection is not restored. Resume it before continuing.".into())
@@ -461,6 +479,24 @@ pub async fn request(base: &Url, handle: &str, method: &str, path: &str,
     else { serde_json::from_slice(&bytes).map_err(|_| "Invalid peer response.".into()) }
 }
 
+/// Artwork uses the same device proof and peer pin; no bearer or image URL
+/// leaves the Rust transport boundary.
+pub(crate) async fn artwork(handle: &str, item: &str, backdrop: bool) -> Result<Vec<u8>> {
+    let item = uuid::Uuid::parse_str(item).map_err(|_| "Invalid artwork item.")?;
+    if item.is_nil() { return Err("Invalid artwork item.".into()); }
+    let session = connected(handle)?;
+    let _permit = Permit::acquire(session.clone())?;
+    ensure_current(&session).await?;
+    let base = origin(&session.descriptor.api_origin)?;
+    let path = format!("Items/{}/Images/{}", item.simple(), if backdrop { "Backdrop" } else { "Primary" });
+    let url = protocol::api_url(&base,&path,&[("maxWidth",if backdrop { "1200" } else { "400" }.into()),("quality","85".into())])?;
+    let (status,headers,bytes) = fetch(&session,"GET",&url,&[],Vec::new(),true,2*1024*1024).await?;
+    let allowed=headers.iter().any(|(name,value)| name.eq_ignore_ascii_case("content-type")
+        && ["image/jpeg","image/png","image/webp"].contains(&value.split(';').next().unwrap_or("").trim()));
+    if status != 200 || !allowed { return Err("Artwork is unavailable.".into()); }
+    Ok(bytes)
+}
+
 async fn open_request(session: &Connected, method: &str, url: &Url,
     headers: &[(String,String)], body: Vec<u8>, media: bool) -> Result<(PqcConnection, u16, Vec<(String,String)>)> {
     if url.origin().ascii_serialization() != session.descriptor.api_origin
@@ -510,10 +546,8 @@ async fn fetch(session: &Connected, method: &str, url: &Url, headers: &[(String,
     result
 }
 
-async fn revoke_saved(vault: &mut Vault) -> Result<()> {
-    let saved = vault.saved.as_ref().ok_or("No saved connection.")?.clone();
-    let Phase::Connected { descriptor, logout_id: Some(request_id) } = &saved.state else { return Err("No saved sign-out request.".into()); };
-    let endpoint = endpoint(&saved, &descriptor.server).await?;
+async fn revoke_identity(saved: &Saved, descriptor: &Descriptor, request_id: &[u8;32]) -> Result<()> {
+    let endpoint = endpoint(saved, &descriptor.server).await?;
     let result: Result<()> = async {
         let mut connection = endpoint.connect_server(&descriptor.server).await.map_err(|_| failure())?;
         connection.send(&json!({"version":1,"body":{"type":"revoke_session","session_id":descriptor.id,
@@ -527,11 +561,39 @@ async fn revoke_saved(vault: &mut Vault) -> Result<()> {
         Ok(())
     }.await;
     endpoint.close().await;
-    result?;
+    result
+}
+async fn revoke_saved(vault: &mut Vault) -> Result<()> {
+    let saved = vault.saved.as_ref().ok_or("No saved connection.")?.clone();
+    let Phase::Connected { descriptor, logout_id: Some(request_id) } = &saved.state else {
+        return Err("No saved sign-out request.".into());
+    };
+    revoke_identity(&saved,descriptor,request_id).await?;
     vault.saved = None;
     vault.save().await
 }
-async fn logout(handle: &str) -> Result<()> {
+
+/// Page retirement fences every request synchronously. Browsers can suspend a
+/// page before asynchronous work finishes, so this never claims remote revoke.
+pub(crate) fn retire_page() {
+    let remembered = mesh_remembered();
+    let sessions: Vec<_> = SESSIONS.with(|sessions| sessions.borrow_mut().drain().collect());
+    for (handle,session) in sessions {
+        session.closing.set(true);
+        stop_mesh_output(&handle);
+        wasm_bindgen_futures::spawn_local(async move {
+            session.endpoint.close().await;
+            if !remembered {
+                if let Ok(request_id) = random() {
+                    let _ = revoke_identity(&session.saved,&session.descriptor,&request_id).await;
+                }
+            }
+        });
+    }
+    clear_ephemeral_vault();
+}
+
+pub async fn logout(handle: &str) -> Result<()> {
     let session = connected(handle)?;
     // Stop local output and network resources before any fallible storage or
     // remote revocation step. Failure below retains an honest unknown outcome.
@@ -622,6 +684,10 @@ impl Drop for MediaStream {
 extern "C" {
     #[wasm_bindgen(js_name = notifyMeshRetiring)]
     fn notify_mesh_retiring(handle: &str);
+    #[wasm_bindgen(js_name = meshRemembered)]
+    fn mesh_remembered() -> bool;
+    #[wasm_bindgen(js_name = clearEphemeralMeshVault)]
+    fn clear_ephemeral_vault();
     #[wasm_bindgen(js_name = stopMeshOutput)]
     fn stop_mesh_output(handle: &str);
     #[wasm_bindgen(js_name = setMeshLifecycleHandler)]
