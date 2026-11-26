@@ -20,17 +20,10 @@ struct SportsDashboard: View {
     private var leagues: [String] { Set(sports.feed?.games.compactMap { $0.event?.league_name } ?? []).sorted() }
     var body: some View {
         List {
-            scheduleResults
-            Section {
-                Toggle("Favorites only", isOn: $favoritesOnly)
-                Picker("League", selection: $league) {
-                    Text("All leagues").tag("")
-                    ForEach(leagues, id: \.self) { Text($0).tag($0) }
-                }
-                scheduleFilters
-            } footer: {
-                Text("Dates use \(zone.identifier). All dates shows every game returned by the server, including games without a start time.")
+            NavigationLink(destination: filters) {
+                Label("Schedule filters", systemImage: "slider.horizontal.3")
             }
+            scheduleResults
             SportsProviderSection(providers: sports.feed?.providers ?? [])
             Section {
                 NavigationLink("Favorites and preferences", destination: SportsSettingsView(sports: sports).bluefinBackNavigation())
@@ -42,12 +35,22 @@ struct SportsDashboard: View {
         .bluefinRefresh { await sports.connect(store.session) }
         .onChange(of: sports.accountGeneration) { _ in favoritesOnly = false; league = ""; dayOnly = false; zoneID = TimeZone.autoupdatingCurrent.identifier }
     }
-    @ViewBuilder private var scheduleFilters: some View {
-        #if os(iOS)
-        DisclosureGroup("Schedule filters") { scheduleControls }
-        #else
-        scheduleControls
-        #endif
+
+    private var filters: some View {
+        Form {
+            Section {
+                Toggle("Favorites only", isOn: $favoritesOnly)
+                Picker("League", selection: $league) {
+                    Text("All leagues").tag("")
+                    ForEach(leagues, id: \.self) { Text($0).tag($0) }
+                }
+                scheduleControls
+            } footer: {
+                Text("Dates use \(zone.identifier). All dates shows every game returned by the server, including games without a start time.")
+            }
+        }
+        .navigationTitle("Schedule filters")
+        .bluefinBackNavigation()
     }
     private var scheduleControls: some View {
         Group {
