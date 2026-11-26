@@ -575,7 +575,10 @@ pub fn call(v: &Value) -> Result<Value> {
             json!({"localCleanupComplete":streams && cache,"serverRevoked":revoked,"playbackReleaseComplete":released,"cleanupResources":pending}),
         );
     }
-    if matches!(op, "homeAssistantStates" | "homeAssistantControl") {
+    if matches!(
+        op,
+        "homeAssistantStates" | "homeAssistantControl" | "musicAssistantPlayTrack"
+    ) {
         return home_assistant::call(v, op);
     }
     if op == "irohProbe" {

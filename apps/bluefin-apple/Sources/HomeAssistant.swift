@@ -14,7 +14,12 @@ private struct HomeAssistantEntity: Decodable, Identifiable {
     var state: String
     var title: String?
     var volume: Double?
+    var musicAssistantSpeaker: Bool?
     var id: String { entityId }
+}
+
+private enum MusicAssistantQueueMode: String {
+    case play, add
 }
 
 struct HomeAssistantView: View {
@@ -23,8 +28,21 @@ struct HomeAssistantView: View {
     @State private var token = ""
     @State private var allowHttp = false
     @State private var entities: [HomeAssistantEntity] = []
+    @State private var musicSpeakerID: String?
+    @State private var musicTrack = ""
+    @State private var musicStatus: String?
     @State private var busy = false
     @State private var problem: String?
+
+    private var musicSpeakers: [HomeAssistantEntity] {
+        entities.filter { $0.musicAssistantSpeaker == true && !["unavailable", "unknown"].contains($0.state) }
+    }
+
+    private var selectedMusicSpeaker: HomeAssistantEntity? {
+        guard let musicSpeakerID else { return nil }
+        return musicSpeakers.first { $0.id == musicSpeakerID }
+    }
+
     var body: some View {
         Form {
             if connection == nil {
@@ -51,9 +69,32 @@ struct HomeAssistantView: View {
                     if !busy && entities.isEmpty { Text("No media players are available to this Home Assistant account.").foregroundStyle(.secondary) }
                     Button("Refresh") { Task { await refresh() } }.disabled(busy)
                 }
+                if !musicSpeakers.isEmpty {
+                    Section("Music Assistant") {
+                        Picker("Speaker", selection: $musicSpeakerID) {
+                            Text("Select a speaker").tag(nil as String?)
+                            ForEach(musicSpeakers) { speaker in
+                                Text(speaker.name).tag(Optional(speaker.id))
+                            }
+                        }
+                        TextField("Track name or title and artist", text: $musicTrack)
+                        Button("Play now") { Task { await playMusicTrack(mode: .play) } }
+                            .disabled(busy || selectedMusicSpeaker == nil || readyTrack.isEmpty)
+                        Button("Add to queue") { Task { await playMusicTrack(mode: .add) } }
+                            .disabled(busy || selectedMusicSpeaker == nil || readyTrack.isEmpty)
+                        if let musicStatus { Text(musicStatus).foregroundStyle(.secondary) }
+                    }
+                }
                 Section {
                     Text("Controls apply only to the device you select. Bluefin does not publish your library token or a private stream URL to Home Assistant.").font(.footnote).foregroundStyle(.secondary)
-                    Button("Disconnect Home Assistant", role: .destructive) { HomeAssistantVault.clear(); connection = nil; entities = [] }
+                    Button("Disconnect Home Assistant", role: .destructive) {
+                        HomeAssistantVault.clear()
+                        connection = nil
+                        entities = []
+                        musicSpeakerID = nil
+                        musicTrack = ""
+                        musicStatus = nil
+                    }.disabled(busy)
                 }
             }
             if busy { ProgressView() }
@@ -88,6 +129,27 @@ struct HomeAssistantView: View {
             busy = false
             await refresh()
         } catch { busy = false; problem = error.localizedDescription }
+    }
+
+    private var readyTrack: String { musicTrack.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private func playMusicTrack(mode: MusicAssistantQueueMode) async {
+        guard !busy, let connection, let speaker = selectedMusicSpeaker, !readyTrack.isEmpty else { return }
+        busy = true
+        problem = nil
+        musicStatus = nil
+        var fields = connection.fields
+        fields["entityId"] = speaker.id
+        fields["track"] = readyTrack
+        fields["mode"] = mode.rawValue
+        do {
+            let _: EmptyValue = try await RustBridge.call("musicAssistantPlayTrack", fields: fields)
+            musicStatus = mode == .add ? "Queue updated on \(speaker.name)." : "Playback requested on \(speaker.name)."
+            await refresh()
+        } catch {
+            busy = false
+            problem = error.localizedDescription
+        }
     }
 }
 
