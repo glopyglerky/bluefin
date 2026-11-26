@@ -27,12 +27,12 @@ fn account(v: &Value) -> Result<String> {
         format!("{}\n{}", server(v)?, text(v, "userId")?).as_bytes(),
     ))
 }
-struct Dir {
+pub(super) struct Dir {
     file: File,
     path: PathBuf,
 }
 impl Dir {
-    fn root(raw: &str) -> Result<Self> {
+    pub(super) fn root(raw: &str) -> Result<Self> {
         let p = Path::new(raw);
         if !p.is_absolute() {
             return Err(err("Cache root must be absolute"));
@@ -72,7 +72,7 @@ impl Dir {
         readable.path = d.path;
         Ok(readable)
     }
-    fn child(&self, n: &str, create: bool) -> Result<Self> {
+    pub(super) fn child(&self, n: &str, create: bool) -> Result<Self> {
         self.child_with_access(n, create, libc::O_RDONLY)
     }
     fn child_with_access(&self, n: &str, create: bool, access: i32) -> Result<Self> {
@@ -100,11 +100,11 @@ impl Dir {
             path: self.path.join(n),
         })
     }
-    fn open(&self, n: &str, write: bool) -> Result<File> {
+    pub(super) fn open(&self, n: &str, write: bool) -> Result<File> {
         self.open_existing(n, write)?
             .ok_or_else(|| err("Unsafe or unavailable cache file"))
     }
-    fn open_existing(&self, n: &str, write: bool) -> Result<Option<File>> {
+    pub(super) fn open_existing(&self, n: &str, write: bool) -> Result<Option<File>> {
         let c = CString::new(n).map_err(|_| err("Invalid cache name"))?;
         let flags = if write {
             libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL
@@ -132,7 +132,7 @@ impl Dir {
         }
         Ok(Some(f))
     }
-    fn remove(&self, n: &str) -> Result<()> {
+    pub(super) fn remove(&self, n: &str) -> Result<()> {
         let c = CString::new(n).map_err(|_| err("Invalid cache name"))?;
         let rc = unsafe { libc::unlinkat(self.file.as_raw_fd(), c.as_ptr(), 0) };
         if rc != 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::NotFound {
@@ -140,7 +140,7 @@ impl Dir {
         }
         Ok(())
     }
-    fn rename(&self, a: &str, b: &str) -> Result<()> {
+    pub(super) fn rename(&self, a: &str, b: &str) -> Result<()> {
         let a = CString::new(a).unwrap();
         let b = CString::new(b).unwrap();
         if unsafe {
@@ -156,11 +156,15 @@ impl Dir {
         }
         self.file.sync_all().map_err(|_| err("Cache sync failed"))
     }
-    fn lock(&self) -> Result<()> {
+    pub(super) fn lock(&self) -> Result<()> {
         if unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err(err("Cache is in use by another operation"));
         }
         Ok(())
+    }
+    pub(super) fn path(&self) -> &Path { &self.path }
+    pub(super) fn sync(&self) -> Result<()> {
+        self.file.sync_all().map_err(|_| err("Local storage sync failed"))
     }
     fn read_json(&self, n: &str) -> Result<Value> {
         self.read_optional_json(n)?

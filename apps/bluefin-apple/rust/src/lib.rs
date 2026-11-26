@@ -22,6 +22,7 @@ mod karaoke;
 mod native_server;
 mod native_video;
 mod offline;
+mod owned_music;
 mod playback_resources;
 mod premium;
 #[cfg(feature = "iroh-probe")]
@@ -534,6 +535,10 @@ fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
 /// JSON interface, also useful for non-FFI hosts. Synchronous and bounded.
 pub fn call(v: &Value) -> Result<Value> {
     let op = text(v, "operation")?;
+    if matches!(op, "ownedLibraryList" | "ownedLibraryImport" | "ownedLibraryRemove" | "ownedLibraryQueue"
+        | "ownedLibrarySelect" | "ownedLibraryAdvance" | "ownedLibraryPlay" | "ownedLibrarySearch") {
+        return owned_music::call(v, op);
+    }
     if matches!(op, "localAssistPrepare" | "localAssistComplete" | "localAssistCancel") {
         return local_assistance::call(v, op);
     }
