@@ -38,8 +38,6 @@ bluefin-iroh-modern = { path = "../bluefin-apple/iroh-modern", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 mesh-connect = { path = "../../crates/mesh-connect", default-features = false, features = ["images", "browser"] }
-# Match Iroh's wasm-streams version so wasm-bindgen exports each stream helper once.
-reqwest = { version = "=0.13.5", default-features = false, features = ["json", "stream"] }
 n0-future = "=0.3.2"
 getrandom = { version = "=0.4.3", features = ["wasm_js"] }
 zeroize = "1"

@@ -55,6 +55,13 @@ pub struct Service {
 impl Service {
     /// Activates the issuer; an older process fails its next epoch comparison.
     pub async fn new(db:Database, published_url:&str, address:ServerAddress)->Result<Arc<Self>,ApiError> {
+        Self::new_with_web_launch(db, published_url, address, None).await
+    }
+    /// The operator may host the launch page separately. This does not change
+    /// the passkey relying party, allowed ceremony origin or account API.
+    pub async fn new_with_web_launch(
+        db:Database, published_url:&str, address:ServerAddress, web_launch_url:Option<&str>,
+    )->Result<Arc<Self>,ApiError> {
         if address.service!=SERVICE { return Err(failed()); }
         let origin_url=Url::parse(published_url).map_err(|_|failed())?;
         if origin_url.scheme()!="https" || !origin_url.username().is_empty() || origin_url.password().is_some()
@@ -65,7 +72,10 @@ impl Service {
             .map_err(|_|failed())?.rp_name("Bluefin").build().map_err(|_|failed())?;
         let mut browser_page=origin_url.clone();
         browser_page.path_segments_mut().map_err(|_|failed())?.pop_if_empty().extend(["Bluefin","Accounts","Mesh","Passkey"]);
-        let web_launch=WebLaunchBase::parse(&format!("{origin}/web/bluefin/")).map_err(|_|failed())?;
+        let default_launch=format!("{origin}/web/bluefin/");
+        // Validate before activating a new epoch: a bad launch configuration
+        // must not retire the existing live issuer.
+        let web_launch=WebLaunchBase::parse(web_launch_url.unwrap_or(&default_launch)).map_err(|_|failed())?;
         let epoch=random()?;
         let mut tx=db.writer().begin_with("BEGIN IMMEDIATE").await.map_err(storage)?;
         sqlx::query("INSERT INTO BluefinMeshAuthority(Id,AuthorityId,LiveEpoch,Generation) VALUES(1,?,?,1) ON CONFLICT(Id) DO NOTHING")

@@ -122,14 +122,14 @@ pub fn api_url(base: &Url, path: &str, query: &[(&str, String)]) -> Result<Url> 
     Ok(url)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn client() -> reqwest::Client {
-    let builder = reqwest::Client::builder();
-    #[cfg(not(target_arch = "wasm32"))]
-    let builder = builder
+    reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(25));
-    builder.build().expect("HTTP client")
+        .timeout(std::time::Duration::from_secs(25))
+        .build()
+        .expect("HTTP client")
 }
 
 #[cfg(not(target_arch = "wasm32"))]

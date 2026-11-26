@@ -79,3 +79,5 @@ This feature was authored for the public Bluefin source. It does not copy privat
 ## Private artwork routing
 
 The generic native artwork entry point refuses `owned-` item IDs before any cache/network lookup. Local rows and Now Playing therefore use local placeholder artwork; the private content digest is not sent to a connected server to search for a cover. The prefix only prevents network routing. It never grants file access or sharing rights.
+
+Catalog admission is validated before a completed staging record can be replayed. A same-content import with a conflicting format (for example ID3-prefixed bytes under MP3/AAC names) leaves only an incomplete stage; recovery removes that exact stage and preserves the original catalog and playable copy. The Rust fixture `conflicting_duplicate_format_never_traps_catalog_recovery` covers this rollback and the next successful import.

@@ -115,24 +115,63 @@ pub fn control(handle: String, command: String, value: f64) -> Result<(), JsValu
         Ok(())
     })
 }
+#[wasm_bindgen(js_name = webMeshStop)]
+pub async fn stop(handle: String) -> Result<(), JsValue> {
+    let receipt = PLAYER.with(|player| {
+        let player = player.borrow();
+        let Some((current, service)) = player.as_ref() else { return Ok(None); };
+        if current != &handle { return Err(JsValue::from_str("Playback account mismatch.")); }
+        let status = service.snapshot();
+        if status.finished {
+            return if status.cleanup_acknowledged { Ok(None) }
+                else { Err(JsValue::from_str("Playback retired without confirmed remote cleanup. Reload before starting another source.")) };
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        service.send(Command::StopReceipt(tx));
+        Ok(Some(rx))
+    })?;
+    let Some(receipt) = receipt else { return Ok(()); };
+    n0_future::time::timeout(Duration::from_secs(45), async {
+        loop {
+            match receipt.try_recv() {
+                Ok(result) => return result.map_err(error),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) =>
+                    return Err(JsValue::from_str("The playback retirement receipt was lost.")),
+                Err(std::sync::mpsc::TryRecvError::Empty) =>
+                    n0_future::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+    }).await.map_err(|_| JsValue::from_str("Playback retirement is still pending. Reload before starting another source."))?
+}
 #[wasm_bindgen(js_name = webMeshLogout)]
 pub async fn logout(handle: String) -> Result<(), JsValue> {
-    let playback=PLAYER.with(|player| {
-        let mut player=player.borrow_mut();
-        if player.as_ref().is_some_and(|(current,_)| current==&handle) {player.take()} else {None}
+    // Keep the service owned until it has finished. A timeout must not drop it
+    // and permit a second service while delayed cleanup can still run.
+    let playback = PLAYER.with(|player| {
+        let player = player.borrow();
+        player.as_ref().filter(|(current,_)| current == &handle).map(|(_,service)| {
+            service.send(Command::Logout);
+            service.status.clone()
+        })
     });
-    if let Some((_,service))=playback {
-        service.send(Command::Logout);
-        // Service owns draining any in-flight PlaybackInfo before remote release.
-        let result=n0_future::time::timeout(Duration::from_secs(45),async {
+    if let Some(status) = playback {
+        let result = n0_future::time::timeout(Duration::from_secs(45),async {
             loop {
-                let state=service.snapshot();
-                if state.finished {break if state.revoked {Ok(())} else {Err(JsValue::from_str(&state.message))};}
+                let state = status.lock().unwrap().clone();
+                if state.finished {
+                    break if state.revoked { Ok(()) } else { Err(JsValue::from_str(&state.message)) };
+                }
                 n0_future::time::sleep(Duration::from_millis(100)).await;
             }
         }).await.map_err(|_| JsValue::from_str("Local playback stopped. Remote sign-out is not confirmed."))?;
+        PLAYER.with(|player| {
+            let mut player=player.borrow_mut();
+            if player.as_ref().is_some_and(|(current,service)| current == &handle && service.snapshot().finished) {
+                player.take();
+            }
+        });
         result
-    } else {mesh::logout(&handle).await.map_err(error)}
+    } else { mesh::logout(&handle).await.map_err(error) }
 }
 #[wasm_bindgen(js_name = webMeshSuspend)]
 pub async fn suspend(handle: String) -> Result<(), JsValue> { mesh::suspend(&handle).await.map_err(error) }
