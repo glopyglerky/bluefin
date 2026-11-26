@@ -8,11 +8,12 @@ struct KaraokeLyricsView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var following = true
     @State private var leaving = false
+    @State private var microphoneVisible = false
     var body: some View {
         VStack(spacing: 0) {
             // Read AVPlayer's actual clock each frame. Never extrapolate through pause/buffering.
-            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !playback.isPlaying)) { _ in
-                let time = playback.player.currentTime().seconds
+            TimelineView(.animation(minimumInterval: reduceMotion ? 1.0 / 8 : 1.0 / 30, paused: !playback.isPlaying)) { _ in
+                let time = playback.lyricPositionSeconds
                 let active = audio.package.timeline.activeLines(at: time)
                 ScrollViewReader { reader in
                     ScrollView {
@@ -43,12 +44,16 @@ struct KaraokeLyricsView: View {
                         guard following, let id else { return }
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { reader.scrollTo(id, anchor: .center) }
                     }
+                    .onChange(of: following) { enabled in
+                        guard enabled, let id = active.first?.id else { return }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { reader.scrollTo(id, anchor: .center) }
+                    }
                     .overlay(alignment: .bottomTrailing) {
                         if !following {
                             Button("Follow lyrics") {
                                 following = true
-                                if let id = active.first?.id { reader.scrollTo(id, anchor: .center) }
-                            }.buttonStyle(.bordered).padding()
+                            }.padding(.horizontal, 16).padding(.vertical, 12)
+                                .modifier(BluefinGlassSurface(cornerRadius: 24)).padding()
                         }
                     }
                 }
@@ -78,23 +83,25 @@ struct KaraokeLyricsView: View {
                     Spacer()
                     Button(playback.isPlaying ? "Pause" : "Play") { playback.toggle() }
                 }.buttonStyle(.bordered)
-                #if os(tvOS)
-                if #available(tvOS 17.0, *) {
-                    KaraokeContinuityControls(microphone: playback.continuityMicrophone)
-                } else { Text("iPhone microphone support requires tvOS 17 or later and compatible Apple TV hardware.").font(.caption).foregroundStyle(.secondary) }
-                #else
-                KaraokeMicrophoneControls(microphone: playback.karaokeMicrophone)
-                #endif
-                Text(audio.qualityDescription).font(.caption).foregroundStyle(.secondary)
+                Button { microphoneVisible.toggle() } label: { Label("Microphone", systemImage: "mic.fill") }
+                if microphoneVisible {
+                    #if os(tvOS)
+                    if #available(tvOS 17.0, *) {
+                        KaraokeContinuityControls(microphone: playback.continuityMicrophone)
+                    } else { Text("An iPhone microphone requires tvOS 17 or later and a compatible Apple TV.").font(.caption).foregroundStyle(.secondary) }
+                    #else
+                    KaraokeMicrophoneControls(microphone: playback.karaokeMicrophone)
+                    #endif
+                }
                 Button("Return to original audio") {
                     leaving = true
                     Task { await playback.disableKaraoke(); leaving = false }
                 }.disabled(leaving)
             }.padding(20).frame(maxWidth: 760).frame(maxWidth: .infinity)
-            }.frame(maxHeight: dynamicTypeSize.isAccessibilitySize ? 340 : 280).background(.ultraThinMaterial)
+            }.frame(maxHeight: dynamicTypeSize.isAccessibilitySize || microphoneVisible ? 340 : 220)
+                .modifier(BluefinGlassSurface(cornerRadius: 28)).padding(.horizontal, 16).padding(.bottom, 12)
         }
         .background(BluefinBackground())
-        .preferredColorScheme(.dark)
         .onDisappear { playback.stopKaraokeMicrophones() }
     }
     private func tint(_ voice: KaraokeLine.Voice) -> Color { voice == .partner ? .mint : voice == .backing ? .orange : BluefinStyle.accent }
@@ -104,43 +111,54 @@ struct KaraokeLyricsView: View {
     private func words(_ line: KaraokeLine, at seconds: Double) -> some View {
         // Canvas wraps measured tokens and clips each colored overlay using its
         // supplied timing. No word boundaries or timing are inferred from line text.
-        return KaraokePreparationWordFill(line: line, seconds: seconds, color: tint(line.voice))
+        return TimedLyricsWordFill(runs: line.tokens.map { .init(text: $0.text, start: $0.start, end: $0.end) },
+                                   seconds: seconds, color: tint(line.voice), rightAligned: line.voice == .partner)
             .accessibilityHidden(true)
 
     }
 }
 
-private struct KaraokeMicrophoneControls: View {
+struct KaraokeMicrophoneControls: View {
     @ObservedObject var microphone: KaraokeMicrophone
     @State private var requesting = false
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             #if os(iOS)
-            Button(microphone.isMonitoring ? "Stop microphone" : "Monitor microphone") {
+            Button(microphone.isMonitoring ? "Stop microphone" : "Start headphone microphone") {
                 if microphone.isMonitoring { microphone.stop() }
                 else { requesting = true; Task { await microphone.start(); requesting = false } }
             }.disabled(requesting)
             #endif
-            Text(microphone.status).font(.caption).foregroundStyle(.secondary)
-        }
+            Label(microphone.status, systemImage: microphone.isMonitoring ? "mic.fill" : "mic.slash.fill")
+                .font(.caption).foregroundStyle(microphone.isMonitoring ? BluefinStyle.accent : .secondary)
+            #if os(iOS)
+            Text("For your TV, open Bluefin’s Sing controls on Apple TV and choose Connect iPhone microphone.")
+                .font(.caption).foregroundStyle(.secondary)
+            #endif
+        }.onDisappear { microphone.stop() }
     }
 }
 
 /// Word/syllable fill uses supplied token intervals. Canvas measures each token,
 /// wraps at token boundaries and clips only its colored overlay as time advances.
-private struct KaraokePreparationWordFill: View {
-    let line: KaraokeLine
+struct TimedLyricsWordFill: View {
+    let runs: [LyricDisplayRun]
     let seconds: Double
     let color: Color
+    var rightAligned = false
     @State private var height: CGFloat = 80
+    #if os(tvOS)
+    @ScaledMetric(relativeTo: .title) private var fontSize: CGFloat = 48
+    #else
     @ScaledMetric(relativeTo: .title) private var fontSize: CGFloat = 28
+    #endif
     var body: some View {
         GeometryReader { _ in
             Canvas { context, size in
                 let row = fontSize * 1.6
-                var rows: [[(KaraokeToken, CGFloat)]] = [[]]
+                var rows: [[(LyricDisplayRun, CGFloat)]] = [[]]
                 var widths: [CGFloat] = [0]
-                for token in line.tokens {
+                for token in runs {
                     let text = Text(token.text).font(.system(size: fontSize, weight: .bold, design: .rounded))
                     let width = min(size.width, context.resolve(text).measure(in: CGSize(width: .infinity, height: row)).width)
                     let index = rows.count - 1
@@ -149,7 +167,7 @@ private struct KaraokePreparationWordFill: View {
                 }
                 var y: CGFloat = 0
                 for (index, tokens) in rows.enumerated() {
-                    var x: CGFloat = line.voice == .partner ? max(0, size.width - widths[index]) : 0
+                    var x: CGFloat = rightAligned ? max(0, size.width - widths[index]) : 0
                     var rowHeight = row
                     for (token, width) in tokens {
                         let text = Text(token.text).font(.system(size: fontSize, weight: .bold, design: .rounded))
@@ -157,7 +175,7 @@ private struct KaraokePreparationWordFill: View {
                         let h = max(row, measured.height)
                         rowHeight = max(rowHeight, h)
                         let rect = CGRect(x: x, y: y, width: width, height: h)
-                        context.draw(text.foregroundColor(.white.opacity(0.5)), in: rect)
+                        context.draw(text.foregroundColor(BluefinStyle.text.opacity(0.5)), in: rect)
                         var fill = context
                         fill.clip(to: Path(CGRect(x: x, y: y, width: width * token.progress(at: seconds), height: h)))
                         fill.draw(text.foregroundColor(color), in: rect)

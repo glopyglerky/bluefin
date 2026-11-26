@@ -370,9 +370,70 @@ extension MediaItem {
     }
 }
 
+/// The compatibility API uses 100 ns ticks and UTF-16 cue ranges.
 struct BluefinLyrics: Decodable {
-    struct Metadata: Decodable { var IsSynced: Bool?; var Offset: Int64? }
-    struct Line: Decodable { var Text: String; var Start: Int64? }
+    struct Metadata: Decodable { var IsSynced: Bool?; var Offset: Int64?; var Length: Int64? }
+    struct Cue: Decodable {
+        var Start: Int64?
+        var End: Int64?
+        var Position: Int?
+        var EndPosition: Int?
+    }
+    struct Line: Decodable {
+        var Text: String
+        var Start: Int64?
+        var Cues: [Cue]?
+
+        var displayRuns: [LyricDisplayRun] {
+            var runs: [LyricDisplayRun] = []
+            var cursor = Text.startIndex
+            var previousPosition = 0
+            var previousEnd: Int64 = 0
+            let length = Text.utf16.count
+            let boundaries = Set(Text.indices.map { $0.utf16Offset(in: Text) } + [length])
+            for cue in Cues ?? [] {
+                guard let position = cue.Position, let endPosition = cue.EndPosition,
+                      position >= previousPosition, endPosition > position, endPosition <= length,
+                      boundaries.contains(position), boundaries.contains(endPosition),
+                      let range = Range(NSRange(location: position, length: endPosition - position), in: Text),
+                      let start = cue.Start, let end = cue.End, start >= previousEnd, end > start else { continue }
+                if cursor < range.lowerBound { runs.append(.init(text: String(Text[cursor..<range.lowerBound]))) }
+                runs.append(.init(text: String(Text[range]), start: Double(start) / 10_000_000,
+                                  end: Double(end) / 10_000_000))
+                cursor = range.upperBound; previousPosition = endPosition; previousEnd = end
+            }
+            if cursor < Text.endIndex { runs.append(.init(text: String(Text[cursor...]))) }
+            return runs
+        }
+    }
     var Metadata: Metadata
     var Lyrics: [Line]
+
+    /// Older servers omit IsSynced while supplying real line timestamps.
+    var isSynced: Bool {
+        self.Metadata.IsSynced ?? Lyrics.contains { $0.Start.map { $0 >= 0 } == true }
+    }
+    var offsetSeconds: Double { Double(self.Metadata.Offset ?? 0) / 10_000_000 }
+    func activeIndex(at seconds: Double) -> Int? {
+        guard isSynced, seconds.isFinite, seconds >= 0 else { return nil }
+        return Lyrics.lastIndex { line in
+            line.Start.map { $0 >= 0 && seconds >= Double($0) / 10_000_000 + offsetSeconds } == true
+        }
+    }
+    func seekSeconds(for index: Int) -> Double? {
+        guard Lyrics.indices.contains(index), isSynced,
+              let start = Lyrics[index].Start, start >= 0 else { return nil }
+        return max(0, Double(start) / 10_000_000 + offsetSeconds)
+    }
+}
+
+/// Untimed text remains readable; partial word fills require a valid supplied interval.
+struct LyricDisplayRun {
+    var text: String
+    var start: Double? = nil
+    var end: Double? = nil
+    func progress(at seconds: Double) -> Double {
+        guard let start, let end, seconds.isFinite, start.isFinite, end.isFinite, end > start else { return 0 }
+        return min(1, max(0, (seconds - start) / (end - start)))
+    }
 }

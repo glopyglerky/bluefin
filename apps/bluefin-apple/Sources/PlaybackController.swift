@@ -10,6 +10,12 @@ import SwiftUI
     @Published var failure: String?
     @Published var reportingFailure: String?
     @Published var positionSeconds: Double = 0
+    /// Lyrics sample the media clock, including a server seek-window offset.
+    /// Sampling never advances a separate timer through pause or buffering.
+    var lyricPositionSeconds: Double {
+        let seconds = player.currentItem == nil ? positionSeconds : player.currentTime().seconds + Double(timelineOffsetTicks) / 10_000_000
+        return seconds.isFinite ? max(0, seconds) : positionSeconds
+    }
     @Published var isPlaying = false
     @Published var isBuffering = false
     @Published var isFavorite = false
@@ -134,6 +140,7 @@ import SwiftUI
             Task { @MainActor [weak self] in
                 guard let self, !self.stopped else { return }
                 self.isPlaying = self.player.rate > 0
+                if !self.isPlaying { self.stopKaraokeMicrophones() }
                 guard self.initialSeekDone else { return }
                 if self.player.rate > 0 { self.presentationRate = self.player.rate }
                 if self.player.rate > 0 && !self.started {
@@ -459,7 +466,7 @@ import SwiftUI
 
     func toggle() {
         if stopped { onReplay?(); return }
-        if player.rate > 0 { player.pause() } else { resume() }
+        if player.rate > 0 { stopKaraokeMicrophones(); player.pause() } else { resume() }
     }
     var supportedPresentationRates: [Float] {
         if karaoke != nil { return [1] }
@@ -484,7 +491,18 @@ import SwiftUI
         if seconds < offset {
             guard seconds <= Double(Int64.max / 10_000_000) else { return }
             onSeekOutsideWindow?(Int64(seconds * 10_000_000))
-        } else { player.seek(to: CMTime(seconds: seconds - offset, preferredTimescale: 600)) }
+        } else {
+            let native = player.currentItem
+            let tolerance: CMTime = item.Type == "Audio" ? .zero : .positiveInfinity
+            player.seek(to: CMTime(seconds: seconds - offset, preferredTimescale: 10_000_000),
+                        toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self, weak native] finished in
+                Task { @MainActor [weak self, weak native] in
+                    guard let self, finished, !self.stopped, self.player.currentItem === native else { return }
+                    // Publish the completed seek so a paused TimelineView re-samples the native clock.
+                    self.positionSeconds = self.lyricPositionSeconds
+                }
+            }
+        }
     }
 
     private static func displayMetadata(for item: MediaItem) -> [AVMetadataItem] {

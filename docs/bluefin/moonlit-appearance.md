@@ -1,6 +1,6 @@
 # Bluefin moonlit appearance
 
-A focused visual refresh using deep navy, mist gray, moon silver, muted lavender, and faint static engraving. Existing navigation, spacing, media artwork, and playback behavior are retained.
+A focused visual refresh using deep navy, mist gray, moon silver, muted lavender, and smooth backgrounds. Media artwork and the established fin-and-wave identity are retained.
 
 ## Palette
 
@@ -17,7 +17,7 @@ A focused visual refresh using deep navy, mist gray, moon silver, muted lavender
 | Primary label | `#CCD0D3` | `#061727` |
 | Control border | `#465966` | `#637889` |
 
-The original lavender is decorative in light mode because its contrast against mist is too low for small labels. Native icon geometry remains the established curved fin above two waves. Web and Android marks now share those paths. Grain and engraving stay on broad backgrounds; fields, controls, artwork, and QR modules remain clear. QR paper stays white with navy modules and lavender footer detailing.
+The original lavender is decorative in light mode because its contrast against mist is too low for small labels. Native icon geometry remains the established curved fin above two waves. Web and Android marks now share those paths. Backgrounds are smooth. Glass is reserved for floating navigation and player controls; fields, artwork, lyrics, and QR modules remain clear. QR paper stays white with navy modules and lavender footer detailing.
 
 ## Client coverage
 
@@ -29,7 +29,7 @@ The original lavender is decorative in light mode because its contrast against m
 - Browser TV, Tizen, and webOS use light/dark CSS. Vega uses its existing React Native system-color hook.
 - Roku retains its existing dark-only presentation.
 
-## Verification on 2026-11-26
+## Initial palette verification on 2026-11-26
 
 - Existing progressive web and packaging suites: 46 passed, zero failed.
 - JavaScript syntax check and Git whitespace checks passed.
@@ -42,3 +42,7 @@ The original lavender is decorative in light mode because its contrast against m
 Full application builds, installed-device acceptance, and browser rendering are not qualified by these checks. Available local browser launchers had no installed browser binary. The native Rust compile was not run because the existing Cargo source cache target was unavailable. The supplied visual concept illustrates the intended appearance.
 
 Source base: `45ead646a880996e89f6869c18724ac2e8e943b6`. This theme work is isolated on `work/bluefin-moonlit-theme-20261126`.
+
+## Music and materials update
+
+The subsequent [music playback and materials update](music-playback-and-materials.md) removes the repeating line texture, adopts public Liquid Glass controls on supported Apple systems, and adds media-clock lyric rendering. Its release qualification is separate from the initial palette checks above.

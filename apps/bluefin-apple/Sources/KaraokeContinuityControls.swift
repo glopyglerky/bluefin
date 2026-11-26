@@ -28,9 +28,12 @@ import AVFoundation
         _lifecycle = ObservedObject(wrappedValue: microphone.lifecycle)
     }
     var body: some View {
-        VStack(alignment: .leading) {
-            Text(lifecycle.status).accessibilityLabel("Microphone: \(lifecycle.status)")
+        VStack(alignment: .leading, spacing: 12) {
+            Label(lifecycle.status, systemImage: lifecycle.state == .monitoring && !lifecycle.isMuted ? "mic.fill" : "mic.slash.fill")
+                .font(.headline).foregroundStyle(lifecycle.state == .monitoring && !lifecycle.isMuted ? BluefinStyle.accent : .secondary)
+                .accessibilityLabel("Microphone: \(lifecycle.status)")
             if AVContinuityDevicePickerViewController.isSupported {
+                if lifecycle.state != .connectedMuted && lifecycle.state != .requestingPermission && lifecycle.state != .monitoring {
                 Button("Connect iPhone microphone") {
                     guard ["NSMicrophoneUsageDescription", "NSCameraUsageDescription"].allSatisfy({ key in
                         guard let value = Bundle.main.object(forInfoDictionaryKey: key) as? String else { return false }
@@ -43,18 +46,23 @@ import AVFoundation
                     picker = lifecycle.state == .selecting
                 }
                 .disabled(picker)
+                }
                 if lifecycle.state == .connectedMuted {
-                    Button("Enable local voice monitoring") { Task { await lifecycle.enable() } }
-                    Text("Start at low TV volume. Stop if you hear feedback.")
+                    Button("Start microphone") { Task { await lifecycle.enable() } }
+                    Text("Your voice plays through the TV. Start with a low TV volume.").font(.caption).foregroundStyle(.secondary)
                 }
                 if lifecycle.state == .monitoring {
                     // tvOS uses focusable buttons rather than an unavailable Slider.
                     HStack {
+                        Button(lifecycle.isMuted ? "Unmute" : "Mute") { lifecycle.setMuted(!lifecycle.isMuted) }
                         Button("Voice quieter") { lifecycle.setGain(lifecycle.gain - 0.025) }
                         Button("Voice louder") { lifecycle.setGain(lifecycle.gain + 0.025) }
                     }
                 }
-                Button("Stop microphone") { picker = false; microphone.stop() }
+                if lifecycle.state == .requestingPermission { ProgressView("Waiting for microphone permission") }
+                if lifecycle.state == .connectedMuted || lifecycle.state == .requestingPermission || lifecycle.state == .monitoring {
+                    Button("Disconnect microphone") { picker = false; microphone.stop() }
+                }
             } else { Text("This Apple TV does not support Continuity microphones.") }
         }
         .continuityDevicePicker(isPresented: $picker) { device in
@@ -64,9 +72,9 @@ import AVFoundation
             if !device.isConnected { lifecycle.interrupted() }
         }
         .onChange(of: scenePhase) { phase in
-            if phase != .active { picker = false; microphone.stop() }
+            if phase == .background || (phase == .inactive && lifecycle.state == .monitoring) { picker = false; microphone.stop() }
         }
-        .onDisappear { picker = false; microphone.stop() }
+        .onDisappear { if !picker { microphone.stop() } }
     }
 }
 #endif
