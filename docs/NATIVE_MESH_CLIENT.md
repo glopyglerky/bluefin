@@ -125,3 +125,7 @@ not qualify them.
 Primary platform guidance:
 - https://developer.apple.com/documentation/authenticationservices/aswebauthenticationsession
 - https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy
+
+## Follow-up lifecycle review
+
+A cancelled Begin, Finish, or signup-status response is persisted before cancellation is honored. Discard after a possibly sent Finish keeps the exact request and device key, replays only that request, and queues confirmed sessions for revocation. A pending signup cannot be forgotten as if the server denied it: the cleanup intent remains until an authenticated denial or a session eligible for revocation is observed. Browser callbacks carry their own generation, and account acceptance rechecks its generation after the Watch account-change await. Sign-out stops local playback, joins local downloads, and closes proxies before Keychain or remote cleanup can fail. A failed durable sign-out transfer retains credentials for retry and explicitly reports that sign-out was not saved. These follow-ups remain source-level changes pending the admitted Apple build/device lane.

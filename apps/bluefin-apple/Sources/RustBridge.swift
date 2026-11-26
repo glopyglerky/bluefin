@@ -62,7 +62,9 @@ enum RustBridge {
                 }
             }
         }.value
-        if Task.isCancelled && !["releasePlayback", "stopPlaybackProxy", "meshCloseResources", "meshLocalSignOut", "meshRevoke"].contains(operation) {
+        // Pairing receipts must reach their caller even after cancellation so
+        // it can persist the exact outcome before honoring the cancellation.
+        if Task.isCancelled && !["releasePlayback", "stopPlaybackProxy", "meshCloseResources", "meshLocalSignOut", "meshRevoke", "meshBegin", "meshFinish", "meshStatus"].contains(operation) {
             if operation == "playback" { try await cleanupPlaybackResponse(response, session: session) }
             throw CancellationError()
         }

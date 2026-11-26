@@ -58,6 +58,7 @@ import UIKit
 
     func resume() {
         start {
+            if self.pending?.discardRequested == true { try await self.discardSavedRequest(); return }
             if self.pending?.begin == nil { try await self.obtainChallenge() }
             else if self.pending?.completion == nil { try await self.prepareBrowser() }
         }
@@ -72,13 +73,13 @@ import UIKit
             "requestId": saved.identity.beginRequestId, "deviceLabel": deviceLabel]
         if let name = saved.accountName { fields["accountName"] = name }
         let begin: MeshBeginResponse = try await RustBridge.call("meshBegin", fields: fields)
-        try Task.checkCancellation()
         saved.begin = begin
         // Begin has spent the invitation. Its secret is no longer needed.
         saved.code = nil
         try MeshPendingVault.save(saved)
         pending = saved
         preview = nil
+        try Task.checkCancellation()
         try await prepareBrowser()
     }
 
@@ -95,7 +96,8 @@ import UIKit
     }
 
     private func prepareBrowser() async throws {
-        guard let begin = pending?.begin, pending?.signupHandle == nil else { return }
+        guard let begin = pending?.begin, pending?.signupHandle == nil,
+              pending?.discardRequested != true else { return }
         let result: MeshBrowserLocation = try await RustBridge.call("meshBrowserValidate", fields: [
             "apiOrigin": begin.apiOrigin, "challengeId": begin.challengeId,
             "browserUrl": begin.passkey["browserUrl"].foundation])
@@ -128,6 +130,9 @@ import UIKit
         guard var saved = pending, let begin = saved.begin else {
             throw BluefinError.message("Resume the saved connection first.")
         }
+        guard saved.discardRequested != true else {
+            try await discardSavedRequest(); return
+        }
         if let completion = saved.completion {
             try await complete(completion, saved: saved, store: store)
             return
@@ -136,7 +141,6 @@ import UIKit
             let status: MeshSignupStatus = try await RustBridge.call("meshStatus", fields: [
                 "deviceSeed": saved.identity.deviceSeed,
                 "serverAddress": begin.serverAddress.foundation, "handle": handle])
-            try Task.checkCancellation()
             guard let completion = status.session else {
                 problem = status.state == "pending"
                     ? "Your request is waiting for approval. Check again after the administrator approves it."
@@ -161,13 +165,13 @@ import UIKit
         let completion: MeshCompletion = try await RustBridge.call("meshFinish", fields: [
             "deviceSeed": saved.identity.deviceSeed, "serverAddress": begin.serverAddress.foundation,
             "request": prepared.request.foundation])
-        try Task.checkCancellation()
         if completion.kind == "signup", let handle = completion.handle {
             saved.signupHandle = handle
             saved.prepared = nil
             try MeshPendingVault.save(saved)
             pending = saved
             browserURL = nil
+            try Task.checkCancellation()
             problem = "Your request is waiting for administrator approval."
             return
         }
@@ -183,6 +187,7 @@ import UIKit
         settled.completion = completion
         try MeshPendingVault.save(settled)
         pending = settled
+        try Task.checkCancellation()
         let connection = MeshSavedSession(serverAddress: begin.serverAddress, sessionId: id,
             deviceSeed: saved.identity.deviceSeed, apiOrigin: begin.apiOrigin,
             deviceId: saved.identity.deviceId, userId: userId)
@@ -192,19 +197,60 @@ import UIKit
     }
 
     func discard() {
-        start {
-            if let saved = self.pending, let result = saved.completion,
-               let id = result.id, let user = result.userId, let begin = saved.begin {
-                let connection = MeshSavedSession(serverAddress: begin.serverAddress, sessionId: id,
-                    deviceSeed: saved.identity.deviceSeed, apiOrigin: begin.apiOrigin,
-                    deviceId: saved.identity.deviceId, userId: user)
-                try await MeshRevocationQueue.shared.prepareConnection(connection)
-                try MeshSessionVault.clear(reference: id)
+        start { try await self.discardSavedRequest() }
+    }
+
+    /// A sent Finish may have committed even when its reply was lost. Preserve
+    /// the exact operation and key until reconciliation can retain a revocation.
+    private func discardSavedRequest() async throws {
+        guard var saved = pending else { return }
+        saved.discardRequested = true
+        try MeshPendingVault.save(saved)
+        pending = saved
+        browserURL = nil
+        if saved.completion == nil, let begin = saved.begin {
+            if let prepared = saved.prepared, saved.signupHandle == nil {
+                let result: MeshCompletion = try await RustBridge.call("meshFinish", fields: [
+                    "deviceSeed": saved.identity.deviceSeed,
+                    "serverAddress": begin.serverAddress.foundation, "request": prepared.request.foundation])
+                if result.kind == "signup", let handle = result.handle {
+                    saved.signupHandle = handle
+                    // Retain the exact Finish as recovery evidence as well.
+                } else if result.kind == "session" {
+                    saved.completion = result
+                } else { throw BluefinError.message("The connection outcome is unconfirmed. Retry this saved request.") }
+                try MeshPendingVault.save(saved)
+                pending = saved
+                try Task.checkCancellation()
             }
-            try MeshPendingVault.clear()
-            self.pending = nil; self.preview = nil; self.browserURL = nil; self.problem = nil
-            Task { await MeshRevocationQueue.shared.retry() }
+            if saved.completion == nil, let handle = saved.signupHandle {
+                let status: MeshSignupStatus = try await RustBridge.call("meshStatus", fields: [
+                    "deviceSeed": saved.identity.deviceSeed,
+                    "serverAddress": begin.serverAddress.foundation, "handle": handle])
+                if let completion = status.session {
+                    saved.completion = completion
+                    try MeshPendingVault.save(saved)
+                    pending = saved
+                    try Task.checkCancellation()
+                } else if status.state != "denied" {
+                    throw BluefinError.message("This request may still be approved. Its protected cleanup key is retained. Ask the administrator to deny it, or check again to finish disconnecting.")
+                }
+            }
         }
+        if let result = saved.completion {
+            guard result.kind == "session", let id = result.id, let user = result.userId,
+                  let begin = saved.begin else {
+                throw BluefinError.message("The connection outcome is unconfirmed. Retry this saved request.")
+            }
+            let connection = MeshSavedSession(serverAddress: begin.serverAddress, sessionId: id,
+                deviceSeed: saved.identity.deviceSeed, apiOrigin: begin.apiOrigin,
+                deviceId: saved.identity.deviceId, userId: user)
+            try await MeshRevocationQueue.shared.prepareConnection(connection)
+            try MeshSessionVault.clear(reference: id)
+        }
+        try MeshPendingVault.clear()
+        pending = nil; preview = nil; browserURL = nil; problem = nil
+        Task { await MeshRevocationQueue.shared.retry() }
     }
 
     private func start(_ operation: @escaping @MainActor () async throws -> Void) {
@@ -237,38 +283,45 @@ struct MeshBrowserLocation: Decodable, Sendable { let url: URL }
 @MainActor private final class MeshPasskeyBrowser: NSObject, ASWebAuthenticationPresentationContextProviding {
     private var session: ASWebAuthenticationSession?
     private var completion: CheckedContinuation<URL, Error>?
+    private var generation: UUID?
 
     func authenticate(_ url: URL) async throws -> URL {
         guard completion == nil else { throw BluefinError.message("A passkey request is already open.") }
         try Task.checkCancellation()
+        let current = UUID()
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
+                generation = current
                 completion = continuation
                 let browser = ASWebAuthenticationSession(url: url, callbackURLScheme: "bluefin") { [weak self] url, error in
                     Task { @MainActor in
-                        if let url { self?.finish(.success(url)) }
-                        else { self?.finish(.failure(error ?? CancellationError())) }
+                        if let url { self?.finish(current, .success(url)) }
+                        else { self?.finish(current, .failure(error ?? CancellationError())) }
                     }
                 }
                 browser.presentationContextProvider = self
                 browser.prefersEphemeralWebBrowserSession = true
                 session = browser
                 if !browser.start() {
-                    finish(.failure(BluefinError.message("The passkey browser could not open. Try again.")))
+                    finish(current, .failure(BluefinError.message("The passkey browser could not open. Try again.")))
                 }
             }
-        }, onCancel: { Task { @MainActor [weak self] in self?.cancel() } })
+        }, onCancel: { Task { @MainActor [weak self] in self?.cancel(current) } })
     }
 
-    private func finish(_ result: Result<URL, Error>) {
+    private func finish(_ current: UUID, _ result: Result<URL, Error>) {
+        guard generation == current else { return }
         let pending = completion
-        completion = nil; session = nil
+        generation = nil; completion = nil; session = nil
         pending?.resume(with: result)
     }
 
-    func cancel() {
-        session?.cancel()
-        finish(.failure(CancellationError()))
+    func cancel(_ expected: UUID? = nil) {
+        guard let current = generation, expected == nil || expected == current else { return }
+        let browser = session
+        finish(current, .failure(CancellationError()))
+        browser?.cancel()
     }
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
@@ -296,7 +349,11 @@ struct MeshPairingView: View {
                 if let pending = model.pending {
                     Section("Saved connection") {
                         Text("This invitation is reserved for this device. You can resume without using the invitation again.")
-                        if pending.begin == nil {
+                        if pending.discardRequested == true {
+                            Button("Finish discarding connection") { model.discard() }.disabled(model.busy)
+                            Text("The protected request is retained until its server outcome can be checked.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        } else if pending.begin == nil {
                             Button("Resume connection") { model.resume() }.disabled(model.busy)
                         } else if pending.completion != nil {
                             Button("Open connected library") { model.finishAfterApproval(store: store) }.disabled(model.busy)
@@ -316,7 +373,9 @@ struct MeshPairingView: View {
                                 Button("Resume passkey") { model.resume() }.disabled(model.busy)
                             }
                         }
-                        Button("Discard saved request", role: .destructive) { model.discard() }.disabled(model.busy)
+                        if pending.discardRequested != true {
+                            Button("Discard saved request", role: .destructive) { model.discard() }.disabled(model.busy)
+                        }
                         Text("Discarding does not make the old invitation reusable.").font(.footnote).foregroundStyle(.secondary)
                     }
                 } else {

@@ -114,6 +114,8 @@ import CryptoKit
         try await WatchCompanion.shared.beginAccountChange()
         defer { WatchCompanion.shared.endAccountChange() }
         #endif
+        try Task.checkCancellation()
+        guard session == nil, !preview, accountGeneration == generation, !signingOut else { throw CancellationError() }
         try SessionVault.save(candidate)
         Artwork.clearCache()
         #if os(tvOS)
@@ -621,23 +623,9 @@ import CryptoKit
         guard !signingOut else { return }
         signingOut = true
         defer { signingOut = false }
-        #if os(iOS) && !targetEnvironment(macCatalyst)
-        do { try await WatchCompanion.shared.beginAccountChange() }
-        catch { self.error = "Watch cleanup is unresolved. Retry sign-out when the server is reachable."; return }
-        defer { WatchCompanion.shared.endAccountChange() }
-        #endif
         let previousSession = session
-        do {
-            if let previousSession { try await MeshRevocationQueue.shared.prepare(previousSession) }
-            try SessionVault.clear()
-        } catch {
-            self.error = error.localizedDescription
-            return
-        }
-        Artwork.clearCache()
-        #if os(tvOS)
-        TopShelfSnapshot.clear()
-        #endif
+
+        // Stop local work before any Keychain or network operation can fail.
         accountGeneration = UUID()
         let generation = accountGeneration
         let pending = pendingPreparation
@@ -646,8 +634,10 @@ import CryptoKit
         let teardown = playbackTeardowns.drain()
         offline.disconnect()
         sports.disconnect()
-        session = nil
-        preview = false
+        Artwork.clearCache()
+        #if os(tvOS)
+        TopShelfSnapshot.clear()
+        #endif
         home = .init(resume: [], latest: [], nextUp: [])
         libraries = []
         musicQueue = []
@@ -660,10 +650,37 @@ import CryptoKit
         var cleanupFailed = false
         do { try await pending?.dispose() } catch { cleanupFailed = true }
         do { try await teardown.value } catch { cleanupFailed = true }
+        if let previousSession, previousSession.meshSessionId != nil {
+            // Local shutdown needs no device key. It must work while Keychain is
+            // locked or while persisting a remote-revocation receipt fails.
+            do {
+                let _: EmptyValue = try await RustBridge.call("meshLocalSignOut", fields: [
+                    "server": previousSession.server, "userId": previousSession.userId,
+                    "allowLocalHttp": previousSession.allowHttp])
+            } catch { cleanupFailed = true }
+        } else {
+            let _: EmptyValue? = try? await RustBridge.call("meshCloseResources")
+        }
+
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        var watchChange = false
+        do { try await WatchCompanion.shared.beginAccountChange(); watchChange = true }
+        catch { cleanupFailed = true }
+        defer { if watchChange { WatchCompanion.shared.endAccountChange() } }
+        #endif
+        do {
+            if let previousSession { try await MeshRevocationQueue.shared.prepare(previousSession) }
+            try SessionVault.clear()
+        } catch {
+            // Keep cleanup credentials if they could not be durably transferred.
+            // The active media route has already been stopped above.
+            self.error = "Playback stopped, but sign-out could not be saved. Unlock this device and retry. Remote access is unconfirmed."
+            return
+        }
+        session = nil
+        preview = false
         if let previousSession {
             if let reference = previousSession.meshSessionId {
-                do { let _: EmptyValue = try await RustBridge.call("meshLocalSignOut", session: previousSession) }
-                catch { cleanupFailed = true }
                 do {
                     if try MeshPendingVault.load()?.completion?.id == reference { try MeshPendingVault.clear() }
                     try MeshSessionVault.clear(reference: reference)

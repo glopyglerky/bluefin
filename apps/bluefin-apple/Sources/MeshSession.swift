@@ -108,13 +108,15 @@ struct MeshPending: Codable {
     var prepared: MeshPreparedFinish?
     var signupHandle: String?
     var completion: MeshCompletion?
+    var discardRequested: Bool?
 }
 enum MeshPendingVault {
     private static var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: "org.glopyglerky.bluefin.mesh.pending",
-         kSecAttrAccount as String: "current"]
+         kSecAttrAccount as String: "current", kSecAttrSynchronizable as String: false]
     }
+    private static let maximumBytes = 256 * 1024
     static func load() throws -> MeshPending? {
         var request = query
         request[kSecReturnData as String] = true
@@ -122,13 +124,14 @@ enum MeshPendingVault {
         var result: CFTypeRef?
         let status = SecItemCopyMatching(request as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data else {
+        guard status == errSecSuccess, let data = result as? Data, data.count <= maximumBytes else {
             throw BluefinError.message("Unlock your device to resume this connection.")
         }
         return try JSONDecoder().decode(MeshPending.self, from: data)
     }
     static func save(_ pending: MeshPending) throws {
         let data = try JSONEncoder().encode(pending)
+        guard data.count <= maximumBytes else { throw BluefinError.message("The saved connection is too large.") }
         let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
             var request = query
