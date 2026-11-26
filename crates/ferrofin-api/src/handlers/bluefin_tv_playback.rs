@@ -882,15 +882,15 @@ mod permission_router_tests {
             &self,
             context: &RequestContext,
         ) -> Result<AuthorizationInfo, ServiceError> {
-            let allowed = self.0.load(Ordering::SeqCst)
-                && context
-                    .header("Authorization")
-                    .is_some_and(|h| h.contains("Token=\"fixture\""));
+            let token = ["fixture", "second-live-fixture"].into_iter().find(|token|
+                context.header("Authorization").is_some_and(|h| h.contains(&format!("Token=\"{token}\"")))
+            );
+            let allowed = self.0.load(Ordering::SeqCst) && token.is_some();
             Ok(AuthorizationInfo {
                 is_authenticated: allowed,
                 user: Some(Arc::new(fake_user_entity(ID, "Synthetic viewer"))),
                 device_id: Some("fixture-device".into()),
-                token: Some("fixture".into()),
+                token: token.map(Into::into),
                 ..Default::default()
             })
         }
@@ -1073,10 +1073,10 @@ mod permission_router_tests {
             let now = chrono::Utc::now();
             Ok(QueryResult::new(
                 Some(0),
-                Some(1),
-                vec![DeviceEntity {
-                    id: 1,
-                    access_token: "fixture".into(),
+                Some(2),
+                ["fixture", "second-live-fixture"].into_iter().enumerate().map(|(n, token)| DeviceEntity {
+                    id: (n + 1) as i64,
+                    access_token: token.into(),
                     app_name: "fixture".into(),
                     app_version: "1".into(),
                     date_created: now,
@@ -1086,7 +1086,7 @@ mod permission_router_tests {
                     device_name: "fixture".into(),
                     is_active: true,
                     user_id: ID.to_string(),
-                }],
+                }).collect(),
             ))
         }
         async fn get_device_infos(
@@ -1213,6 +1213,9 @@ mod permission_router_tests {
         ) -> Result<Response, Failure> {
             Ok(StatusCode::OK.into_response())
         }
+        async fn authorize_owner(&self, session: &PlaybackContext, request: &Request<()>) -> Result<(), Failure> {
+            self.0.authorize_owner(session, request).await
+        }
         async fn release(&self, _: &PlaybackContext) {}
     }
     fn state(policy: Arc<Mutex<UserPolicy>>, active: Arc<AtomicBool>) -> AppState {
@@ -1321,5 +1324,41 @@ mod permission_router_tests {
                 );
             }
         }
+    }
+    #[tokio::test]
+    async fn cookie_controls_require_the_original_live_token_even_for_same_viewer_and_device() {
+        const ORIGIN: &str = "https://bluefin.example";
+        let policy=Arc::new(Mutex::new(UserPolicy {
+            enable_remote_access:true, enable_media_playback:true, ..Default::default()
+        }));
+        let active=Arc::new(AtomicBool::new(true));
+        let backend=PolicyBackend(Backend { state:state(policy,active.clone()), pins:Arc::new(NoPins) });
+        let other=HeaderValue::from_static("MediaBrowser Token=\"second-live-fixture\", DeviceId=\"fixture-device\"");
+        let request=req(Method::POST,"/Bluefin/Web/v1/leases",Body::empty()).map(|_|());
+        let parent=backend.0.identity(request.headers().get(header::AUTHORIZATION).unwrap(),&request).await.unwrap();
+        let sibling=backend.0.identity(&other,&request).await.unwrap();
+        assert_eq!(parent.user_id(),sibling.user_id());
+        assert_eq!(parent.device_id,sibling.device_id);
+        assert_ne!(parent.token.as_ref().unwrap().expose(),sibling.token.as_ref().unwrap().expose());
+
+        let app:Router=bluefin_tv_playback::server::web_routes(backend,ORIGIN).unwrap();
+        let mut create=req(Method::POST,"/Bluefin/Web/v1/leases",Body::from(json!({
+            "version":1,"itemId":ID.simple().to_string(),"playback":{"kind":"video","maxBitrate":8_000_000}
+        }).to_string()));
+        create.headers_mut().insert(header::ORIGIN,HeaderValue::from_static(ORIGIN));
+        create.headers_mut().insert(header::CONTENT_TYPE,HeaderValue::from_static("application/json"));
+        let response=app.clone().oneshot(create).await.unwrap();
+        assert_eq!(response.status(),StatusCode::CREATED);
+        let lease:Value=serde_json::from_slice(&to_bytes(response.into_body(),4096).await.unwrap()).unwrap();
+        for method in [Method::POST,Method::DELETE] {
+            let mut request=req(method,lease["releaseUrl"].as_str().unwrap(),Body::empty());
+            request.headers_mut().insert(header::ORIGIN,HeaderValue::from_static(ORIGIN));
+            request.headers_mut().insert(header::AUTHORIZATION,other.clone());
+            assert_eq!(app.clone().oneshot(request).await.unwrap().status(),StatusCode::UNAUTHORIZED);
+        }
+        active.store(false,Ordering::SeqCst);
+        let mut revoked=req(Method::POST,lease["renewUrl"].as_str().unwrap(),Body::empty());
+        revoked.headers_mut().insert(header::ORIGIN,HeaderValue::from_static(ORIGIN));
+        assert_eq!(app.oneshot(revoked).await.unwrap().status(),StatusCode::UNAUTHORIZED);
     }
 }
