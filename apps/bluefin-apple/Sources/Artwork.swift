@@ -152,6 +152,10 @@ struct Artwork: View {
     @MainActor static func nativeImage(
         for item: MediaItem, session: AccountSession, backdrop: Bool = false, thumbnailWidth: Int? = nil
     ) async -> UIImage? {
+        // Device-owned IDs contain a private content digest. They are local
+        // routing identifiers, never server item IDs or permission grants.
+        // Keep all callers (rows, player, and now-playing artwork) offline.
+        guard !item.Id.hasPrefix("owned-") else { return nil }
         let pixelWidth = thumbnailWidth ?? (backdrop ? 1600 : 500)
         let cache = SameOriginImages.shared
         let generation = cache.generation()

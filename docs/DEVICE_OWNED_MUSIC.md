@@ -75,3 +75,7 @@ Required real-device acceptance after an admitted Apple build:
 - Documents and backup behavior: https://developer.apple.com/documentation/foundation/using-the-file-system-effectively
 
 This feature was authored for the public Bluefin source. It does not copy private Omnidia implementation code or claim an Omnidia private service's authority.
+
+## Private artwork routing
+
+The generic native artwork entry point refuses `owned-` item IDs before any cache/network lookup. Local rows and Now Playing therefore use local placeholder artwork; the private content digest is not sent to a connected server to search for a cover. The prefix only prevents network routing. It never grants file access or sharing rights.

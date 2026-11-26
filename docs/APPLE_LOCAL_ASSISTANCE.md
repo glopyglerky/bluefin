@@ -126,3 +126,11 @@ The build owner must reconcile both lockfiles inside the admitted dependency wor
 After generating the Xcode project from `apps/bluefin-apple/project.yml`, qualify the existing iOS, Catalyst, visionOS and tvOS schemes, including `LocalAssistanceTests` where the app test targets include that file. Check the older supported OS compile paths and the tvOS exclusion. Physical eligible-device testing must separately verify model availability, supported locales, cancellation latency, background/account-change fencing and acceptable source selection. No such device evidence is recorded by this checkpoint.
 
 Implementation paths are `crates/local-assist`, `apps/bluefin-apple/rust/src/local_assistance.rs`, `Sources/LocalAssistance.swift`, `Sources/LocalAssistanceViews.swift` and `Tests/LocalAssistanceTests.swift` under the Apple app. UI attachments are in `UnifiedSearch.swift`, `BluefinApp.swift` and `MusicPlayer.swift`.
+
+## Explicit sampling and authority
+
+The native adapter requests `GenerationOptions(samplingMode: .greedy, maximumResponseTokens: ...)`. This makes sampling repeatable only for the same input, session state, and exact on-device model version. An OS/model update can change the result. It does not establish factual correctness or permission to act. The existing deterministic Rust ticket, candidate-ID, byte/token budget, and stale-generation checks remain authoritative; the model has no file deletion, resource allocation, storage donation, sharing, or provider-entitlement tools.
+
+The installed Xcode 27.2 iPhone SDK declares the current `samplingMode` initializer available from iOS/macOS/visionOS 26.0 with back deployment before 27.0. This was verified by reading the SDK interface, not by compiling or running the app. Apple qualification is still outstanding.
+
+Primary sources: [GenerationOptions initializer](https://developer.apple.com/documentation/foundationmodels/generationoptions/init(samplingmode:temperature:maximumresponsetokens:)), [greedy sampling](https://developer.apple.com/documentation/foundationmodels/generationoptions/samplingmode-swift.struct/greedy), and [WWDC25 Foundation Models deep dive, sampling](https://developer.apple.com/videos/play/wwdc2025/301/).

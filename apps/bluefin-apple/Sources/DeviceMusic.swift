@@ -135,7 +135,7 @@ private struct DeviceMusicSearch: Decodable, Sendable {
                 let capacity = try root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
                 if let free = capacity.volumeAvailableCapacityForImportantUsage,
                    free < Int64(size) + 512 * 1024 * 1024 {
-                    throw BluefinError.message("Free more storage before importing. Bluefin leaves at least 512 MiB available.")
+                    throw BluefinError.message("Free more storage before importing. This import needs room for the file plus 512 MiB of spare space.")
                 }
                 var request = try self.fields(changing: true)
                 request["title"] = Self.title(url.deletingPathExtension().lastPathComponent)
