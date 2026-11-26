@@ -14,7 +14,7 @@ permissions: {}
 
 jobs:
   zizmor:
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER_ROUTES || '{}')['ubuntu-latest'] || 'ubuntu-latest' }}
     permissions:
       contents: read
       security-events: write # upload-sarif into code scanning

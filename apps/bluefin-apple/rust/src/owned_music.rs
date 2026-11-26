@@ -341,6 +341,7 @@ mod tests {
         assert_eq!(std::fs::read_dir(media).unwrap().count(), 1);
         assert_eq!(std::fs::read(original).unwrap(), bytes);
         assert_eq!(std::fs::read(conflicting).unwrap(), bytes);
+        assert_eq!(call(&fixture.import(), "ownedLibraryImport").unwrap()["imported"], true);
     }
 
     #[test]
