@@ -6,6 +6,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
+import org.json.JSONArray
+import java.util.UUID
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -13,7 +16,7 @@ import org.json.JSONObject
 class LibraryModel(application: Application) : AndroidViewModel(application) {
     val core = BluefinRuntime.core(application)
     var demo by mutableStateOf(core.account == null); private set
-    var section by mutableStateOf("Library"); private set
+    var section by mutableStateOf("Home"); private set
     var rows by mutableStateOf(Demo.items); private set
     var selected by mutableStateOf<LibraryItem?>(null); private set
     var queue by mutableStateOf<List<LibraryItem>>(emptyList()); private set
@@ -25,6 +28,14 @@ class LibraryModel(application: Application) : AndroidViewModel(application) {
     var query by mutableStateOf(""); private set
     var guide by mutableStateOf<List<String>>(emptyList()); private set
     var downloads by mutableStateOf<List<String>>(emptyList()); private set
+    var homeShelves by mutableStateOf<List<HomeShelf>>(emptyList()); private set
+    var sportsListings by mutableStateOf<List<Pair<String, LibraryItem?>>>(emptyList()); private set
+    var searchFilters by mutableStateOf(MediaSearchFilters()); private set
+    var searchFacets by mutableStateOf(MediaSearchFacets()); private set
+    var facetsMessage by mutableStateOf<String?>(null); private set
+    private var facetsOwner: Account? = null
+    private var nextIndex = 0
+    private var homeHistoryGeneration: Long? = null
     private var pinnedOwner: Account? = null
     private var pinned: JSONObject? = null
     fun pinIroh(peer: String, address: String) {
@@ -43,14 +54,51 @@ class LibraryModel(application: Application) : AndroidViewModel(application) {
     private var parentId: String? = null
     private data class Shelf(
         val section: String, val search: String, val parent: String?,
-        val items: List<LibraryItem>, val total: Int, val selected: LibraryItem?
+        val items: List<LibraryItem>, val total: Int, val selected: LibraryItem?, val nextIndex: Int
     )
     private val previousShelves = ArrayDeque<Shelf>()
-    val canGoBack: Boolean get() = selected != null || parentId != null || section != "Library"
+    val canGoBack: Boolean get() = selected != null || parentId != null || section != "Home"
 
     fun openSection(name: String) {
+        if (name == "Search") {
+            searchFilters = MediaSearchFilters()
+            loadSearchFacets()
+        }
         previousShelves.clear()
         browse(name)
+    }
+    fun refine(filters: MediaSearchFilters) {
+        searchFilters = filters
+        if (query.isNotBlank()) browse("Search", query)
+    }
+    private fun loadSearchFacets() {
+        val owner = core.account ?: return
+        if (facetsOwner == owner) return
+        facetsMessage = null
+        viewModelScope.launch {
+            try {
+                val facets = MediaSearchFacets.parse(core.callOwned(owner, "searchFilters"))
+                if (core.account == owner) {
+                    searchFacets = facets; facetsOwner = owner
+                    if (facets.truncated) facetsMessage = "More studios or collections exist on this server. Search still covers the full catalog."
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { if (core.account == owner) facetsMessage = "Server refinements could not load. Media-type search is available." }
+        }
+    }
+    fun submitSearch(term: String) {
+        val query = term.trim().take(128)
+        browse("Search", query)
+        val owner = core.account ?: return
+        val version = homeHistoryGeneration ?: return
+        if (query.isEmpty()) return
+        val event = JSONObject().put("eventId", UUID.randomUUID().toString())
+            .put("query", query).put("generation", version).put("occurredAtUnixMs", System.currentTimeMillis())
+        viewModelScope.launch {
+            try { core.callOwned(owner, "homeSearchRecord", JSONObject().put("event", event)) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { /* Search remains usable if history is unavailable. */ }
+        }
     }
 
     fun goBack() {
@@ -61,7 +109,7 @@ class LibraryModel(application: Application) : AndroidViewModel(application) {
         }
         val previous = previousShelves.removeLastOrNull()
         if (previous == null) {
-            openSection("Library")
+            openSection("Home")
             return
         }
         job?.cancel()
@@ -73,6 +121,7 @@ class LibraryModel(application: Application) : AndroidViewModel(application) {
         parentId = previous.parent
         rows = previous.items
         total = previous.total
+        nextIndex = previous.nextIndex
         select(previous.selected)
     }
     fun message(text: String) {
@@ -110,30 +159,80 @@ class LibraryModel(application: Application) : AndroidViewModel(application) {
     }
     fun browse(name: String, search: String = "", parent: String? = null, append: Boolean = false) {
         job?.cancel(); val epoch = ++generation
+        val owner = core.account
         section = name; query = search; parentId = parent; selected = null; error = null
-        if (demo) { rows = Demo.section(name, search); total = rows.size; busy = false; return }
+        if (!append) { nextIndex = 0; rows = emptyList(); total = 0 }
+        if (name != "Home") homeShelves = emptyList()
+        if (name != "Sports") sportsListings = emptyList()
+        if (demo) {
+            rows = Demo.section(name, search).filter { name != "Search" || searchFilters.scope.types.isEmpty() || it.type in searchFilters.scope.types }
+            if (name == "Home") homeShelves = listOf(HomeShelf("Explore Bluefin", rows))
+            if (name == "Sports") rows = emptyList()
+            total = rows.size; busy = false; return
+        }
+        val criteria = searchFilters
         job = viewModelScope.launch {
             busy = true
             try {
-                val fields = JSONObject().put("limit", 50).put("startIndex", if (append) rows.size else 0)
-                parent?.let { fields.put("parentId", it) }
-                if (search.isNotBlank()) fields.put("searchTerm", search)
-                when (name) { "Movies" -> fields.put("includeItemTypes", "Movie"); "TV Shows" -> fields.put("includeItemTypes", "Series"); "Episodes" -> fields.put("includeItemTypes", "Episode"); "Music" -> fields.put("includeItemTypes", "Audio,MusicAlbum,MusicArtist") }
-                val op = when { name == "Live TV" -> "liveChannels"; name == "Library" && parent == null && search.isEmpty() -> "libraries"; else -> "items" }
-                val result = core.call(op, fields)
-                if (epoch == generation) {
-                    val next = result.items()
-                    rows = if (append) rows + next else next
-                    total = result.optInt("TotalRecordCount", rows.size)
+                if (name == "Search" && search.isBlank()) return@launch
+                if (name == "Home") {
+                    val home = core.callOwned(owner, "home")
+                    fun shelf(key: String, title: String): HomeShelf {
+                        val array = home.optJSONArray(key) ?: JSONArray()
+                        return HomeShelf(title, JSONObject().put("Items", array).items())
+                    }
+                    val initial = listOf(shelf("resume", "Continue watching"), shelf("nextUp", "Up next"), shelf("latest", "Recently added")).filter { it.items.isNotEmpty() }
+                    if (epoch == generation && core.account == owner) { homeShelves = initial; rows = initial.flatMap { it.items }.distinctBy { it.id }; busy = false }
+                    val recommendations = core.callOwned(owner, "homeRecommendations")
+                    val shelves = recommendations.optJSONArray("recommendations") ?: JSONArray()
+                    val personal = (0 until minOf(shelves.length(), 4)).map { index ->
+                        val shelf = shelves.getJSONObject(index)
+                        HomeShelf(shelf.optString("title", "For you"), JSONObject().put("Items", shelf.optJSONArray("items") ?: JSONArray()).items())
+                    }.filter { it.items.isNotEmpty() }
+                    if (epoch == generation && core.account == owner) {
+                        homeHistoryGeneration = if (recommendations.optBoolean("searchHistorySupported")) recommendations.getLong("searchHistoryGeneration") else null
+                        homeShelves = initial.take(2) + personal + initial.drop(2)
+                        rows = homeShelves.flatMap { it.items }.distinctBy { it.id }; total = rows.size
+                    }
+                    return@launch
                 }
-            } catch (e: Exception) { if (epoch == generation) error = e.message ?: "Library unavailable" }
+                if (name == "Sports") {
+                    val feed = core.callOwned(owner, "sportsHome")
+                    val listings = listOf("games", "local_broadcasts").flatMap { key ->
+                        val array = feed.optJSONArray(key) ?: JSONArray()
+                        (0 until minOf(array.length(), 200)).map { array.getJSONObject(it) }
+                    }.map { listing ->
+                        val title = listing.optJSONObject("event")?.optString("name")?.takeIf { it.isNotBlank() } ?: listing.optString("title").ifBlank { listing.optString("native_title").ifBlank { "Sports broadcast" } }
+                        val channel = listing.optString("channel_id").takeIf { listing.optString("kind") in setOf("LIVE", "ON_NOW", "UPCOMING") && it.matches(Regex("[A-Za-z0-9-]{1,128}")) }
+                        val item = channel?.let { LibraryItem(it, listing.optString("channel_name", title), "TvChannel", title) }
+                        title to item
+                    }.distinctBy { it.first to it.second?.id }
+                    if (epoch == generation && core.account == owner) { sportsListings = listings; total = 0 }
+                    return@launch
+                }
+                val fields = if (name == "Search") criteria.fields(search, if (append) nextIndex else 0)
+                    else JSONObject().put("limit", 50).put("startIndex", if (append) nextIndex else 0)
+                parent?.let { fields.put("parentId", it) }
+                if (search.isNotBlank()) fields.put("searchTerm", search.take(128))
+                when (name) { "Movies" -> fields.put("includeItemTypes", "Movie"); "TV Shows" -> fields.put("includeItemTypes", "Series"); "Episodes" -> fields.put("includeItemTypes", "Episode"); "Music" -> fields.put("includeItemTypes", "Audio,MusicAlbum,MusicArtist,Playlist") }
+                val op = when { name == "Live TV" -> "liveChannels"; name == "Library" && parent == null && search.isEmpty() -> "libraries"; else -> "items" }
+                val result = core.callOwned(owner, op, fields)
+                if (epoch == generation && core.account == owner) {
+                    val next = result.items()
+                    nextIndex = (if (append) nextIndex else 0) + next.size
+                    rows = (if (append) rows + next else next).distinctBy { it.id }
+                    total = if (next.isEmpty()) nextIndex else result.optInt("TotalRecordCount", nextIndex)
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { if (epoch == generation && core.account == owner) error = e.message ?: "Library unavailable" }
             finally { if (epoch == generation) busy = false }
         }
     }
+    val hasMore: Boolean get() = nextIndex < total && section !in setOf("Home", "Sports")
     fun more() = browse(section, query, parentId, true)
     fun children(item: LibraryItem) {
         if (previousShelves.size == 16) previousShelves.removeFirst()
-        previousShelves.addLast(Shelf(section, query, parentId, rows, total, item))
+        previousShelves.addLast(Shelf(section, query, parentId, rows, total, item, nextIndex))
         browse(if (item.type == "Series") "Episodes" else "Library", parent = item.id)
     }
     fun login(server: String, user: String, password: String, create: Boolean = false, onRefused: () -> Unit = {}, done: () -> Unit) {
@@ -151,8 +250,10 @@ class LibraryModel(application: Application) : AndroidViewModel(application) {
     fun accountReady(done: () -> Unit) {
         demo = false
         queue = emptyList()
+        searchFilters = MediaSearchFilters(); searchFacets = MediaSearchFacets(); facetsOwner = null; homeHistoryGeneration = null
+        Artwork.clear()
         done()
-        openSection("Library")
+        openSection("Home")
     }
 
     fun signOut() {
@@ -161,7 +262,10 @@ class LibraryModel(application: Application) : AndroidViewModel(application) {
             val result = runCatching { core.logout() }
             cleanupPending = core.cleanupPending; cleanupMessage = core.cleanupMessage
             rows = emptyList(); selected = null; queue = emptyList(); downloads = emptyList()
-            demo = true; openSection("Library")
+            homeShelves = emptyList(); sportsListings = emptyList(); homeHistoryGeneration = null
+            searchFilters = MediaSearchFilters(); searchFacets = MediaSearchFacets(); facetsOwner = null
+            Artwork.clear()
+            demo = true; openSection("Home")
             val report = result.getOrNull()
             if (report?.complete != true || cleanupPending) error = cleanupMessage
             busy = false
@@ -186,5 +290,5 @@ class LibraryModel(application: Application) : AndroidViewModel(application) {
                 .onFailure { error = it.message }
         }
     }
-    init { if (!demo) browse("Library") }
+    init { browse("Home") }
 }

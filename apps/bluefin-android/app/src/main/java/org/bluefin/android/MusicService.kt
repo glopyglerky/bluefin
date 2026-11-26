@@ -25,7 +25,7 @@ class MusicService : MediaSessionService() {
     private var preparing = false
     private val stopCommand = androidx.media3.session.SessionCommand(STOP, android.os.Bundle.EMPTY)
     private fun preparingNotification(): android.app.Notification {
-        val manager = getSystemService(android.app.NotificationManager::class.java)
+        val manager = requireNotNull(getSystemService(android.app.NotificationManager::class.java)) { "Notifications are unavailable" }
         manager.createNotificationChannel(android.app.NotificationChannel("preparing", "Music preparation", android.app.NotificationManager.IMPORTANCE_LOW))
         val stop = android.app.PendingIntent.getService(this, 0, Intent(this, MusicService::class.java).setAction(STOP),
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
@@ -196,7 +196,7 @@ class MusicService : MediaSessionService() {
                     player.seekTo((item.ticks - (plan?.optLong("startOffsetTicks") ?: 0)).coerceAtLeast(0) / 10000); player.prepare(); player.play()
                     preparing = false
                     onUpdateNotification(session, true)
-                    getSystemService(android.app.NotificationManager::class.java).cancel(PREPARING_NOTIFICATION)
+                    getSystemService(android.app.NotificationManager::class.java)?.cancel(PREPARING_NOTIFICATION)
                     if (plan != null) { core.callOwned(owner, "started", fields()); started = true }
                     status = if (offline) "Verified downloaded source · output depends on device" else "${plan?.optString("playMethod") ?: "Original synthetic audio"} · output depends on device"
                     var seconds = 0
@@ -233,7 +233,7 @@ class MusicService : MediaSessionService() {
                     foregroundOwned = false; preparing = false
                     if (!destroyed) super@MusicService.onUpdateNotification(session, false)
                     stopForeground(STOP_FOREGROUND_REMOVE)
-                    getSystemService(android.app.NotificationManager::class.java).cancel(PREPARING_NOTIFICATION)
+                    getSystemService(android.app.NotificationManager::class.java)?.cancel(PREPARING_NOTIFICATION)
                     stopSelf()
                 }
             }

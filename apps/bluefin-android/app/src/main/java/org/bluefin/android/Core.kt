@@ -111,7 +111,7 @@ class CoreClient private constructor(private val context: Context?, store: Clean
     }
 }
 
-data class LibraryItem(val id: String, val name: String, val type: String, val overview: String = "", val ticks: Long = 0, val providerLinks: List<Pair<String, String>> = emptyList()) {
+data class LibraryItem(val id: String, val name: String, val type: String, val overview: String = "", val ticks: Long = 0, val providerLinks: List<Pair<String, String>> = emptyList(), val artworkSources: List<CatalogArtwork> = listOf(CatalogArtwork(id))) {
     val playable get() = type in setOf("Movie", "Episode", "Audio", "TvChannel")
     val audio get() = type == "Audio"
     companion object {
@@ -124,7 +124,7 @@ data class LibraryItem(val id: String, val name: String, val type: String, val o
                     val url = link.optString("Url")
                     if (name.isNotBlank() && safeProviderUrl(url)) name to url else null
                 }
-            } ?: emptyList())
+            } ?: emptyList(), catalogArtwork(v))
     }
 }
 fun JSONObject.items(): List<LibraryItem> {

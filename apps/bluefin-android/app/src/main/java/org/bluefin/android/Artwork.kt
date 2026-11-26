@@ -9,16 +9,59 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import android.util.LruCache
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** No disk cache, token URL or redirects. Encoded bytes and decoded pixels are both bounded. */
+/** Account/version scoped memory cache. Encoded bytes, decoded pixels and concurrent loads are bounded. */
 object Artwork {
     private val slots = Semaphore(2)
-    suspend fun fetch(core: CoreClient, owner: Account, id: String): Bitmap? = slots.withPermit {
+    private val work = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val monitor = Any()
+    private var generation = 0L
+    private val pending = mutableMapOf<String, Deferred<Bitmap?>>()
+    private val memory = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
+    }
+    fun clear() = synchronized(monitor) {
+        generation++
+        pending.values.forEach { it.cancel() }
+        pending.clear()
+        memory.evictAll()
+    }
+    suspend fun fetch(core: CoreClient, owner: Account, sources: List<CatalogArtwork>): Bitmap? {
+        for (source in sources) {
+            if (core.account != owner) return null
+            val version = source.tag ?: "untagged-" + (System.currentTimeMillis() / 900_000)
+            val key = owner.scope + "/" + source.id + "/" + version
+            val cached = synchronized(monitor) { memory.get(key) }
+            if (cached != null) return cached
+            val epoch: Long
+            val request: Deferred<Bitmap?>
+            synchronized(monitor) {
+                epoch = generation
+                request = pending.getOrPut(key) { work.async { download(core, owner, source) } }
+            }
+            val result = try { request.await() } catch (e: CancellationException) { throw e }
+            finally { synchronized(monitor) { if (pending[key] === request && request.isCompleted) pending.remove(key) } }
+            if (core.account != owner) return null
+            synchronized(monitor) {
+                if (epoch != generation) return null
+                if (result != null) memory.put(key, result)
+            }
+            if (result != null) return result
+        }
+        return null
+    }
+    private suspend fun download(core: CoreClient, owner: Account, source: CatalogArtwork): Bitmap? = slots.withPermit {
         withContext(Dispatchers.IO) {
             runCatching {
                 check(core.account == owner)
@@ -28,8 +71,9 @@ object Artwork {
                     check(value.isNotEmpty() && value.all { it.code in 32..126 && it != '"' && it != '\\' })
                     return value
                 }
-                val url = base.buildUpon().appendPath("Items").appendPath(id).appendPath("Images").appendPath("Primary")
-                    .appendQueryParameter("maxWidth", "512").appendQueryParameter("maxHeight", "512").build()
+                val url = base.buildUpon().appendPath("Items").appendPath(source.id).appendPath("Images").appendPath("Primary")
+                    .appendQueryParameter("maxWidth", "512").appendQueryParameter("maxHeight", "512")
+                    .apply { source.tag?.let { appendQueryParameter("tag", it) } }.build()
                 val connection = URL(url.toString()).openConnection() as HttpURLConnection
                 try {
                     connection.instanceFollowRedirects = false
@@ -64,9 +108,9 @@ object Artwork {
 @Composable
 fun ItemArtwork(item: LibraryItem, model: LibraryModel, modifier: Modifier) {
     val owner = model.core.account
-    var bitmap by remember(item.id, owner) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(item.id, owner) {
-        if (owner != null) bitmap = Artwork.fetch(model.core, owner, item.id)
+    var bitmap by remember(item.artworkSources, owner) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(item.artworkSources, owner) {
+        if (owner != null) bitmap = Artwork.fetch(model.core, owner, item.artworkSources)
     }
     bitmap?.let { Image(it.asImageBitmap(), contentDescription = null, modifier = modifier, contentScale = ContentScale.Crop) }
 }

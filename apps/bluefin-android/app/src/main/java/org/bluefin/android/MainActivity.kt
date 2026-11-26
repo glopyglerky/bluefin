@@ -27,6 +27,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -101,9 +102,13 @@ class MainActivity : ComponentActivity() {
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(if (television) 32.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("BLUEFIN", style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.primary)
         Row(Modifier.fillMaxWidth().focusGroup().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("Library", "Movies", "TV Shows", "Live TV", "Music", "Search").forEach { name ->
+            listOf("Home", "Sports", "TV Shows", "Movies", "Live TV", "Music").forEach { name ->
                 Action(name) { accountScreen = false; downloadsScreen = false; queueScreen = false; model.openSection(name) }
             }
+        }
+        Row(Modifier.fillMaxWidth().focusGroup().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Action("Search") { accountScreen = false; downloadsScreen = false; queueScreen = false; model.openSection("Search") }
+            Action("Collections") { accountScreen = false; downloadsScreen = false; queueScreen = false; model.openSection("Library") }
             Action("Queue ${model.queue.size}") { accountScreen = false; downloadsScreen = false; queueScreen = true }
             Action("Downloads") { accountScreen = false; queueScreen = false; downloadsScreen = true; if (!model.demo) model.downloads() }
             Action("Account") { queueScreen = false; downloadsScreen = false; accountScreen = true }
@@ -150,20 +155,73 @@ class MainActivity : ComponentActivity() {
                     val search = remember { FocusRequester() }
                     TextEntry(term, { term = it }, "Search your library", television,
                         modifier = Modifier.fillMaxWidth(), next = if (!model.busy) search else null)
-                    Action("Search", !model.busy, Modifier.focusRequester(search)) { model.browse("Search", term) }
+                    Action("Search", !model.busy, Modifier.focusRequester(search)) { model.submitSearch(term) }
+                    SearchRefinements(model)
                 }
                 Text(model.section, style = MaterialTheme.typography.headlineMedium)
                 val detail = model.selected
                 if (detail != null) {
                     Detail(detail, model, { offline = false; queueIndex = null; playing = detail })
+                } else if (model.section == "Home") {
+                    LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                        items(model.homeShelves) { shelf ->
+                            Text(shelf.title, style = MaterialTheme.typography.titleLarge)
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                items(shelf.items, key = { it.id }) { item ->
+                                    Box(Modifier.width(if (television) 240.dp else 160.dp)) {
+                                        LibraryTile(item, model) { model.select(item) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (model.homeShelves.isEmpty() && !model.busy) Text("Your Home fills from the media and activity on your server.")
+                } else if (model.section == "Sports") {
+                    LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(model.sportsListings) { listing ->
+                            Text(listing.first, style = MaterialTheme.typography.titleMedium)
+                            listing.second?.let { channel -> Action("View " + channel.name) { model.select(channel) } }
+                        }
+                    }
+                    if (model.sportsListings.isEmpty() && !model.busy) Text("No sports listings are available from this server.")
                 } else {
                     LazyVerticalGrid(columns = GridCells.Adaptive(if (television) 240.dp else 160.dp), modifier = Modifier.weight(1f),
                         horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         items(model.rows, key = { it.id }) { item -> LibraryTile(item, model) { model.select(item) } }
                     }
                     if (model.rows.isEmpty() && !model.busy) Text("No items found.")
-                    if (model.rows.size < model.total) Action("Load more", !model.busy) { model.more() }
+                    if (model.hasMore) Action("Load more", !model.busy) { model.more() }
                 }
+            }
+        }
+    }
+}
+@Composable private fun SearchRefinements(model: LibraryModel) {
+    val filters = model.searchFilters
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        SearchChoice(filters.scope.title, MediaSearchScope.entries.map { it.title }) { index ->
+            model.refine(filters.copy(scope = MediaSearchScope.entries[index]))
+        }
+        SearchChoice(filters.studio?.name ?: "All studios", listOf("All studios") + model.searchFacets.studios.map { it.name }) { index ->
+            model.refine(filters.copy(studio = model.searchFacets.studios.getOrNull(index - 1)))
+        }
+        SearchChoice(filters.tag ?: "All tags / services", listOf("All tags / services") + model.searchFacets.tags) { index ->
+            model.refine(filters.copy(tag = model.searchFacets.tags.getOrNull(index - 1)))
+        }
+        SearchChoice(filters.collection?.name ?: "All collections", listOf("All collections") + model.searchFacets.collections.map { it.name }) { index ->
+            model.refine(filters.copy(collection = model.searchFacets.collections.getOrNull(index - 1)))
+        }
+    }
+    Text("Studios, service tags and collections come from your server's media metadata.", style = MaterialTheme.typography.bodySmall)
+    model.facetsMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+}
+@Composable private fun SearchChoice(label: String, choices: List<String>, choose: (Int) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }) { Text(label) }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            choices.forEachIndexed { index, title ->
+                DropdownMenuItem(text = { Text(title) }, onClick = { expanded = false; choose(index) })
             }
         }
     }
