@@ -55,3 +55,84 @@ final class BluefinTests: XCTestCase {
         } catch { XCTAssertFalse(error.localizedDescription.isEmpty) }
     }
 }
+
+
+/// These fixtures hold the same task used by the real decoder/FFI. They exercise
+/// presentation ownership without opening a browser or changing saved accounts.
+@MainActor final class MeshPairingPresentationTests: XCTestCase {
+    private var preview: MeshInvitePreview {
+        MeshInvitePreview(code: "synthetic-local-invitation", link: "bluefin://synthetic",
+            expiresAtUnixMs: 1, intent: "login", accountLinked: true, singleUse: true,
+            service: "bluefin/connect/1")
+    }
+
+    func testOtherWindowCannotCancelWorkOrClearTheOwnersPreview() async throws {
+        let entered = expectation(description: "decoder entered")
+        var continuation: CheckedContinuation<MeshInvitePreview, Error>?
+        var cancelled = false
+        let model = MeshPairingModel { _ in
+            let value: MeshInvitePreview = try await withCheckedThrowingContinuation {
+                continuation = $0; entered.fulfill()
+            }
+            cancelled = Task.isCancelled
+            return value
+        }
+        let owner = UUID(), other = UUID()
+        XCTAssertTrue(model.claimPresentation(owner))
+        let work = try XCTUnwrap(model.decode("synthetic", owner: owner))
+        await fulfillment(of: [entered], timeout: 5)
+        XCTAssertFalse(model.claimPresentation(other))
+        XCTAssertNil(model.decode("stale input", owner: other))
+        model.releasePresentation(other)
+        model.reportProblem("stale image failure", owner: other)
+        XCTAssertTrue(model.busy)
+        XCTAssertNil(model.problem)
+        XCTAssertEqual(model.presentationOwner, owner)
+        continuation?.resume(returning: preview)
+        continuation = nil
+        await work.value
+        XCTAssertFalse(cancelled)
+        XCTAssertFalse(model.busy)
+        XCTAssertEqual(model.preview?.code, preview.code)
+        model.releasePresentation(other)
+        XCTAssertEqual(model.preview?.code, preview.code)
+        XCTAssertTrue(model.ownsPresentation(owner))
+        model.releasePresentation(owner)
+        XCTAssertNil(model.preview)
+        XCTAssertNil(model.presentationOwner)
+    }
+
+    func testDismissedOwnerRetainsTheSlotUntilItsPhysicalWorkReturns() async throws {
+        let entered = expectation(description: "decoder entered")
+        var continuation: CheckedContinuation<MeshInvitePreview, Error>?
+        var cancelled = false
+        let model = MeshPairingModel { _ in
+            let value: MeshInvitePreview = try await withCheckedThrowingContinuation {
+                continuation = $0; entered.fulfill()
+            }
+            cancelled = Task.isCancelled
+            return value
+        }
+        let owner = UUID(), replacement = UUID()
+        XCTAssertTrue(model.claimPresentation(owner))
+        let work = try XCTUnwrap(model.decode("synthetic", owner: owner))
+        await fulfillment(of: [entered], timeout: 5)
+        model.releasePresentation(owner)
+        XCTAssertTrue(model.busy)
+        XCTAssertEqual(model.presentationOwner, owner)
+        XCTAssertFalse(model.ownsPresentation(owner))
+        XCTAssertFalse(model.claimPresentation(replacement))
+        XCTAssertNil(model.decode("replacement input", owner: replacement))
+        continuation?.resume(returning: preview)
+        continuation = nil
+        await work.value
+        XCTAssertTrue(cancelled)
+        XCTAssertFalse(model.busy)
+        XCTAssertNil(model.preview, "A cancelled decoder must not publish its old input")
+        XCTAssertNil(model.presentationOwner)
+        XCTAssertTrue(model.claimPresentation(replacement))
+        model.releasePresentation(owner)
+        XCTAssertTrue(model.ownsPresentation(replacement), "A late dismissal cannot release the new owner")
+        model.releasePresentation(replacement)
+    }
+}
