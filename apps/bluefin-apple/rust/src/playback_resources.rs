@@ -86,7 +86,7 @@ fn cleanup(v: &Value, receipt: &Value) -> Result<Value> {
     };
     Ok(
         json!({"operation":"releasePlayback","clientPlatform":"android",
-        "server":api.base.as_str(),"userId":text(v,"userId")?,"token":text(v,"token")?,
+        "server":api.base.as_str(),"userId":text(v,"userId")?,"token":text(v,"token")?,"mesh":v["mesh"],
         "deviceId":text(v,"deviceId")?,"playSessionId":opaque(receipt,"playSessionId")?,
         "playMethod":method,"liveStreamId":live,"allowLocalHttp":v["allowLocalHttp"]}),
     )

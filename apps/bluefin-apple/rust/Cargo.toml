@@ -18,6 +18,9 @@ portable-apple-check = ["bluefin-iroh-modern/portable-apple-check"]
 
 [dependencies]
 bluefin-local-assist = { path = "../../../crates/local-assist" }
+bluefin-mesh-connect = { package = "mesh-connect", path = "../../../crates/mesh-connect", features = ["images", "native"] }
+base64 = "0.22"
+httparse = "1.10"
 bluefin-iroh-modern = { path = "../iroh-modern" }
 bluefin-contract = { path = "../../../crates/bluefin-contract" }
 serde_json = "1"

@@ -648,6 +648,7 @@ fn download(
         })
         .ok_or_else(|| err("No native direct audio download source"))?;
     let url = api.url(&["Items", id, "Download"])?;
+    let (url, _mesh_tunnel) = api.media_fetch(url)?;
     if cancel.load(Ordering::Acquire) {
         return Err(err("Download cancelled"));
     }

@@ -20,6 +20,19 @@ pub(super) fn call(api: &Api<'_>, operation: &str) -> Result<Value> {
             "sports/api/v1/home"
         })
         .map_err(|_| err("Invalid sports endpoint"))?;
+    if api.v["mesh"].is_object() {
+        let mut headers=Vec::new();
+        let body=if operation=="saveSportsPreferences" {
+            let tag=text(api.v,"etag")?;
+            if revision(tag).is_none(){return Err(err("Invalid preference revision"));}
+            let value=api.v.get("preferences").filter(|p|p.is_object()).ok_or_else(||err("Missing preferences"))?;
+            headers.push(("if-match".into(),tag.to_owned()));
+            Some(value.clone())
+        } else {None};
+        let (value,tag)=mesh_connection::request_with_headers(api.v,
+            if operation=="saveSportsPreferences" {"PUT"}else{"GET"},&url,body,headers)?;
+        return finish(value,tag,preferences);
+    }
     let mut request = api
         .client
         .request(
@@ -57,7 +70,9 @@ pub(super) fn call(api: &Api<'_>, operation: &str) -> Result<Value> {
         .get(reqwest::header::ETAG)
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
-    let mut value = response_json(response)?;
+    finish(response_json(response)?,tag,preferences)
+}
+fn finish(mut value:Value,tag:Option<String>,preferences:bool)->Result<Value>{
     if preferences {
         if !value["version"].is_u64() || !value["preferences"].is_object() {
             return Err(err("Invalid preference response"));

@@ -158,9 +158,10 @@ pub(super) fn call(api: &Api<'_>, operation: &str) -> Result<Value> {
             if !destination.is_absolute() {
                 return Err(err("Invalid temporary destination"));
             }
+            let (resource, _mesh_tunnel)=api.media_fetch(api.url(&["Bluefin","Karaoke",id,revision,"Stems",role])?)?;
             let mut response = api
                 .client
-                .get(api.url(&["Bluefin", "Karaoke", id, revision, "Stems", role])?)
+                .get(resource)
                 .query(
                     &media_source(api.v)?
                         .map(|s| vec![("MediaSourceId", s)])

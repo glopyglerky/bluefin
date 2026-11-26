@@ -13,6 +13,10 @@ mod client_platform;
 mod discovery;
 mod home_assistant;
 mod iroh_transport;
+mod mesh_onboarding;
+mod mesh_connection;
+mod mesh_proxy;
+mod mesh_discovery;
 mod karaoke;
 mod native_server;
 mod native_video;
@@ -92,7 +96,7 @@ struct Api<'a> {
 impl<'a> Api<'a> {
     fn new(v: &'a Value) -> Result<Self> {
         client_platform::Platform::read(v)?;
-        let base = server(v)?;
+        let base = if v["mesh"].is_object() { mesh_connection::Config::from_request(v)?.origin } else { server(v)? };
         let client = HTTP_CLIENT.get_or_init(|| {
             Client::builder()
                 .no_proxy()
@@ -142,7 +146,7 @@ impl<'a> Api<'a> {
         }
         let mut a = format!("MediaBrowser Client=\"{client}\", Device=\"{platform}\", DeviceId=\"{device}\", Version=\"0.1.0\"");
         if required {
-            let token = text(self.v, "token")?;
+            let token = if self.v["mesh"].is_object() { "device-bound" } else { text(self.v, "token")? };
             if !token
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
@@ -161,6 +165,11 @@ impl<'a> Api<'a> {
         body: Option<Value>,
         auth: bool,
     ) -> Result<Value> {
+        if self.v["mesh"].is_object() {
+            let mut target=self.url(parts)?;
+            target.query_pairs_mut().extend_pairs(query);
+            return mesh_connection::request(self.v,method.as_str(),&target,body);
+        }
         let mut r = self
             .client
             .request(method, self.url(parts)?)
@@ -180,12 +189,24 @@ impl<'a> Api<'a> {
     fn post(&self, p: &[&str], b: Value) -> Result<Value> {
         self.request(Method::POST, p, vec![], Some(b), true)
     }
+    fn media_fetch(&self, target: Url) -> Result<(Url, Option<iroh_transport::Tunnel>)> {
+        if !self.v["mesh"].is_object() { return Ok((target,None)); }
+        let tunnel=iroh_transport::Tunnel::from_request(self)?.ok_or_else(||err("Mesh media is unavailable."))?;
+        let local=tunnel.fetch_url(&target)?;
+        Ok((local,Some(tunnel)))
+    }
     fn cleanup_request(
         &self,
         method: Method,
         parts: &[&str],
         query: Vec<(&str, String)>,
     ) -> Result<()> {
+        if self.v["mesh"].is_object() {
+            let mut target=self.url(parts)?;
+            target.query_pairs_mut().extend_pairs(query);
+            mesh_connection::request(self.v,method.as_str(),&target,None)?;
+            return Ok(());
+        }
         let response = self
             .client
             .request(method, self.url(parts)?)
@@ -514,6 +535,13 @@ pub fn call(v: &Value) -> Result<Value> {
     let op = text(v, "operation")?;
     if matches!(op, "localAssistPrepare" | "localAssistComplete" | "localAssistCancel") {
         return local_assistance::call(v, op);
+    }
+    if matches!(op,"meshLanDecode"|"meshLanRefresh") { return mesh_discovery::call(v,op); }
+    if matches!(op,"meshIdentityCreate"|"meshBegin"|"meshFinishPrepare"|"meshFinish"|"meshStatus"|"meshImage"|"meshCloseResources") {
+        return mesh_connection::call(v,op);
+    }
+    if matches!(op, "meshInviteDecode" | "meshInviteQr") {
+        return mesh_onboarding::call(v, op);
     }
     if op == "androidSupport" {
         let implemented = cfg!(target_os = "android");
@@ -874,6 +902,34 @@ fn envelope(input: &[u8]) -> Value {
             response
         }
     }
+}
+/// Decode a bounded image without increasing the JSON command input limit.
+/// Output is sensitive because it includes the canonical one-use invitation.
+#[allow(deprecated)]
+pub fn decode_mesh_qr_image(input: &[u8]) -> Value {
+    if input.len() > 12 * 1024 * 1024 {
+        return json!({"ok":false,"error":"Choose an image smaller than 12 MiB."});
+    }
+    if ACTIVE.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < 4).then_some(n + 1)).is_err() {
+        return json!({"ok":false,"error":"Client busy"});
+    }
+    let _lease = Lease;
+    match mesh_onboarding::image(input) {
+        Ok(value) => json!({"ok":true,"value":value}),
+        Err(error) => json!({"ok":false,"error":error}),
+    }
+}
+/// # Safety
+/// The input pointer must address len readable bytes and remain valid for this call.
+#[no_mangle]
+pub unsafe extern "C" fn bluefin_decode_qr_image(input: *const u8, len: usize) -> *mut c_char {
+    let result = std::panic::catch_unwind(|| {
+        if input.is_null() || len == 0 || len > 12 * 1024 * 1024 {
+            return json!({"ok":false,"error":"Invalid connection image."});
+        }
+        decode_mesh_qr_image(unsafe { std::slice::from_raw_parts(input, len) })
+    }).unwrap_or_else(|_| json!({"ok":false,"error":"The connection image could not be read."}));
+    CString::new(result.to_string()).unwrap_or_default().into_raw()
 }
 /// # Safety
 /// `input` must be readable through its NUL terminator, at most INPUT_MAX+1 bytes.

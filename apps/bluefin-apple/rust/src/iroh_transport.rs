@@ -13,11 +13,20 @@ use url::Url;
 pub(super) struct Tunnel {
     id: Option<u64>,
     base: String,
+    mesh: bool,
+    origin: Option<Url>,
     #[cfg(test)]
     drain: Option<fn(u64) -> Result<()>>,
 }
 impl Tunnel {
     pub(super) fn from_request(api: &Api<'_>) -> Result<Option<Self>> {
+        if api.v["mesh"].is_object() {
+            let config=super::mesh_connection::Config::from_request(api.v)?;
+            let origin=config.origin.clone();
+            let (id,base)=super::mesh_proxy::start(config)?;
+            return Ok(Some(Self {id:Some(id),base,mesh:true,origin:Some(origin),
+                #[cfg(test)] drain:None}));
+        }
         let Some(config) = api.v.get("iroh").filter(|v| !v.is_null()) else {
             return Ok(None);
         };
@@ -45,6 +54,8 @@ impl Tunnel {
         Ok(Some(Self {
             id: Some(id),
             base,
+            mesh: false,
+            origin: None,
             #[cfg(test)]
             drain: None,
         }))
@@ -54,10 +65,15 @@ impl Tunnel {
         Self {
             id: Some(0),
             base: "http://127.0.0.1:1".into(),
+            mesh: false,
+            origin: None,
             drain: Some(|_| Err(err("Iroh tunnel cleanup unconfirmed"))),
         }
     }
     pub(super) fn fetch_url(&self, canonical: &Url) -> Result<Url> {
+        if self.origin.as_ref().is_some_and(|origin|origin.origin()!=canonical.origin()) {
+            return Err(err("This media resource is outside the paired server."));
+        }
         Url::parse(&format!(
             "{}{}{}",
             self.base,
@@ -79,6 +95,7 @@ impl Tunnel {
         if let Some(drain) = self.drain {
             return drain(id);
         }
+        if self.mesh {return super::mesh_proxy::stop(id);}
         bluefin_iroh_transport::stop_with_receipt(id)
             .map_err(|_| err("Iroh tunnel cleanup unconfirmed"))
     }
