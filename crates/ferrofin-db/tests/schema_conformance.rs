@@ -21,7 +21,7 @@
 //! Comparison rules:
 //! - tables: names, columns (declared type, notnull, default, pk position),
 //!   and foreign keys (target/from/to/on-delete) must match exactly;
-//! - Ferrofin-own objects (`Ferrofin*` tables, `_sqlx_migrations`) are additive
+//! - Application-owned objects (`Ferrofin*`, `Bluefin*`, `ItemIdAliases` and `_sqlx_migrations`) are additive
 //!   and excluded; Jellyfin's EF bookkeeping exists only on real databases;
 //! - indexes: Jellyfin's named index set must exist verbatim — columns,
 //!   uniqueness and the partial `WHERE` clause; Ferrofin may add only
@@ -71,7 +71,8 @@ async fn snapshot(pool: &SqlitePool) -> (BTreeMap<String, TableShape>, BTreeSet<
     let mut shapes = BTreeMap::new();
     let mut indexes = BTreeSet::new();
     for table in tables {
-        if table.starts_with("__") || table == "_sqlx_migrations" || table.starts_with("Ferrofin") {
+        if table.starts_with("__") || table == "_sqlx_migrations" || table.starts_with("Ferrofin")
+            || table.starts_with("Bluefin") || table == "ItemIdAliases" {
             continue;
         }
         let mut columns = BTreeMap::new();

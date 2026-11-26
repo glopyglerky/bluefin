@@ -1,4 +1,4 @@
-//! Migration 0048 adds `FerrofinExternalIdentities`, the links from an outside
+//! Migration 0051 adds `FerrofinExternalIdentities`, the links from an outside
 //! identity (an LDAP uid, later an OIDC issuer and subject) to a user, with its
 //! two indexes, on a fresh database and on every adopted Jellyfin generation.
 //! The table is Ferrofin-owned, so `schema_conformance` leaves it out; this file
