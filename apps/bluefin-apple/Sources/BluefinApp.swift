@@ -84,7 +84,10 @@ struct RootView: View {
             await nearby.refresh(store.session)
         }
         .task(id: store.session.map(OfflineLibrary.identity)) { await store.offline.connect(store.session) }
-        .task(id: store.session.map(OfflineLibrary.identity)) { await store.sports.connect(store.session) }
+        .task(id: store.initialHomeLoaded ? store.session.map(OfflineLibrary.identity) : nil) {
+            guard store.initialHomeLoaded else { return }
+            await store.sports.connect(store.session)
+        }
         #if BLUEFIN_SHAREPLAY
         .overlay(alignment: .bottom) { NativeSharePlayControls().padding() }
         #endif
@@ -155,12 +158,28 @@ struct QuickConnectView: View {
 struct LibraryTabs: View {
     @EnvironmentObject private var store: LibraryStore
     @State private var selectedTab = 0
+    @State private var homeVisit = UUID()
     #if os(tvOS)
     @State private var topShelfItem: MediaItem?
     @State private var topShelfRequest: URL?
-    @State private var homeVisit = UUID()
     @State private var previousTab = 0
     #endif
+    private var tabSelection: Binding<Int> {
+        Binding(get: { selectedTab }, set: { tab in
+            if tab == 0 { showHome() }
+            else { selectedTab = tab }
+        })
+    }
+
+    private func showHome() {
+        #if os(tvOS)
+        topShelfRequest = nil
+        topShelfItem = nil
+        #endif
+        homeVisit = UUID()
+        selectedTab = 0
+    }
+
     var body: some View {
         Group {
             #if os(iOS)
@@ -179,10 +198,11 @@ struct LibraryTabs: View {
             legacyPlayerTabs
             #endif
         }
+        .environment(\.bluefinShowHome, showHome)
         #if os(iOS) && !targetEnvironment(macCatalyst)
         .onOpenURL { url in
             guard let route = WidgetRoute.admitted(url, authenticated: store.session != nil, preview: store.preview) else { return }
-            selectedTab = route.tab
+            tabSelection.wrappedValue = route.tab
         }
         #elseif os(tvOS)
         .background { TVTopShelfSync(sports: store.sports) }
@@ -222,8 +242,8 @@ struct LibraryTabs: View {
     @ViewBuilder private var tabs: some View {
         #if os(iOS)
         if #available(iOS 18, *) {
-            TabView(selection: $selectedTab) {
-                Tab("Home", systemImage: "house", value: 0) { BluefinNavigation { HomeView(sports: store.sports) } }
+            TabView(selection: tabSelection) {
+                Tab("Home", systemImage: "house", value: 0) { BluefinNavigation { HomeView(sports: store.sports) }.id(homeVisit) }
                 Tab("Library", systemImage: "square.stack", value: 1) { BluefinNavigation { LibrariesView() } }
                 Tab("Music", systemImage: "music.note", value: 2) { BluefinNavigation { MusicLibraryView() } }
                 Tab(value: 3, role: .search) { BluefinNavigation { SearchView() } }
@@ -231,7 +251,7 @@ struct LibraryTabs: View {
             }.tabViewStyle(.sidebarAdaptable)
         } else { legacyTabs }
         #elseif os(tvOS)
-        TabView(selection: $selectedTab) {
+        TabView(selection: tabSelection) {
             BluefinNavigation { TVHomeView(shelfItem: $topShelfItem, sports: store.sports) }
                 .id(homeVisit)
                 .tabItem { Label("Home", systemImage: "house") }.tag(0)
@@ -251,8 +271,8 @@ struct LibraryTabs: View {
         #endif
     }
     private var legacyTabs: some View {
-        TabView(selection: $selectedTab) {
-            BluefinNavigation { HomeView(sports: store.sports) }.tabItem { Label("Home", systemImage: "house") }.tag(0)
+        TabView(selection: tabSelection) {
+            BluefinNavigation { HomeView(sports: store.sports) }.id(homeVisit).tabItem { Label("Home", systemImage: "house") }.tag(0)
             BluefinNavigation { LibrariesView() }.tabItem { Label("Library", systemImage: "square.stack") }.tag(1)
             BluefinNavigation { MusicLibraryView() }.tabItem { Label("Music", systemImage: "music.note") }.tag(2)
             BluefinNavigation { SearchView() }.tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(3)
@@ -268,41 +288,37 @@ struct HomeView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 30) {
                 if store.preview { Label("Preview library", systemImage: "sparkles").font(.caption.bold()).foregroundStyle(.secondary).padding(.horizontal, 24) }
-                if sports.saved?.preferences.sports_only != true {
-                    if let featured = store.home.resume.first ?? store.home.latest.first { FeaturedItem(item: featured) }
-                    if !store.home.resume.isEmpty { MediaShelf(title: "Continue watching", items: store.home.resume) }
-                    if !store.home.nextUp.isEmpty { MediaShelf(title: "Up next", items: store.home.nextUp) }
-                    if !store.home.latest.isEmpty { MediaShelf(title: store.homeFromCatalog ? "Browse your library" : "Recently added", items: store.home.latest) }
-                }
-                SportsHomeSection(sports: sports)
-                if sports.loading && sports.saved?.preferences.sports_only == true { ProgressView("Loading sports").padding(24) }
-                if sports.available, let failure = sports.failure {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Sports couldn't refresh").font(.headline)
-                        Text(failure).font(.footnote).foregroundStyle(.secondary)
-                        Button("Try again") { Task { await sports.connect(store.session) } }
-                    }.padding(.horizontal, 24)
-                }
+                if let featured = store.home.resume.first ?? store.home.latest.first { FeaturedItem(item: featured) }
+                if !store.home.resume.isEmpty { MediaShelf(title: "Continue watching", items: store.home.resume) }
+                if !store.home.nextUp.isEmpty { MediaShelf(title: "Up next", items: store.home.nextUp) }
+                if !store.home.latest.isEmpty { MediaShelf(title: store.homeFromCatalog ? "Browse your library" : "Recently added", items: store.home.latest) }
                 if let issue = store.libraryProblem {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(issue).font(.callout).foregroundStyle(.secondary)
                         Button("Refresh library") { Task { await store.refresh() } }.disabled(store.loading)
                     }.padding(.horizontal, 24)
                 }
-                if store.home.latest.isEmpty && store.home.resume.isEmpty && store.home.nextUp.isEmpty
-                    && sports.saved?.preferences.sports_only != true {
-                    if store.loading { ProgressView("Loading your library").frame(maxWidth: .infinity).padding(40) }
+                if store.home.latest.isEmpty && store.home.resume.isEmpty && store.home.nextUp.isEmpty {
+                    if store.loading || (!store.initialHomeLoaded && !store.preview) { ProgressView("Loading your library").frame(maxWidth: .infinity).padding(40) }
                     else if store.libraryProblem == nil {
                         EmptyLibrary(title: "Browse your library", message: "Open Library to see your collections.", symbol: "square.stack")
                     }
                 }
+                if !store.preview {
+                    if sports.feed == nil {
+                        NavigationLink(destination: SportsDashboard(sports: sports).bluefinBackNavigation()) {
+                            Label("Sports", systemImage: "sportscourt")
+                        }.padding(.horizontal, 24)
+                    }
+                    SportsHomeSection(sports: sports)
+                }
             }.padding(.vertical, 16)
         }
         .background(BluefinBackground())
-        .navigationTitle(sports.saved?.preferences.sports_only == true ? "Sports" : "Home")
+        .navigationTitle("Home")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                NavigationLink(destination: SettingsView()) { Image(systemName: "person.crop.circle").font(.title3) }.accessibilityLabel("Account and settings")
+                NavigationLink(destination: SettingsView().bluefinBackNavigation()) { Image(systemName: "person.crop.circle").font(.title3) }.accessibilityLabel("Account and settings")
             }
         }
         .bluefinRefresh { await store.refresh(); await sports.connect(store.session) }

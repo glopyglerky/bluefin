@@ -8,6 +8,7 @@ import CryptoKit
     @Published var meshInvitationCode: String?
     @Published private(set) var signingOut = false
     @Published var home = HomePage(resume: [], latest: [], nextUp: [])
+    @Published private(set) var initialHomeLoaded = false
     @Published private(set) var homeFromCatalog = false
     @Published var libraries: [MediaItem] = []
     @Published var loading = false
@@ -90,6 +91,7 @@ import CryptoKit
         home = .init(resume: [], latest: [], nextUp: [])
         #endif
         accountGeneration = UUID()
+        initialHomeLoaded = false
         session = newSession
         preview = false
         restoreMusicQueue()
@@ -124,6 +126,7 @@ import CryptoKit
         TopShelfSnapshot.clear()
         #endif
         accountGeneration = UUID()
+        initialHomeLoaded = false
         session = candidate
         preview = false
         libraries = page.Items
@@ -190,6 +193,7 @@ import CryptoKit
                     case "homeNextUp": home.nextUp = page.Items
                     default: libraries = page.Items
                     }
+                    if section != "libraries" { initialHomeLoaded = true }
                 case .failure(let error):
                     if error is CancellationError { continue }
                     if section != "libraries" { homeFailed = true }
@@ -209,7 +213,10 @@ import CryptoKit
             home.latest = page.Items
             homeFromCatalog = true
         }
-        if current() { libraryProblem = problems.isEmpty ? nil : problems.joined(separator: "\n") }
+        if current() {
+            libraryProblem = problems.isEmpty ? nil : problems.joined(separator: "\n")
+            initialHomeLoaded = true
+        }
     }
 
     func items(parent: MediaItem? = nil, query: String = "", start: Int = 0, includeItemTypes: String? = nil) async throws -> ItemPage {
@@ -653,6 +660,7 @@ import CryptoKit
 
         // Stop local work before any Keychain or network operation can fail.
         accountGeneration = UUID()
+        initialHomeLoaded = false
         let generation = accountGeneration
         let pending = pendingPreparation
         pending?.cancel()

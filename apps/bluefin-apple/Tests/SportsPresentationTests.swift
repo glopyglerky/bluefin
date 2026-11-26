@@ -24,6 +24,18 @@ final class SportsPresentationTests: XCTestCase {
         XCTAssertEqual(SportsFixtures.game(state: "POSTPONED").status, .postponed)
         XCTAssertEqual(SportsFixtures.game(state: "CANCELED").status, .cancelled)
     }
+    func testWatchChannelRequiresAChannelAndCurrentGuideWindow() throws {
+        var item = SportsFixtures.game(kind: "ON_NOW")
+        item.native_start = "2026-11-08T00:00:00Z"
+        item.native_end = "2026-11-08T01:00:00Z"
+        let start = try XCTUnwrap(SportsSchedule.date(item.native_start))
+        let end = try XCTUnwrap(SportsSchedule.date(item.native_end))
+        XCTAssertFalse(item.isAiring(on: start.addingTimeInterval(-1)))
+        XCTAssertTrue(item.isAiring(on: start))
+        XCTAssertFalse(item.isAiring(on: end))
+        item.channel_id = nil
+        XCTAssertFalse(item.isAiring(on: start))
+    }
     func testLocalDayIncludesGameAcrossUTCMidnight() throws {
         let zone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
         let game = try XCTUnwrap(SportsFixtures.game().scheduleDate)

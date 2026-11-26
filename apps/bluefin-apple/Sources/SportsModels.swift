@@ -50,6 +50,12 @@ struct SportsOption: Codable, Identifiable {
         ["LIVE", "ON_NOW", "UPCOMING"].contains(kind) && channel_id?.isEmpty == false
     }
 
+    func isAiring(on date: Date) -> Bool {
+        guard canOpenChannel,
+              let starts = SportsSchedule.date(native_start ?? start),
+              let ends = SportsSchedule.date(native_end ?? end) else { return false }
+        return starts <= date && date < ends
+    }
 }
 
 struct SportsFeed: Codable {
