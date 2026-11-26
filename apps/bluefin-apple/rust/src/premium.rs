@@ -81,6 +81,14 @@ pub(super) fn project(v: &Value) -> Value {
         "Genres",
         "ImageTags",
         "BackdropImageTags",
+        "ParentBackdropItemId",
+        "ParentBackdropImageTags",
+        "ParentPrimaryImageItemId",
+        "ParentPrimaryImageTag",
+        "SeriesPrimaryImageTag",
+        "AlbumPrimaryImageTag",
+        "ParentThumbItemId",
+        "ParentThumbImageTag",
         "PrimaryImageAspectRatio",
         "UserData",
         "PlaylistItemId",
@@ -307,6 +315,7 @@ pub(super) fn call(api: &Api<'_>, op: &str) -> Result<Value> {
                     }
                 }
             } else if op == "liveChannels" {
+                optional(v, &mut q, &[("searchTerm", "searchTerm")])?;
                 q.push(("addCurrentProgram", "true".into()));
                 if v.get("type").is_some() {
                     let t = text(v, "type")?;
@@ -317,8 +326,10 @@ pub(super) fn call(api: &Api<'_>, op: &str) -> Result<Value> {
                 }
                 api.get(&["LiveTv", "Channels"], q)?
             } else {
+                if v.get("channelIds").is_some_and(|value| !value.is_null()) {
+                    q.push(("channelIds", ids(v, "channelIds", false)?.join(",")));
+                }
                 q.extend([
-                    ("channelIds", ids(v, "channelIds", false)?.join(",")),
                     ("sortBy", "StartDate".into()),
                     ("sortOrder", "Ascending".into()),
                 ]);
@@ -326,6 +337,7 @@ pub(super) fn call(api: &Api<'_>, op: &str) -> Result<Value> {
                     v,
                     &mut q,
                     &[
+                        ("searchTerm", "searchTerm"),
                         ("minStartDate", "minStartDate"),
                         ("maxStartDate", "maxStartDate"),
                         ("minEndDate", "minEndDate"),

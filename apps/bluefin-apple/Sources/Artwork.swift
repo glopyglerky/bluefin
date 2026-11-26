@@ -46,6 +46,11 @@ private final class SameOriginImages: NSObject, URLSessionTaskDelegate, URLSessi
             }
         } catch { /* Artwork caching never prevents browsing or playback. */ }
     }
+    func cachedImage(_ key: NSString, generation: UUID) -> UIImage? {
+        diskLock.lock(); defer { diskLock.unlock() }
+        guard epoch == generation else { return nil }
+        return cache.object(forKey: key)
+    }
     func cacheImage(_ image: UIImage, key: NSString, generation: UUID) -> Bool {
         diskLock.lock(); defer { diskLock.unlock() }
         guard epoch == generation else { return false }
@@ -85,32 +90,10 @@ struct Artwork: View {
     @State private var imageKey: String?
     @MainActor private static var inFlight: [String: Task<UIImage?, Never>] = [:]
 
-    private struct Source: Sendable {
-        let id: String
-        let kind: String
-        var tag: String?
-    }
+    private typealias Source = ArtworkSource
 
     private static func sources(for item: MediaItem, backdrop: Bool) -> [Source] {
-        var sources: [Source] = []
-        if backdrop {
-            if let tag = item.BackdropImageTags?.first, !tag.isEmpty {
-                sources.append(Source(id: item.Id, kind: "Backdrop/0", tag: tag))
-            }
-            if let parent = item.ParentBackdropItemId, let tag = item.ParentBackdropImageTags?.first, !tag.isEmpty {
-                sources.append(Source(id: parent, kind: "Backdrop/0", tag: tag))
-            }
-            if let tag = item.ImageTags?["Thumb"], !tag.isEmpty {
-                sources.append(Source(id: item.Id, kind: "Thumb", tag: tag))
-            }
-        }
-        let primary = Source(id: item.Id, kind: "Primary", tag: item.ImageTags?["Primary"])
-        if let tag = primary.tag, !tag.isEmpty { sources.append(primary) }
-        if let parent = item.ParentPrimaryImageItemId, let tag = item.ParentPrimaryImageTag, !tag.isEmpty {
-            sources.append(Source(id: parent, kind: "Primary", tag: tag))
-        }
-        if sources.isEmpty { sources.append(primary) }
-        return sources
+        ArtworkPlan.sources(for: item, backdrop: backdrop)
     }
 
     private var key: String {
@@ -126,7 +109,7 @@ struct Artwork: View {
                 else {
                     VStack(spacing: 12) {
                         Image(systemName: symbol).font(.system(size: backdrop ? 72 : 40, weight: .ultraLight)).opacity(0.5)
-                    }.foregroundColor(.white)
+                    }.foregroundStyle(BluefinStyle.secondaryText)
                 }
             }.frame(width: geometry.size.width, height: geometry.size.height).clipped()
         }
@@ -137,9 +120,7 @@ struct Artwork: View {
         switch item.Type { case "Audio", "MusicAlbum", "MusicArtist": return "waveform"; case "TvChannel": return "dot.radiowaves.left.and.right"; case "Series", "Episode": return "tv"; default: return "film" }
     }
     private var colors: [Color] {
-        // Stable per item; no process-random hash affects artwork between launches.
-        let hue = Double(item.Id.utf8.reduce(0) { ($0 + Int($1)) % 360 }) / 360
-        return [Color(hue: hue, saturation: 0.52, brightness: 0.43), Color(hue: hue, saturation: 0.72, brightness: 0.16)]
+        [BluefinStyle.secondaryBackground, BluefinStyle.background]
     }
     private func load() async {
         let requested = key
@@ -156,13 +137,15 @@ struct Artwork: View {
         // routing identifiers, never server item IDs or permission grants.
         // Keep all callers (rows, player, and now-playing artwork) offline.
         guard !item.Id.hasPrefix("owned-") else { return nil }
-        let pixelWidth = thumbnailWidth ?? (backdrop ? 1600 : 500)
+        let pixelWidth = ArtworkPlan.pixelWidth(thumbnailWidth, backdrop: backdrop)
         let cache = SameOriginImages.shared
         let generation = cache.generation()
         for source in sources(for: item, backdrop: backdrop) {
             guard !Task.isCancelled, generation == cache.generation() else { return nil }
-            let key = "\(session.server)/\(session.userId)/\(session.meshSessionId ?? "https")/\(source.id)/\(source.kind)/\(source.tag ?? "")/\(pixelWidth)"
-            if let cached = cache.cache.object(forKey: key as NSString) { return cached }
+            // Tagged art is content-versioned. Recheck untagged legacy art periodically.
+            let version = source.tag ?? "untagged-\(Int(Date().timeIntervalSince1970 / 900))"
+            let key = "\(session.server)/\(session.userId)/\(session.meshSessionId ?? "https")/\(source.id)/\(source.kind)/\(version)/\(pixelWidth)"
+            if let cached = cache.cachedImage(key as NSString, generation: generation) { return cached }
             if let pending = inFlight[key] {
                 let image = await pending.value
                 guard !Task.isCancelled, generation == cache.generation() else { return nil }
@@ -206,6 +189,7 @@ struct Artwork: View {
         while components.path.hasSuffix("/") { components.path.removeLast() }
         components.path += "/Items/\(source.id)/Images/\(source.kind)"
         components.queryItems = [URLQueryItem(name: "maxWidth", value: String(width)), URLQueryItem(name: "quality", value: "85")]
+        if let tag = source.tag { components.queryItems?.append(URLQueryItem(name: "tag", value: tag)) }
         guard let url = components.url else { return nil }
         if session.meshSessionId != nil {
             do {
@@ -223,6 +207,7 @@ struct Artwork: View {
                 try Task.checkCancellation()
                 let decoded = UIImage(cgImage: cg)
                 guard cache.cacheImage(decoded, key: cacheKey, generation: generation) else { return nil }
+                persist(decoded, key: key, generation: generation)
                 return decoded
             } catch { return nil }
         }
@@ -237,12 +222,39 @@ struct Artwork: View {
             try Task.checkCancellation()
             guard let decoded = decode(file, width: width), cache.cacheImage(decoded, key: cacheKey, generation: generation) else { return nil }
             // Show the decoded artwork before compressing or pruning the persistent cache.
-            Task.detached(priority: .utility) {
-                if let data = decoded.jpegData(compressionQuality: 0.82) { cache.storeFile(data, key: key, generation: generation) }
-            }
+            persist(decoded, key: key, generation: generation)
             return decoded
         } catch { return nil }
     }
+    nonisolated private static func persist(_ image: UIImage, key: String, generation: UUID) {
+        Task.detached(priority: .utility) {
+            let alpha = image.cgImage?.alphaInfo
+            let transparent = alpha == .premultipliedFirst || alpha == .premultipliedLast || alpha == .first || alpha == .last
+            // Keep transparency in channel logos and other PNG artwork.
+            let data = transparent ? image.pngData() : image.jpegData(compressionQuality: 0.82)
+            if let data { SameOriginImages.shared.storeFile(data, key: key, generation: generation) }
+        }
+    }
+
+    @MainActor static func prefetch(items: [MediaItem], session: AccountSession) async {
+        var seen = Set<String>()
+        let pending = Array(items.filter { seen.insert($0.Id).inserted }.prefix(12))
+        await withTaskGroup(of: Void.self) { group in
+            var next = 0
+            func enqueue(_ item: MediaItem) {
+                group.addTask {
+                    guard !Task.isCancelled else { return }
+                    _ = await nativeImage(for: item, session: session)
+                }
+            }
+            for _ in 0..<min(2, pending.count) { enqueue(pending[next]); next += 1 }
+            while await group.next() != nil {
+                guard !Task.isCancelled else { group.cancelAll(); return }
+                if next < pending.count { enqueue(pending[next]); next += 1 }
+            }
+        }
+    }
+
     @MainActor static func clearCache() {
         for request in inFlight.values { request.cancel() }
         inFlight.removeAll()

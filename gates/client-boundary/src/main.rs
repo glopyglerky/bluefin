@@ -10,6 +10,9 @@ const LOCAL_MANIFESTS: &[&str] = &[
     "apps/bluefin-apple/iroh-modern/vendor/netwatch-0.19.3/Cargo.toml",
     REVIEWED_NOQ_MANIFEST,
     "crates/bluefin-contract/Cargo.toml",
+    "crates/local-assist/Cargo.toml",
+    "crates/mesh-connect/Cargo.toml",
+    "vendor/rustls-provider-rustcrypto-pq/Cargo.toml",
     "apps/bluefin-android/rust/Cargo.toml",
     "apps/bluefin-universal/Cargo.toml",
 ];
@@ -17,6 +20,9 @@ const SHARED_SOURCE_ROOTS: &[&str] = &[
     "apps/bluefin-apple/rust/src",
     "apps/bluefin-apple/iroh-modern/src",
     "crates/bluefin-contract/src",
+    "crates/local-assist/src",
+    "crates/mesh-connect/src",
+    "vendor/rustls-provider-rustcrypto-pq/src",
 ];
 struct Client {
     name: &'static str,
@@ -241,6 +247,50 @@ mod tests {
             "manifest_path":repo.join("apps/bluefin-apple/rust/Cargo.toml")
         }]});
         assert!(check_packages(repo, &alternate).is_err());
+    }
+
+    #[test]
+    fn local_assistance_and_pinned_mesh_manifests_are_admitted() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap();
+        let packages: Vec<_> = [
+            ("bluefin-local-assist", "crates/local-assist/Cargo.toml"),
+            ("mesh-connect", "crates/mesh-connect/Cargo.toml"),
+            (
+                "rustls-provider-rustcrypto-pq",
+                "vendor/rustls-provider-rustcrypto-pq/Cargo.toml",
+            ),
+        ]
+        .into_iter()
+        .map(|(name, path)| {
+            json!({
+                "name": name, "source": null, "manifest_path": repo.join(path)
+            })
+        })
+        .collect();
+        let graph = json!({"resolve":{"nodes":[]}, "packages":packages});
+        assert_eq!(check_packages(repo, &graph).unwrap(), 3);
+    }
+
+    #[test]
+    fn reviewed_client_names_cannot_admit_a_server_manifest() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap();
+        for name in [
+            "bluefin-local-assist",
+            "mesh-connect",
+            "rustls-provider-rustcrypto-pq",
+        ] {
+            let graph = json!({"resolve":{"nodes":[]}, "packages":[{
+                "name":name, "source":null,
+                "manifest_path":repo.join("crates/ferrofin-api/Cargo.toml")
+            }]});
+            assert!(check_packages(repo, &graph).is_err(), "{name}");
+        }
     }
 
     #[test]

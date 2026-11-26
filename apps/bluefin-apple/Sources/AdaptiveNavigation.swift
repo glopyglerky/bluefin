@@ -24,7 +24,7 @@ struct BluefinNavigation<Content: View>: View {
             #if os(tvOS)
             TVMediaNavigation(path: $path) { content }
             #else
-            NavigationStack { content }
+            NavigationStack { content.bluefinNavigationChrome() }
             #endif
         } else {
             NavigationView { content }.navigationViewStyle(.stack)
@@ -34,6 +34,7 @@ struct BluefinNavigation<Content: View>: View {
 
 enum MediaDestination: Hashable {
     case detail(MediaItem)
+    case searchResult(MediaItem, query: String, accountContext: UUID)
     case trailers(String)
     case collections
     case collection(title: String, parent: MediaItem?, types: String?)
@@ -51,6 +52,8 @@ enum MediaDestination: Hashable {
     @ViewBuilder func screen(back: (() -> Void)? = nil) -> some View {
         switch self {
         case .detail(let item): DetailView(item: item, onBack: back)
+        case .searchResult(let item, let query, let context):
+            HomeSearchDestination(item: item, query: query, accountContext: context, onBack: back)
         case .trailers(let id): TrailersDetailView(itemID: id, onBack: back)
         case .collections: LibrariesView().bluefinBackNavigation(back)
         case .collection(let title, let parent, let types):
@@ -235,6 +238,17 @@ private struct BluefinHomeControl: ViewModifier {
 }
 
 extension View {
+    @ViewBuilder func bluefinNavigationChrome() -> some View {
+        #if os(iOS)
+        if #available(iOS 16, *) {
+            self.toolbarBackground(BluefinStyle.background, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
+        } else { self }
+        #else
+        self
+        #endif
+    }
+
     @ViewBuilder func bluefinBackNavigation(_ action: (() -> Void)? = nil) -> some View {
         #if os(tvOS)
         modifier(TVBackControl(action: action))
@@ -800,6 +814,9 @@ struct TVHomeView: View {
     @EnvironmentObject private var store: LibraryStore
     @Binding var shelfItem: MediaItem?
     @ObservedObject var sports: SportsStore
+    var openSearch: () -> Void = {}
+    var openCollections: () -> Void = {}
+    var openAccount: () -> Void = {}
 
     private var shelfIsPresented: Binding<Bool> {
         Binding(get: { shelfItem != nil }, set: { if !$0 { shelfItem = nil } })
@@ -828,19 +845,23 @@ struct TVHomeView: View {
                         .accessibilityAddTraits(.isHeader)
                         .accessibilityIdentifier("homeHeading")
                     Spacer()
-                    MediaNavigationLink(destination: .collections) { Label("Collections", systemImage: "square.stack") }
-                    MediaNavigationLink(destination: .account) { Label("Account", systemImage: "person.crop.circle") }
+                    Button(action: openSearch) { Label("Search", systemImage: "magnifyingglass") }.accessibilityIdentifier("openSearch")
+                    Button(action: openCollections) { Label("Collections", systemImage: "square.stack") }.accessibilityIdentifier("openCollections")
+                    Button(action: openAccount) { Label("Account", systemImage: "person.crop.circle") }.accessibilityIdentifier("openAccount")
                 }.buttonStyle(.bordered).padding(.horizontal, 32).focusSection()
                 if store.preview {
                     Label("Sample library", systemImage: "sparkles")
                         .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 32)
                 }
-                if let featured = store.home.resume.first ?? store.home.latest.first { TVFeaturedItem(item: featured) }
+                if let featured = store.home.featured { TVFeaturedItem(item: featured) }
                 if (store.loading || (!store.initialHomeLoaded && !store.preview)) && store.home.latest.isEmpty && store.home.resume.isEmpty && store.home.nextUp.isEmpty {
                     ProgressView("Loading your library").padding(.horizontal, 32)
                 }
                 if !store.home.resume.isEmpty { MediaShelf(title: "Continue watching", items: store.home.resume) }
                 if !store.home.nextUp.isEmpty { MediaShelf(title: "Up next", items: store.home.nextUp) }
+                ForEach(store.home.recommendations) { shelf in
+                    if !shelf.items.isEmpty { MediaShelf(title: shelf.title, items: shelf.items) }
+                }
                 let movies = store.home.latest.filter { $0.Type == "Movie" }
                 let shows = store.home.latest.filter { ["Series", "Season", "Episode"].contains($0.Type ?? "") }
                 if !movies.isEmpty { MediaShelf(title: store.homeFromCatalog ? "Movies" : "Recently added movies", items: movies) }
@@ -875,6 +896,7 @@ private struct TVFeaturedItem: View {
             LinearGradient(colors: [.black.opacity(0.88), .black.opacity(0.16), .clear],
                            startPoint: .bottomLeading, endPoint: .topTrailing)
             VStack(alignment: .leading, spacing: 14) {
+                Text("FEATURED").font(.caption.weight(.semibold)).tracking(1.5)
                 Text(item.title).font(.largeTitle.bold()).lineLimit(2)
                 if !item.subtitle.isEmpty { Text(item.subtitle).font(.callout).foregroundStyle(.white.opacity(0.8)) }
                 HStack(spacing: 20) {
@@ -885,7 +907,7 @@ private struct TVFeaturedItem: View {
                     }
                     MediaNavigationLink(destination: .detail(item)) {
                         Text(item.Type == "Series" ? "Episodes" : "Details")
-                    }.buttonStyle(.bordered)
+                    }.buttonStyle(.bordered).tint(.white).foregroundStyle(.white)
                 }
             }.foregroundStyle(.white).padding(42)
         }.frame(height: 370).clipShape(RoundedRectangle(cornerRadius: 26))

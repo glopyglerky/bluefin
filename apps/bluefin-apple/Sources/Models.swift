@@ -44,6 +44,7 @@ struct MediaItem: Codable, Identifiable, Hashable {
     var RunTimeTicks: Int64?
     var SeriesName: String?
     var SeriesId: String?
+    var SeriesPrimaryImageTag: String?
     var ParentId: String?
     var PlaylistItemId: String?
     var NormalizationGain: Double?
@@ -51,6 +52,7 @@ struct MediaItem: Codable, Identifiable, Hashable {
     var Chapters: [MediaChapter]?
     var Number: String?
     var CurrentProgram: LiveProgram?
+    var ChannelId: String?
     var ParentIndexNumber: Int?
     var IndexNumber: Int?
     var ImageTags: [String: String]?
@@ -59,13 +61,18 @@ struct MediaItem: Codable, Identifiable, Hashable {
     var ParentBackdropImageTags: [String]?
     var ParentPrimaryImageItemId: String?
     var ParentPrimaryImageTag: String?
+    var ParentThumbItemId: String?
+    var ParentThumbImageTag: String?
     var UserData: UserData?
     var IsFolder: Bool?
     var CollectionType: String?
     var ProviderIds: [String: String]?
     var ExternalUrls: [ExternalLink]?
     var Album: String?
+    var AlbumId: String?
+    var AlbumPrimaryImageTag: String?
     var Artists: [String]?
+    var ArtistItems: [MediaNamedItem]?
     var AlbumArtist: String?
     var MediaSources: [MediaSource]?
     var MediaStreams: [MediaStream]?
@@ -100,6 +107,11 @@ struct MediaItem: Codable, Identifiable, Hashable {
         guard let duration = RunTimeTicks, duration > 0 else { return 0 }
         return min(1, max(0, Double(UserData?.PlaybackPositionTicks ?? 0) / Double(duration)))
     }
+}
+
+struct MediaNamedItem: Codable, Hashable {
+    var Id: String?
+    var Name: String?
 }
 
 struct ExternalLink: Codable, Hashable {
@@ -168,6 +180,7 @@ struct UserData: Codable, Hashable {
     var PlaybackPositionTicks: Int64?
     var Played: Bool?
     var IsFavorite: Bool?
+    var Likes: Bool?
 }
 
 struct ItemPage: Decodable {
@@ -175,11 +188,61 @@ struct ItemPage: Decodable {
     var TotalRecordCount: Int?
 }
 
+struct HomeRecommendation: Decodable, Identifiable {
+    var id: String
+    var title: String
+    var items: [MediaItem]
+    var reason: String?
+}
+
+struct HomeRecommendationsPage: Decodable {
+    var recommendations: [HomeRecommendation]
+    var searchHistorySupported: Bool
+    var searchHistoryGeneration: Int64?
+}
+
+/// A bounded presentation of the owner's recommendations. Normalizes UUID
+/// spellings and removes repeats from progress shelves without inventing scores.
 struct HomePage: Decodable {
     var resume: [MediaItem]
     var latest: [MediaItem]
     var nextUp: [MediaItem]
+    var recommendations: [HomeRecommendation] = []
+    var featured: MediaItem? { resume.first ?? recommendations.first?.items.first ?? nextUp.first ?? latest.first }
+
+    init(resume: [MediaItem], latest: [MediaItem], nextUp: [MediaItem], recommendations: [HomeRecommendation] = []) {
+        self.resume = resume; self.latest = latest; self.nextUp = nextUp
+        self.recommendations = recommendations
+    }
+    private enum CodingKeys: String, CodingKey { case resume, latest, nextUp, recommendations }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        resume = try c.decode([MediaItem].self, forKey: .resume)
+        latest = try c.decode([MediaItem].self, forKey: .latest)
+        nextUp = try c.decode([MediaItem].self, forKey: .nextUp)
+        recommendations = try c.decodeIfPresent([HomeRecommendation].self, forKey: .recommendations) ?? []
+        boundRecommendations()
+    }
+    mutating func boundRecommendations() {
+        var seen = resume + nextUp
+        var shelfIDs = Set<String>()
+        recommendations = recommendations.prefix(4).compactMap { shelf in
+            guard shelfIDs.insert(shelf.id).inserted else { return nil }
+            var shelf = shelf
+            var items: [MediaItem] = []
+            for item in shelf.items {
+                guard !item.Id.isEmpty, !seen.contains(where: { MediaItem.matchesID($0.Id, item.Id) }) else { continue }
+                seen.append(item); items.append(item)
+                if items.count == 12 { break }
+            }
+            shelf.items = items
+            return shelf.items.isEmpty ? nil : shelf
+        }
+    }
 }
+
+struct HomeHistoryState: Decodable { var generation: Int64 }
+
 
 struct PublicInfo: Decodable {
     var ServerName: String?

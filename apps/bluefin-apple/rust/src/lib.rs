@@ -12,6 +12,7 @@ mod local_assistance;
 mod client_platform;
 mod discovery;
 mod home_assistant;
+mod home;
 mod music_assistant;
 mod iroh_transport;
 mod mesh_onboarding;
@@ -29,6 +30,7 @@ mod premium;
 #[cfg(feature = "iroh-probe")]
 mod probe;
 mod sports;
+mod search;
 mod stream;
 mod trailers;
 const INPUT_MAX: usize = 65536;
@@ -712,6 +714,7 @@ pub fn call(v: &Value) -> Result<Value> {
             "latest": home_shelf(&api, "homeLatest")?,
             "nextUp": home_shelf(&api, "homeNextUp")?
         })),
+        "homeRecommendations" | "homeSearchRecord" | "homeSearchClear" => home::call(&api, op),
         "homeResume" | "homeLatest" | "homeNextUp" => {
             Ok(json!({"Items": home_shelf(&api, op)?}))
         },
@@ -720,6 +723,7 @@ pub fn call(v: &Value) -> Result<Value> {
             vec![("includeSegmentTypes", "Intro,Recap,Outro,Commercial,Preview".into())],
         ),
         "libraries" => api.get(&["Users", text(v, "userId")?, "Views"], vec![]),
+        "searchFilters" => search::facets(&api),
         "items" => {
             let user = text(v, "userId")?;
             let mut q = vec![
@@ -740,6 +744,7 @@ pub fn call(v: &Value) -> Result<Value> {
                     q.push((out, text(v, key)?.into()));
                 }
             }
+            search::query(v, &mut q)?;
             let r = api.get(&["Users", user, "Items"], q)?;
             let items = r["Items"]
                 .as_array()

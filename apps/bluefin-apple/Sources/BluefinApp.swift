@@ -156,129 +156,364 @@ struct QuickConnectView: View {
     }
 }
 
+enum BluefinCategory: Int, CaseIterable, Identifiable {
+    case home = 0, sports = 6, shows = 5, movies = 1, liveTV = 4, music = 2
+    var id: Int { rawValue }
+    var title: String {
+        switch self {
+        case .home: "Home"
+        case .sports: "Sports"
+        case .shows: "TV Shows"
+        case .movies: "Movies"
+        case .liveTV: "Live TV"
+        case .music: "Music"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .home: "house"
+        case .sports: "sportscourt"
+        case .shows: "tv"
+        case .movies: "film"
+        case .liveTV: "dot.radiowaves.left.and.right"
+        case .music: "music.note"
+        }
+    }
+    var videoItemType: String? {
+        switch self { case .shows: "Series"; case .movies: "Movie"; default: nil }
+    }
+    var searchScope: UnifiedSearchScope {
+        switch self {
+        case .shows: .tvShows
+        case .movies: .movies
+        case .music: .music
+        case .liveTV: .liveTv
+        case .home, .sports: .all
+        }
+    }
+}
+
+private enum BluefinUtility: String, Identifiable {
+    case search, collections, account
+    var id: String { rawValue }
+}
+
 struct LibraryTabs: View {
     @EnvironmentObject private var store: LibraryStore
-    @State private var selectedTab = 0
+    @State private var selectedTab = BluefinCategory.home.rawValue
+    @State private var visitedTabs: Set<Int> = [BluefinCategory.home.rawValue]
     @State private var homeVisit = UUID()
+    @State private var utility: BluefinUtility?
+    @State private var searchScope = UnifiedSearchScope.all
     #if os(tvOS)
     @State private var topShelfItem: MediaItem?
     @State private var topShelfRequest: URL?
-    @State private var previousTab = 0
+    @State private var previousTab = BluefinCategory.home.rawValue
     #endif
+
     private var tabSelection: Binding<Int> {
-        Binding(get: { selectedTab }, set: { tab in
-            if tab == 0 { showHome() }
-            else { selectedTab = tab }
-        })
+        Binding(get: { selectedTab }, set: select)
+    }
+
+    private func select(_ tab: Int) {
+        guard BluefinCategory(rawValue: tab) != nil else { return }
+        visitedTabs.insert(tab)
+        if tab == BluefinCategory.home.rawValue { showHome() }
+        else { selectedTab = tab }
+    }
+
+    private func openSearch(category: BluefinCategory? = nil) {
+        searchScope = category?.searchScope ?? .all
+        utility = .search
     }
 
     private func showHome() {
+        utility = nil
         #if os(tvOS)
         topShelfRequest = nil
         topShelfItem = nil
         #endif
         homeVisit = UUID()
-        selectedTab = 0
+        selectedTab = BluefinCategory.home.rawValue
     }
 
     var body: some View {
-        Group {
-            #if os(iOS)
-            if #available(iOS 26.1, *) {
-                tabs.tabViewBottomAccessory(isEnabled: store.playback?.item.Type == "Audio") {
-                    if let playback = store.playback, playback.item.Type == "Audio" {
-                        MusicNativeAccessory(playback: playback)
+        navigation
+            .environment(\.bluefinShowHome, showHome)
+            .sheet(item: $utility) { destination in
+                BluefinNavigation {
+                    #if os(tvOS)
+                    utilityContent(destination).bluefinBackNavigation { utility = nil }
+                    #else
+                    utilityContent(destination)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { utility = nil }
+                            }
+                        }
+                    #endif
+                }
+                .environment(\.bluefinShowHome, showHome)
+                .tint(BluefinStyle.accent)
+                .foregroundStyle(BluefinStyle.text)
+            }
+            #if os(iOS) && !targetEnvironment(macCatalyst)
+            .onOpenURL { url in
+                guard let route = WidgetRoute.admitted(url, authenticated: store.session != nil, preview: store.preview) else { return }
+                switch route {
+                case .library: utility = .collections
+                case .search: openSearch(category: .home)
+                case .music, .liveTV: select(route.tab)
+                }
+            }
+            #elseif os(tvOS)
+            .background { TVTopShelfSync(sports: store.sports) }
+            .onChange(of: selectedTab) { next in
+                if previousTab == 0 && next != 0 {
+                    topShelfItem = nil
+                    homeVisit = UUID()
+                }
+                previousTab = next
+            }
+            .onOpenURL { topShelfRequest = $0 }
+            .task(id: topShelfRequest) {
+                guard let url = topShelfRequest, store.session != nil, !store.preview,
+                      let id = TopShelfSnapshot.itemID(for: url) else { return }
+                defer { if topShelfRequest == url { topShelfRequest = nil } }
+                do {
+                    let item = try await store.detail(MediaItem(Id: id))
+                    try Task.checkCancellation()
+                    selectedTab = BluefinCategory.home.rawValue
+                    topShelfItem = item
+                } catch is CancellationError {} catch {
+                    store.error = "This title is no longer available."
+                }
+            }
+            #endif
+            .onChange(of: store.accountContext) { _ in
+                visitedTabs = [BluefinCategory.home.rawValue]
+                showHome()
+            }
+            .task {
+                NativeIntegrations.attach(to: store)
+                NativeIntegrations.shared.openLibrary = { utility = .collections }
+                if !store.loading { await store.refresh() }
+            }
+    }
+
+    @ViewBuilder private var navigation: some View {
+        #if os(tvOS)
+        TabView(selection: tabSelection) {
+            ForEach(BluefinCategory.allCases) { category in
+                categoryNavigation(category)
+                    .tabItem { Label(category.title, systemImage: category.symbol) }
+                    .tag(category.rawValue)
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) { miniPlayer }
+        #else
+        GeometryReader { geometry in
+            let sidebar = geometry.size.width >= 760
+            HStack(spacing: 0) {
+                if sidebar { categorySidebar }
+                ZStack {
+                    ForEach(BluefinCategory.allCases) { category in
+                        if visitedTabs.contains(category.rawValue) {
+                            categoryNavigation(category)
+                                .opacity(selectedTab == category.rawValue ? 1 : 0)
+                                .allowsHitTesting(selectedTab == category.rawValue)
+                                .accessibilityHidden(selectedTab != category.rawValue)
+                                .disabled(selectedTab != category.rawValue)
+                                .zIndex(selectedTab == category.rawValue ? 1 : 0)
+                        }
                     }
                 }
-            } else if #available(iOS 26, *) {
-                tabs.tabViewBottomAccessory {
-                    if let playback = store.playback, playback.item.Type == "Audio" { MusicNativeAccessory(playback: playback) }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .background(BluefinStyle.background)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    miniPlayer
+                    if !sidebar { compactCategories }
                 }
-            } else { legacyPlayerTabs }
+            }
+        }
+        #endif
+    }
+
+    private func categoryNavigation(_ category: BluefinCategory) -> some View {
+        BluefinNavigation {
+            #if os(tvOS)
+            if category == .home { categoryContent(category) }
+            else {
+                categoryContent(category)
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        HStack(spacing: 18) { Spacer(); utilityButtons }
+                            .buttonStyle(.bordered).padding(.horizontal, 32).padding(.vertical, 10)
+                            .background(BluefinStyle.background).focusSection()
+                    }
+            }
             #else
-            legacyPlayerTabs
+            categoryContent(category)
+                .toolbar {
+                    ToolbarItemGroup(placement: .primaryAction) { utilityButtons }
+                }
             #endif
         }
-        .environment(\.bluefinShowHome, showHome)
-        #if os(iOS) && !targetEnvironment(macCatalyst)
-        .onOpenURL { url in
-            guard let route = WidgetRoute.admitted(url, authenticated: store.session != nil, preview: store.preview) else { return }
-            tabSelection.wrappedValue = route.tab
+        .id(category == .home ? homeVisit.uuidString : category.title)
+    }
+
+    @ViewBuilder private func categoryContent(_ category: BluefinCategory) -> some View {
+        switch category {
+        case .home:
+            #if os(tvOS)
+            TVHomeView(shelfItem: $topShelfItem, sports: store.sports,
+                       openSearch: { openSearch(category: .home) }, openCollections: { utility = .collections },
+                       openAccount: { utility = .account })
+            #else
+            HomeView(sports: store.sports)
+            #endif
+        case .sports:
+            SportsDashboard(sports: store.sports)
+        case .shows:
+            #if os(tvOS)
+            TVVideoLibrary(kind: .shows)
+            #else
+            VideoCategoryView(category: .shows)
+            #endif
+        case .movies:
+            #if os(tvOS)
+            TVVideoLibrary(kind: .movies)
+            #else
+            VideoCategoryView(category: .movies)
+            #endif
+        case .liveTV:
+            #if os(tvOS)
+            LiveGuideView()
+            #else
+            LiveTVView()
+            #endif
+        case .music:
+            MusicLibraryView()
         }
-        #elseif os(tvOS)
-        .background { TVTopShelfSync(sports: store.sports) }
-        .onChange(of: selectedTab) { next in
-            if previousTab == 0 && next != 0 {
-                topShelfItem = nil
-                homeVisit = UUID()
+    }
+
+    @ViewBuilder private func utilityContent(_ destination: BluefinUtility) -> some View {
+        switch destination {
+        case .search: SearchView(initialScope: searchScope)
+        case .collections: LibrariesView()
+        case .account: SettingsView()
+        }
+    }
+
+    private var utilityButtons: some View {
+        Group {
+            #if os(tvOS)
+            Button { openSearch() } label: { Label("Search", systemImage: "magnifyingglass") }
+                .accessibilityIdentifier("openSearch")
+            Button { utility = .collections } label: { Label("Collections", systemImage: "square.stack") }
+                .accessibilityIdentifier("openCollections")
+            Button { utility = .account } label: { Label("Account", systemImage: "person.crop.circle") }
+                .accessibilityIdentifier("openAccount")
+            #else
+            Button { openSearch() } label: { Image(systemName: "magnifyingglass") }
+                .accessibilityLabel("Search all media").accessibilityIdentifier("openSearch")
+            Button { utility = .collections } label: { Image(systemName: "square.stack") }
+                .accessibilityLabel("Collections and libraries").accessibilityIdentifier("openCollections")
+            Button { utility = .account } label: { Image(systemName: "person.crop.circle") }
+                .accessibilityLabel("Account and settings").accessibilityIdentifier("openAccount")
+            #endif
+        }
+    }
+
+    @ViewBuilder private var miniPlayer: some View {
+        if let playback = store.playback, playback.item.Type == "Audio" {
+            MusicMiniPlayer(playback: playback)
+        }
+    }
+
+    private var compactCategories: some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(BluefinCategory.allCases) { category in
+                Button { select(category.rawValue) } label: {
+                    VStack(spacing: 5) {
+                        Image(systemName: category.symbol).font(.system(size: 20))
+                        Text(category.title).font(.caption2).lineLimit(2)
+                            .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 52, alignment: .top)
+                    .padding(.vertical, 6)
+                    .foregroundStyle(selectedTab == category.rawValue ? BluefinStyle.accent : BluefinStyle.secondaryText)
+                    .background {
+                        if selectedTab == category.rawValue {
+                            RoundedRectangle(cornerRadius: 10).fill(BluefinStyle.brand.opacity(0.15))
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selectedTab == category.rawValue ? .isSelected : [])
+                .accessibilityIdentifier("category-\(category.rawValue)")
             }
-            previousTab = next
         }
-        .onOpenURL { topShelfRequest = $0 }
-        .task(id: topShelfRequest) {
-            guard let url = topShelfRequest, store.session != nil, !store.preview,
-                  let id = TopShelfSnapshot.itemID(for: url) else { return }
-            defer { if topShelfRequest == url { topShelfRequest = nil } }
-            do {
-                let item = try await store.detail(MediaItem(Id: id))
-                try Task.checkCancellation()
-                selectedTab = 0
-                topShelfItem = item
-            } catch is CancellationError {} catch {
-                store.error = "This title is no longer available."
+        .padding(.horizontal, 4).padding(.vertical, 4)
+        .background(BluefinStyle.secondaryBackground)
+        .overlay(alignment: .top) { Rectangle().fill(BluefinStyle.decorativeLine).frame(height: 1) }
+    }
+
+    private var categorySidebar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                BluefinMark().frame(width: 38, height: 38)
+                Text("Bluefin").font(.system(size: 23, weight: .bold, design: .rounded))
+            }.padding(.horizontal, 8).padding(.vertical, 18)
+            ForEach(BluefinCategory.allCases) { category in
+                Button { select(category.rawValue) } label: {
+                    Label(category.title, systemImage: category.symbol)
+                        .font(.body.weight(selectedTab == category.rawValue ? .semibold : .regular))
+                        .frame(maxWidth: .infinity, minHeight: 46, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .foregroundStyle(selectedTab == category.rawValue ? BluefinStyle.accent : BluefinStyle.text)
+                        .background {
+                            if selectedTab == category.rawValue {
+                                RoundedRectangle(cornerRadius: 10).fill(BluefinStyle.brand.opacity(0.15))
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selectedTab == category.rawValue ? .isSelected : [])
+                .accessibilityIdentifier("category-\(category.rawValue)")
             }
+            Spacer(minLength: 12)
         }
-        #endif
-        .task {
-            NativeIntegrations.attach(to: store)
-            NativeIntegrations.shared.openLibrary = { selectedTab = 1 }
-            if !store.loading { await store.refresh() }
-        }
+        .padding(12).frame(width: 210)
+        .background(BluefinStyle.secondaryBackground)
+        .overlay(alignment: .trailing) { Rectangle().fill(BluefinStyle.decorativeLine).frame(width: 1) }
     }
-    private var legacyPlayerTabs: some View {
-        tabs.safeAreaInset(edge: .bottom, spacing: 0) {
-            if let playback = store.playback, playback.item.Type == "Audio" { MusicMiniPlayer(playback: playback) }
-        }
-    }
-    @ViewBuilder private var tabs: some View {
-        #if os(iOS)
-        if #available(iOS 18, *) {
-            TabView(selection: tabSelection) {
-                Tab("Home", systemImage: "house", value: 0) { BluefinNavigation { HomeView(sports: store.sports) }.id(homeVisit) }
-                Tab("Library", systemImage: "square.stack", value: 1) { BluefinNavigation { LibrariesView() } }
-                Tab("Music", systemImage: "music.note", value: 2) { BluefinNavigation { MusicLibraryView() } }
-                Tab(value: 3, role: .search) { BluefinNavigation { SearchView() } }
-                Tab("Live TV", systemImage: "dot.radiowaves.left.and.right", value: 4) { BluefinNavigation { LiveTVView() } }
-            }.tabViewStyle(.sidebarAdaptable)
-        } else { legacyTabs }
-        #elseif os(tvOS)
-        TabView(selection: tabSelection) {
-            BluefinNavigation { TVHomeView(shelfItem: $topShelfItem, sports: store.sports) }
-                .id(homeVisit)
-                .tabItem { Label("Home", systemImage: "house") }.tag(0)
-            BluefinNavigation { TVVideoLibrary(kind: .movies) }
-                .tabItem { Label("Movies", systemImage: "film") }.tag(1)
-            BluefinNavigation { TVVideoLibrary(kind: .shows) }
-                .tabItem { Label("TV Shows", systemImage: "tv") }.tag(5)
-            BluefinNavigation { LiveGuideView() }
-                .tabItem { Label("Live TV", systemImage: "dot.radiowaves.left.and.right") }.tag(4)
-            BluefinNavigation { MusicLibraryView() }
-                .tabItem { Label("Music", systemImage: "music.note") }.tag(2)
-            BluefinNavigation { SearchView() }
-                .tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(3)
-        }
-        #else
-        legacyTabs
-        #endif
-    }
-    private var legacyTabs: some View {
-        TabView(selection: tabSelection) {
-            BluefinNavigation { HomeView(sports: store.sports) }.id(homeVisit).tabItem { Label("Home", systemImage: "house") }.tag(0)
-            BluefinNavigation { LibrariesView() }.tabItem { Label("Library", systemImage: "square.stack") }.tag(1)
-            BluefinNavigation { MusicLibraryView() }.tabItem { Label("Music", systemImage: "music.note") }.tag(2)
-            BluefinNavigation { SearchView() }.tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(3)
-            BluefinNavigation { LiveTVView() }.tabItem { Label("Live TV", systemImage: "dot.radiowaves.left.and.right") }.tag(4)
-        }
+}
+
+private struct VideoCategoryView: View {
+    @EnvironmentObject private var store: LibraryStore
+    let category: BluefinCategory
+    private var collectionType: String { category == .movies ? "movies" : "tvshows" }
+    var body: some View {
+        let collections = store.libraries.filter { $0.CollectionType == collectionType }
+        ItemGrid(title: category.title, parent: nil, includeItemTypes: category.videoItemType)
+            .safeAreaInset(edge: .top) {
+                if collections.count > 1 {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            ForEach(collections) { collection in
+                                MediaNavigationLink(destination: .collection(title: collection.title, parent: collection, types: category.videoItemType)) {
+                                    Text(collection.title)
+                                }.buttonStyle(.bordered)
+                            }
+                        }.padding(.horizontal, 24).padding(.vertical, 8)
+                    }.background(BluefinStyle.background)
+                }
+            }
+            .background(BluefinBackground())
     }
 }
 
@@ -289,9 +524,12 @@ struct HomeView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 30) {
                 if store.preview { Label("Preview library", systemImage: "sparkles").font(.caption.bold()).foregroundStyle(.secondary).padding(.horizontal, 24) }
-                if let featured = store.home.resume.first ?? store.home.latest.first { FeaturedItem(item: featured) }
+                if let featured = store.home.featured { FeaturedItem(item: featured) }
                 if !store.home.resume.isEmpty { MediaShelf(title: "Continue watching", items: store.home.resume) }
                 if !store.home.nextUp.isEmpty { MediaShelf(title: "Up next", items: store.home.nextUp) }
+                ForEach(store.home.recommendations) { shelf in
+                    if !shelf.items.isEmpty { MediaShelf(title: shelf.title, items: shelf.items) }
+                }
                 if !store.home.latest.isEmpty { MediaShelf(title: store.homeFromCatalog ? "Browse your library" : "Recently added", items: store.home.latest) }
                 if let issue = store.libraryProblem {
                     VStack(alignment: .leading, spacing: 8) {
@@ -302,7 +540,7 @@ struct HomeView: View {
                 if store.home.latest.isEmpty && store.home.resume.isEmpty && store.home.nextUp.isEmpty {
                     if store.loading || (!store.initialHomeLoaded && !store.preview) { ProgressView("Loading your library").frame(maxWidth: .infinity).padding(40) }
                     else if store.libraryProblem == nil {
-                        EmptyLibrary(title: "Browse your library", message: "Open Library to see your collections.", symbol: "square.stack")
+                        EmptyLibrary(title: "Browse your library", message: "Open Collections to see your libraries.", symbol: "square.stack")
                     }
                 }
                 if !store.preview {
@@ -317,11 +555,9 @@ struct HomeView: View {
         }
         .background(BluefinBackground())
         .navigationTitle("Home")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                NavigationLink(destination: SettingsView().bluefinBackNavigation()) { Image(systemName: "person.crop.circle").font(.title3) }.accessibilityLabel("Account and settings")
-            }
-        }
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .bluefinRefresh { await store.refresh(); await sports.connect(store.session) }
     }
 }
@@ -332,28 +568,46 @@ struct FeaturedItem: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dynamicTypeSize) private var dynamicType
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            ZStack(alignment: .bottomLeading) {
-                Artwork(item: item, backdrop: true,
-                        thumbnailWidth: sizeClass == .compact ? 1200 : nil)
-                LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .center, endPoint: .bottom)
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(item.progress > 0 ? "PICK UP WHERE YOU LEFT OFF" : "IN YOUR LIBRARY").font(.caption.weight(.semibold)).tracking(1.5)
-                    Text(item.title).font(sizeClass == .compact ? .title.bold() : .largeTitle.bold()).fixedSize(horizontal: false, vertical: true)
-                    if !item.subtitle.isEmpty { Text(item.subtitle).font(.subheadline).opacity(0.8) }
-                }.foregroundColor(.white).padding(24)
-            }
-            .frame(height: dynamicType.isAccessibilitySize ? 390 : sizeClass == .compact ? 310 : 430)
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            HStack(spacing: 16) {
-                if !item.isContainer {
-                    Button { Task { await store.play(item) } } label: { Label(item.resumeTicks > 0 ? "Resume" : "Play", systemImage: "play.fill").font(.body.weight(.semibold)).padding(.horizontal, 20).padding(.vertical, 6) }
-                        .buttonStyle(.borderedProminent).tint(BluefinStyle.primaryFill).foregroundStyle(BluefinStyle.onPrimary).disabled(store.startingPlayback)
+        ZStack(alignment: .bottomLeading) {
+            Artwork(item: item, backdrop: true,
+                    thumbnailWidth: sizeClass == .compact ? 1200 : nil)
+            LinearGradient(colors: [.clear, .black.opacity(0.88)],
+                           startPoint: .top, endPoint: .bottom)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("FEATURED").font(.caption2.weight(.semibold)).tracking(1.5)
+                Text(item.title)
+                    .font(sizeClass == .compact ? .title.bold() : .largeTitle.bold())
+                    .lineLimit(dynamicType.isAccessibilitySize ? nil : 2)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !item.subtitle.isEmpty {
+                    Text(item.subtitle).font(.subheadline).foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(dynamicType.isAccessibilitySize ? nil : 2)
                 }
-                MediaNavigationLink(destination: .detail(item)) { Label("Details", systemImage: "info.circle") }.buttonStyle(.bordered)
-                if store.startingPlayback { ProgressView() }
+                HStack(spacing: 12) {
+                    if !item.isContainer {
+                        Button { Task { await store.play(item) } } label: {
+                            Label(item.resumeTicks > 0 ? "Resume" : "Play", systemImage: "play.fill")
+                                .font(.body.weight(.semibold)).padding(.horizontal, 12).padding(.vertical, 4)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(BluefinStyle.primaryFill).foregroundStyle(BluefinStyle.onPrimary)
+                        .disabled(store.startingPlayback)
+                        .accessibilityIdentifier("featuredPlay")
+                    }
+                    MediaNavigationLink(destination: .detail(item)) {
+                        Label("Details", systemImage: "info.circle")
+                    }
+                    .buttonStyle(.bordered).tint(.white).foregroundStyle(.white)
+                    .accessibilityIdentifier("featuredDetails")
+                    if store.startingPlayback { ProgressView().tint(.white) }
+                }
             }
-        }.padding(.horizontal, 24)
+            .foregroundStyle(.white).padding(22)
+        }
+        .frame(height: dynamicType.isAccessibilitySize ? 430 : sizeClass == .compact ? 270 : 370)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(BluefinStyle.decorativeLine.opacity(0.5)) }
+        .padding(.horizontal, 24)
     }
 }
 
@@ -384,23 +638,39 @@ struct MediaShelf: View {
 
 struct Poster: View {
     let item: MediaItem
+    @Environment(\.dynamicTypeSize) private var dynamicType
     #if os(tvOS)
     @Environment(\.isFocused) private var focused
     #endif
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Artwork(item: item).aspectRatio(item.Type == "MusicAlbum" ? 1 : 2 / 3, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(alignment: .bottom) { if item.progress > 0 { ProgressView(value: item.progress).tint(BluefinStyle.accent).padding(8).accessibilityHidden(true) } }
-                #if os(tvOS)
-                .overlay {
-                    if focused {
-                        RoundedRectangle(cornerRadius: 12).strokeBorder(.white, lineWidth: 3)
+        Artwork(item: item)
+            .aspectRatio(item.Type == "MusicAlbum" ? 1 : 2 / 3, contentMode: .fit)
+            .overlay {
+                LinearGradient(colors: [.clear, .black.opacity(0.9)], startPoint: .center, endPoint: .bottom)
+            }
+            .overlay(alignment: .bottomLeading) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(item.title).font(.subheadline.weight(.semibold))
+                        .lineLimit(dynamicType.isAccessibilitySize ? 3 : 2)
+                    if !item.subtitle.isEmpty {
+                        Text(item.subtitle).font(.caption).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
+                    }
+                    if item.progress > 0 {
+                        ProgressView(value: item.progress).tint(BluefinStyle.brand)
+                            .accessibilityHidden(true)
                     }
                 }
-                #endif
-            Text(item.title).font(.subheadline.weight(.semibold)).lineLimit(2).foregroundStyle(.primary)
-            if !item.subtitle.isEmpty { Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
-        }.accessibilityElement(children: .ignore).accessibilityLabel(item.title + (item.subtitle.isEmpty ? "" : ", " + item.subtitle))
+                .foregroundStyle(.white).padding(12)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            #if os(tvOS)
+            .overlay {
+                if focused { RoundedRectangle(cornerRadius: 12).strokeBorder(BluefinStyle.accent, lineWidth: 3) }
+            }
+            #endif
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(item.title + (item.subtitle.isEmpty ? "" : ", " + item.subtitle))
+            .accessibilityValue(item.progress > 0 ? "\(Int(item.progress * 100)) percent watched" : "")
     }
 }
 
@@ -503,14 +773,14 @@ struct ItemGrid: View {
 }
 
 struct SearchView: View {
+    var initialScope = UnifiedSearchScope.all
+    @EnvironmentObject private var store: LibraryStore
     @State private var query = ""
     @State private var committed = ""
     var body: some View {
-        Group {
-            if committed.isEmpty { EmptyLibrary(title: "Find your next favorite", message: "Search the movies, shows, and music available to your account.", symbol: "magnifyingglass") }
-            else { UnifiedSearchResults(query: committed) }
-        }
+        UnifiedSearchResults(query: committed, initialScope: initialScope)
         .navigationTitle("Search").searchable(text: $query, prompt: Text("Movies, shows, music and live TV"))
+        .onSubmit(of: .search) { Task { await store.recordHomeSearch(query: query) } }
         .task(id: query) {
             do { try await Task.sleep(nanoseconds: 350_000_000); try Task.checkCancellation(); committed = query.trimmingCharacters(in: .whitespacesAndNewlines) } catch {}
         }
@@ -690,6 +960,7 @@ struct SettingsView: View {
                 if !store.preview { NavigationLink(destination: MeshConnectionsView()) { Label("Connections and invitations", systemImage: "qrcode") } }
                 Button(store.preview ? "Leave preview" : "Sign out", role: .destructive) { Task { Artwork.clearCache(); await store.signOut() } }
             }
+            if !store.preview { HomeHistorySettings() }
             Section("Appearance") {
                 Picker("Appearance", selection: $appearance) {
                     Text("System").tag(0)
