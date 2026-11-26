@@ -267,6 +267,11 @@ struct TVWelcomeView: View {
                                 Button { meshPairing = true } label: {
                                     AccountActionLabel(title: "Connect with QR or invitation")
                                 }.accountButtonStyle().accessibilityIdentifier("meshPairing")
+                                #if !os(tvOS)
+                                Button { store.deviceMusicVisible = true } label: {
+                                    AccountActionLabel(title: "Music on this device")
+                                }.accountButtonStyle().accessibilityIdentifier("ownedMusicOpen")
+                                #endif
                                 connectServer
                             }
                             if let problem {

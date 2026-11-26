@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    fs::File,
+    fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::fs::MetadataExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -158,10 +158,12 @@ fn import(v: &Value, root: &Dir, media: &Dir, disk: &mut DiskLibrary) -> Result<
     if !source.is_absolute() || source.starts_with(root.path()) {
         return Err(err("Choose an audio file outside this library."));
     }
-    let parent = source.parent().and_then(Path::to_str).ok_or_else(|| err("The selected file path is invalid."))?;
-    let name = source.file_name().and_then(|v| v.to_str()).ok_or_else(|| err("The selected file name is invalid."))?;
-    let source_directory = Dir::root(parent)?;
-    let mut input = source_directory.open(name, false)?;
+    // A Files security scope may admit the selected file without admitting a
+    // directory listing of its provider. Pin that regular file directly; all
+    // destination mutations still use the private library's directory FDs.
+    let mut input = OpenOptions::new().read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(source).map_err(|_| err("The selected audio is unavailable or is a link."))?;
     let before = stamp(&input)?;
     let length = before.2;
     if length == 0 || length > contract::MAX_AUDIO_BYTES { return Err(err("Choose an audio file smaller than 2 GiB.")); }
@@ -218,6 +220,7 @@ pub(super) fn call(v: &Value, operation: &str) -> Result<Value> {
         "ownedLibraryRemove" => {
             expected(v, &disk)?;
             let id = text(v, "itemId")?;
+            if !contract::valid_id(id) { return Err(err("The local music item is invalid.")); }
             if let Some(track) = disk.catalog.track(id).cloned() {
                 disk.catalog.remove_track(id).map_err(|e| e.to_string())?;
                 disk.retiring = vec![track];
@@ -290,7 +293,9 @@ mod tests {
     #[test]
     fn local_import_survives_reopen_and_deduplicates_without_an_account() {
         let fixture = Fixture::new();
-        let first = call(&fixture.import(), "ownedLibraryImport").unwrap();
+        let mut request = fixture.import();
+        request["operation"] = json!("ownedLibraryImport");
+        let first = crate::call(&request).unwrap();
         assert_eq!(first["imported"], true);
         let second = call(&fixture.import(), "ownedLibraryImport").unwrap();
         assert_eq!(second["imported"], false);

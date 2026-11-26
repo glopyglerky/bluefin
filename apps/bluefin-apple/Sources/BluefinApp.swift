@@ -51,6 +51,10 @@ struct RootView: View {
             if let playback = store.playback, playback.item.Type == "Audio" { MusicPlayer(playback: playback).environmentObject(store).id(playback.id) }
         }
         .environmentObject(nearby)
+        #if !os(tvOS)
+        .sheet(isPresented: $store.deviceMusicVisible) { DeviceMusicView().environmentObject(store) }
+        .safeAreaInset(edge: .bottom) { DeviceMusicAccessory(model: store.deviceMusic).environmentObject(store) }
+        #endif
         .task {
             nearby.start()
             Task { await MeshRevocationQueue.shared.retry() }
@@ -676,6 +680,11 @@ struct SettingsView: View {
                     Text("Dark").tag(2)
                 }
             }
+            #if !os(tvOS)
+            Section("On this device") {
+                Button { store.deviceMusicVisible = true } label: { Label("Music on this device", systemImage: "music.note.house") }
+            }
+            #endif
             Section("Playback") {
                 NavigationLink(destination: AudioSettingsView(preferences: store.audio)) { Label("Audio and equalizer", systemImage: "slider.horizontal.3") }
                 if !store.preview { NavigationLink(destination: IrohSettingsView()) { Label("Direct Iroh transport", systemImage: "network") } }

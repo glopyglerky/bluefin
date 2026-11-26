@@ -10,6 +10,11 @@ struct MusicLibraryView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
+                    #if !os(tvOS)
+                    Button { store.deviceMusicVisible = true } label: {
+                        Label("On this device", systemImage: "music.note.house").frame(maxWidth: .infinity, minHeight: 48)
+                    }
+                    #endif
                     browse("Songs", type: "Audio", symbol: "music.note")
                     browse("Albums", type: "MusicAlbum", symbol: "square.stack")
                     browse("Artists", type: "MusicArtist", symbol: "music.mic")

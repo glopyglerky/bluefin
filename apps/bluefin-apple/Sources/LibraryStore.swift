@@ -23,6 +23,8 @@ import CryptoKit
     private var unshuffledQueue: [MediaItem] = []
     private var nextMusicCandidateKey: String?
     let offline = OfflineLibrary()
+    let deviceMusic = DeviceMusicLibrary()
+    @Published var deviceMusicVisible = false
     let audio = AudioPreferences()
     let sports = SportsStore()
     private var accountGeneration = UUID()
@@ -304,7 +306,7 @@ import CryptoKit
     }
 
     func play(_ item: MediaItem, fromBeginning: Bool = false, startAtTicks: Int64? = nil, queueIndex: Int? = nil, videoOptions: VideoOptionSelection? = nil) async {
-        guard !startingPlayback else { return }
+        guard !startingPlayback, !signingOut else { return }
         startingPlayback = true
         let generation = accountGeneration
         var preparation: PendingPlayback?
@@ -313,6 +315,7 @@ import CryptoKit
             if pendingPreparation === preparation { pendingPreparation = nil }
         }
         do {
+            try await deviceMusic.stopPlayback()?.value
             if let playback, playback.item.Type == "Audio" {
                 try await playback.discardNextMusicCandidate().value
                 nextMusicCandidateKey = nil
@@ -608,6 +611,28 @@ import CryptoKit
         home.nextUp = update(home.nextUp)
     }
 
+    /// One native audio owner at a time. The local catalog remains independent
+    /// of this store's account; this gate only serializes player replacement.
+    func withDeviceMusicPlayback(_ operation: @MainActor () async throws -> Void) async throws {
+        guard !startingPlayback, !signingOut else { throw BluefinError.message("Wait for playback to finish changing.") }
+        startingPlayback = true
+        defer { startingPlayback = false }
+        let generation = accountGeneration
+        let pending = pendingPreparation
+        pending?.cancel()
+        dismissPlayback()
+        let teardown = playbackTeardowns.drain()
+        try await pending?.dispose()
+        try await teardown.value
+        try Task.checkCancellation()
+        guard accountGeneration == generation, !signingOut else { throw CancellationError() }
+        try await operation()
+        guard accountGeneration == generation, !signingOut else {
+            deviceMusic.stopPlayback()
+            throw CancellationError()
+        }
+    }
+
     func dismissPlayback() {
         guard let playback else { return }
         let generation = accountGeneration
@@ -624,6 +649,7 @@ import CryptoKit
         signingOut = true
         defer { signingOut = false }
         let previousSession = session
+        let deviceTeardown = deviceMusic.stopPlayback()
 
         // Stop local work before any Keychain or network operation can fail.
         accountGeneration = UUID()
@@ -648,6 +674,7 @@ import CryptoKit
         musicExpanded = false
         error = nil
         var cleanupFailed = false
+        do { try await deviceTeardown?.value } catch { cleanupFailed = true }
         do { try await pending?.dispose() } catch { cleanupFailed = true }
         do { try await teardown.value } catch { cleanupFailed = true }
         if let previousSession, previousSession.meshSessionId != nil {
