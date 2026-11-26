@@ -13,6 +13,10 @@ pub(crate) struct Config {
     pub bind_address:SocketAddr,
     #[serde(default)]
     pub relay_urls:Vec<String>,
+    /// Optional separately hosted, browser-trusted HTTPS application page.
+    /// This never changes the account API or WebAuthn relying-party origin.
+    #[serde(default)]
+    pub web_launch_url:Option<String>,
     /// The public pure-Rust PQ provider is explicitly under qualification.
     pub allow_experimental_pqc:bool,
 }
@@ -26,6 +30,10 @@ impl Config {
         let value:Self=serde_json::from_slice(&bytes).context("invalid mesh connection configuration")?;
         ensure!(value.allow_experimental_pqc,"mesh PQ provider requires explicit experimental opt-in");
         ensure!(value.relay_urls.len()<=2,"at most two approved mesh relays");
+        if let Some(url)=&value.web_launch_url {
+            bluefin_mesh_connect::launch::WebLaunchBase::parse(url)
+                .context("mesh web launch must be a credential-free HTTPS page URL")?;
+        }
         ensure!(!value.bind_address.ip().is_multicast(),"invalid mesh bind address");
         Ok(Some(value))
     }

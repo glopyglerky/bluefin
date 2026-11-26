@@ -191,3 +191,51 @@ source archive and source revision from the admission receipt, updates SOURCE.tx
 and recalculates the final inventory. The account and welcome views link to that
 source notice and the license. API routes on an assets-only host must return real
 404 responses; they must never be rewritten to the application document.
+
+## Temporary local music in the shared view
+
+The welcome screen opens a local music library before account sign-in. It uses
+the same song rows, mini player, expanded player, queue and adaptive navigation.
+Connected accounts can open it from Music. Local search stays inside the File
+adapter, and opaque local IDs never enter artwork, playback-report, invitation,
+favorite or server-search requests. Remote playback stops and releases its lease
+before the shared media element opens a local object URL. Removal, protected or
+unsupported media errors, sign-out and page retirement release that source.
+
+Only files selected with the browser picker are admitted. The temporary adapter
+holds the original File objects and reads a bounded container prefix; it does
+not upload, hash, deduplicate or persist the audio. This compatibility adapter
+uses browser APIs because the interface must remain usable without WebAssembly.
+Server and mesh authority, PQ cryptography and protocol handling remain in Rust.
+Full browser codec support and physical Lockdown Mode behavior still require
+actual device validation; passing the JavaScript boundary tests does not claim it.
+
+The visible audio timeline, HTTP progress reports and seek controls use the same
+transcode offset convention as the Rust playback service. Restoring a 30-minute
+bookmark therefore does not report zero when the new media stream starts.
+
+Playback domain changes await a command-specific Rust stop receipt. A previously
+true cleanup flag cannot satisfy that barrier. If retirement is unconfirmed,
+a second Play cannot bypass it. The browser adapter attaches an opaque owner
+token to each media source; delayed cleanup, controls, metadata callbacks and
+samples from a retired mesh owner cannot touch a local or HTTPS successor.
+The Rust service remains owned through sign-out timeout until its lifecycle
+actually finishes. Local search remains explicit inside Music even while an
+account is connected, and a new explicit selection resets prior queue ordering.
+
+The server-owned HTTPS lease profile transcodes audio to MP3 over HTTP and video
+to H.264/AAC HLS. Audio therefore uses native audio/mpeg support without loading
+an HLS decoder; only video uses the native-HLS or pinned MSE decoder path.
+
+HLS playlists enumerate the full original timeline: their initial encoder seek
+does not turn the playlist into a cropped stream. Video and mesh HLS therefore
+use zero timeline offset and seek to the bookmark after metadata is available.
+HTTP progress reporting waits for that initial seek instead of overwriting a
+saved bookmark with zero. Progressive MP3 is a separate cropped stream whose
+browser clock starts at zero, so only that profile adds its requested offset.
+
+The current ordinary HTTPS lease adapter accepts local library files and rejects
+live/infinite sources. Its Live TV view therefore explicitly offers browsing
+only; attempting live playback cannot stop an existing library player or create
+a doomed lease. A stale video bookmark beyond the returned finite duration starts
+at zero with a visible notice and restores progress reporting deterministically.

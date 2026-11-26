@@ -4,6 +4,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const {webcrypto}=require('node:crypto');
+const {File}=require('node:buffer');
 const source=name=>fs.readFileSync(path.join(__dirname,'..',name),'utf8');
 class Element{
  constructor(tag){this.tagName=tag.toUpperCase();this.children=[];this.dataset={};this.style={};this.attributes={};this.listeners={};this.value='';this.text='';this.className='';this.classList={add(){},remove(){},toggle(){}};}
@@ -19,10 +20,10 @@ class Element{
  get textContent(){return this.text+this.children.map(c=>c.textContent||'').join(' ');}
 }
 function browserFailure(message){return Object.assign(Error(message),{bluefinBrowserCapability:true});}
-function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false,cookieStatus=200,cookieMalformed=false,cookieCreateStatus=200,tvAdvertisement=true,launchCode='',engine}={}){
+function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false,cookieStatus=200,cookieMalformed=false,cookieCreateStatus=200,tvAdvertisement=true,nativeHls=true,audioPlayable=true,launchCode='',engine}={}){
  const root=new Element('div'),video=new Element('video'),labels=new Map(),events={},requests=[],pending={};
  Object.assign(video,{paused:true,duration:60,currentTime:0,src:'',
-  pause(){this.paused=true;},load(){},play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},canPlayType(){return 'probably';}});
+  pause(){this.paused=true;},load(){},play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},canPlayType(type){return (type==='audio/mpeg'?audioPlayable:nativeHls)?'probably':'';}});
  labels.set('app',root);labels.set('media',video);
  const document={baseURI:'https://bluefin.test/web/bluefin/',body:new Element('body'),head:new Element('head'),activeElement:null,
   createElement:tag=>new Element(tag),createElementNS:(_ns,tag)=>new Element(tag),createDocumentFragment:()=>new Element('fragment'),
@@ -55,9 +56,10 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
   else body={Items:[item]};
   return new Response(JSON.stringify(body),{headers:{'Content-Type':'application/json'}});
  };
+ const register=(name,fn)=>{const previous=events[name];events[name]=(...args)=>{previous?.(...args);fn(...args);};};
  const context=vm.createContext({document,location:new URL(document.baseURI),navigator:{},
-  crypto:webcrypto,URL,Uint8Array,Uint32Array,Blob,TextEncoder,TextDecoder,AbortController,Response,fetch,
-  setTimeout,clearTimeout,setInterval:()=>1,clearInterval(){},addEventListener:(name,fn)=>events[name]=fn,
+  crypto:webcrypto,URL,Uint8Array,Uint32Array,Blob,File,TextEncoder,TextDecoder,AbortController,Response,fetch,
+  setTimeout,clearTimeout,setInterval:()=>1,clearInterval(){},addEventListener:register,
   isSecureContext:true,WebAssembly:undefined});
  context.window=context;
  context.takeBluefinLaunch=()=>{const code=launchCode;launchCode='';return code;};
@@ -66,7 +68,8 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  Object.defineProperty(context,'indexedDB',{get(){throw Error('Default view touched IndexedDB');}});
  Object.defineProperty(context,'localStorage',{get(){throw Error('Default view touched localStorage');}});
  Object.defineProperty(context,'sessionStorage',{get(){throw Error('Default view touched sessionStorage');}});
- const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite};})();');
+ vm.runInContext(source('local-music.js'),context);
+ const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,importInvitationImage:readInvitationImage};})();');
  vm.runInContext(script,context);
  return {context,ui:context.contract,root,video,requests,events,item,pending};
 }
@@ -96,7 +99,7 @@ test('HTTPS origin and media lease escapes are rejected before playback',async()
  await assert.rejects(t.ui.play(t.item),/Invalid playback lease route/);
  assert.equal(t.video.src,'');
 });
-test('native HLS uses a scoped cookie route without a worker or bearer URL',async()=>{
+test('native media uses a scoped cookie route without a worker or bearer URL',async()=>{
  const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
  await t.ui.play(t.item);assert.match(t.video.src,/^https:\/\/bluefin.test\/Bluefin\/Web\/v1\/media\/[a-f0-9]{64}\/0$/);
  assert(!t.video.src.includes('synthetic-private-bearer'));assert.equal(t.video.paused,false);
@@ -312,4 +315,148 @@ test('a failed protected storage open can be retried after the user permits acce
  context.indexedDB={open(){opens++;const request={result:{close(){}}};setTimeout(()=>request.onsuccess(),0);return request;}};
  await j.selectMeshStorage(true);
  assert.equal(opens,2);assert.equal(j.meshRemembered(),true);
+});
+
+test('temporary local Files play and search without any account, storage, worker or network',async()=>{
+ const t=setup();t.ui.openLocalMusic();
+ await t.ui.addLocalFiles([new File([Buffer.from('ID3local fixture')],'private-original.mp3')]);
+ assert.equal(t.ui.state.rows.length,1);assert.equal(t.requests.length,0);
+ const track=t.ui.state.rows[0];assert.match(track.Id,/^local-file-/);
+ await t.ui.play(track,[track],0);assert.equal(t.ui.state.player.mode,'local');assert.match(t.video.src,/^blob:/);
+ assert.equal(t.requests.length,0);
+ await t.ui.navigate('Search');assert.equal(t.requests.length,0);
+ t.ui.state.localQuery='private';await t.ui.loadRoute();assert.equal(t.ui.state.rows.length,1);assert.equal(t.requests.length,0);
+ t.ui.state.expanded=true;t.ui.render();assert.match(t.root.textContent,/Local file/);
+ assert.equal(t.requests.length,0);
+ await t.ui.signOut();assert.equal(t.video.src,'');assert.equal(t.ui.state.local,false);assert.equal(t.ui.localItems().length,0);
+ assert.equal(t.requests.length,0);
+});
+test('replacing remote playback with a local File retires its remote lease before local playback',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.play(t.item);const before=t.requests.length;
+ t.ui.openLocalMusic();await t.ui.addLocalFiles([new File([Buffer.from('ID3local fixture')],'never-upload-this-title.mp3')]);
+ const track=t.ui.state.rows[0];await t.ui.play(track,[track],0);
+ assert.equal(t.ui.state.player.mode,'local');assert.equal(t.requests.length,before+1);
+ assert.equal(t.requests.at(-1).options.method,'DELETE');
+ assert(!t.requests.some(request=>(request.options.body||'').includes('never-upload-this-title')));
+ t.events.pagehide();assert.equal(t.video.src,'');assert.equal(t.ui.state.player,null);assert.equal(t.ui.state.session,null);
+});
+test('local source removal stops the shared player and prevents stale ID replay',async()=>{
+ const t=setup();t.ui.openLocalMusic();
+ await t.ui.addLocalFiles([new File([Buffer.from('ID3local fixture')],'remove-me.mp3')]);
+ const track=t.ui.state.rows[0];await t.ui.play(track,[track],0);
+ t.ui.localOwner().remove(track.Id);assert.equal(t.video.src,'');assert.equal(t.ui.state.player,null);
+ await assert.rejects(t.ui.play(track,[track],0),/Choose this file again/);assert.equal(t.requests.length,0);
+});
+test('cropped MP3 resume progress, duration and seek add only the audio stream offset',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const item={...t.item,RunTimeTicks:3600*10000000,UserData:{PlaybackPositionTicks:1800*10000000}};
+ t.video.duration=1800;await t.ui.play(item);t.video.currentTime=12;
+ await t.ui.reportProgress('progress');
+ const body=JSON.parse(t.requests.findLast(request=>request.url.endsWith('/Sessions/Playing/Progress')).options.body);
+ assert.equal(body.PositionTicks,1812*10000000);
+ const timeline=t.ui.playbackTimeline();assert.equal(timeline.position,1812);assert.equal(timeline.duration,3600);assert.equal(timeline.minimum,1800);
+ t.ui.seekPlayback(1820);assert.equal(t.video.currentTime,20);
+ t.ui.seekPlayback(1700);assert.equal(t.video.currentTime,0);
+ await t.ui.signOut();
+});
+test('turning shuffle off restores the original queue and keeps the current selection',async()=>{
+ const t=setup();t.ui.openLocalMusic();
+ await t.ui.addLocalFiles(['one','two','three'].map(name=>new File([Buffer.from('ID3'+name)],name+'.mp3')));
+ const order=t.ui.state.rows.slice();await t.ui.play(order[1],order,1);
+ t.ui.toggleShuffle();assert.equal(t.ui.state.queue[0].Id,order[1].Id);
+ t.ui.toggleShuffle();assert.deepEqual(Array.from(t.ui.state.queue,item=>item.Id),Array.from(order,item=>item.Id));
+ assert.equal(t.ui.state.queueIndex,1);assert.equal(t.requests.length,0);await t.ui.signOut();
+});
+
+test('new explicit playback resets shuffled queues when crossing local and server music',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const remote=[t.item,{...t.item,Id:'44444444444444448444444444444444',Name:'Second server song'}];
+ await t.ui.playShuffled(remote);assert.equal(t.ui.state.shuffle,true);
+ t.ui.openLocalMusic();await t.ui.addLocalFiles([new File([Buffer.from('ID3local fixture')],'independent.mp3')]);
+ const local=t.ui.state.rows[0];await t.ui.play(local,[local],0);
+ assert.equal(t.ui.state.shuffle,false);assert.equal(t.ui.state.unshuffledQueue[0].Id,local.Id);
+ t.ui.toggleShuffle();t.ui.toggleShuffle();assert.equal(t.ui.state.queue[0].Id,local.Id);
+ await t.ui.playShuffled([local]);await t.ui.play(t.item,remote,0);
+ assert.equal(t.ui.state.shuffle,false);assert(t.ui.state.unshuffledQueue.every(item=>!item.LocalSource));
+ await t.ui.signOut();
+});
+test('a QR image finishing after page retirement cannot repopulate the invitation',async()=>{
+ const t=setup();let resolve,parsed=0;
+ t.context.BluefinRuntime.engine=async()=>({webMeshImage(){parsed++;return 'MC1-SECRET';}});
+ t.ui.state.sheet='invite';
+ const attempt=t.ui.importInvitationImage({size:20,arrayBuffer:()=>new Promise(r=>resolve=r)});
+ const outcome=assert.rejects(attempt,/page or account changed/);await until(()=>resolve);
+ t.events.pagehide();resolve(new ArrayBuffer(20));await outcome;
+ assert.equal(parsed,0);assert.equal(t.ui.state.code,'');assert.equal(t.requests.length,0);
+});
+
+test('mesh-to-local replacement waits for its own Rust stop receipt before acquiring playback',async()=>{
+ const t=setup();let acknowledge;
+ t.context.BluefinRuntime.ready=()=>({webMeshStop:()=>new Promise(resolve=>acknowledge=resolve)});
+ t.ui.openLocalMusic();await t.ui.addLocalFiles([new File([Buffer.from('ID3local fixture')],'after-mesh.mp3')]);
+ const item=t.ui.state.rows[0];t.ui.state.player={mode:'mesh',handle:'bluefin-mesh-v1:'+'a'.repeat(64),item:t.item};
+ t.video.src='/old-mesh';t.video.paused=false;
+ const replacement=t.ui.play(item,[item],0);await until(()=>acknowledge);
+ assert.equal(t.video.src,'');assert.equal(t.video.playCalls||0,0);assert.equal(t.ui.state.player,null);
+ acknowledge();await replacement;assert.equal(t.ui.state.player.mode,'local');assert.match(t.video.src,/^blob:/);
+ assert.equal(t.requests.length,0);await t.ui.signOut();
+});
+test('an unacknowledged mesh stop cannot be bypassed by a second local Play',async()=>{
+ const t=setup();t.context.BluefinRuntime.ready=()=>({webMeshStop:async()=>{throw Error('retirement pending');}});
+ t.ui.openLocalMusic();await t.ui.addLocalFiles([new File([Buffer.from('ID3local fixture')],'held-until-cleanup.mp3')]);
+ const item=t.ui.state.rows[0];t.ui.state.player={mode:'mesh',handle:'bluefin-mesh-v1:'+'a'.repeat(64),item:t.item};
+ await assert.rejects(t.ui.play(item,[item],0),/retirement pending/);
+ await assert.rejects(t.ui.play(item,[item],0),/retirement pending/);
+ assert.equal(t.video.src,'');assert.equal(t.video.playCalls||0,0);assert.equal(t.requests.length,0);t.events.pagehide();
+});
+test('local music exposes local search even when a server account is connected',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ t.ui.openLocalMusic();t.ui.render();assert.match(t.root.textContent,/Music on this device/);
+ // Inspect the rendered control tree, not a CSS inference.
+ function descendants(element){return [element,...element.children.flatMap(descendants)];}
+ assert(descendants(t.root).some(element=>element.tagName==='INPUT'&&element.attributes['aria-label']==='Search music on this device'));
+ const before=t.requests.length;t.ui.state.localQuery='local';t.ui.state.route={kind:'local_search'};await t.ui.loadRoute();
+ assert.equal(t.requests.length,before);await t.ui.signOut();
+});
+
+test('forced MP3 HTTP leases use native audio even when HLS and MSE are unavailable',async()=>{
+ const t=setup({nativeHls:false});await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.play(t.item);assert.equal(t.ui.state.player.mode,'https');assert.equal(t.ui.state.player.hls,undefined);
+ assert.equal(t.context.document.head.children.length,0);assert.equal(t.video.paused,false);await t.ui.signOut();
+ const unsupported=setup({nativeHls:false,audioPlayable:false});await unsupported.ui.connect('https://bluefin.test');await unsupported.ui.signIn('Listener','example-password',false);
+ const before=unsupported.requests.length;await assert.rejects(unsupported.ui.play(unsupported.item),/MP3 audio/);
+ assert.equal(unsupported.requests.length,before);assert.equal(unsupported.video.src,'');
+});
+
+test('full HLS video seeks to the bookmark and never reports a doubled or premature zero position',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const item={...t.item,Type:'Movie',RunTimeTicks:3600*10000000,UserData:{PlaybackPositionTicks:1800*10000000}};
+ t.video.duration=3600;await t.ui.play(item);
+ assert.equal(t.ui.state.player.offset,0);
+ assert(!t.requests.some(request=>request.url.endsWith('/Sessions/Playing')));
+ t.video.listeners.loadedmetadata();assert.equal(t.video.currentTime,1800);
+ t.video.currentTime=1812;await t.ui.reportProgress('progress');
+ const body=JSON.parse(t.requests.findLast(request=>request.url.endsWith('/Sessions/Playing/Progress')).options.body);
+ assert.equal(body.PositionTicks,1812*10000000);
+ assert.equal(t.ui.playbackTimeline().duration,3600);assert.equal(t.ui.playbackTimeline().minimum,0);
+ t.ui.seekPlayback(1700);assert.equal(t.video.currentTime,1700);
+ await t.ui.signOut();
+});
+
+test('an out-of-range video bookmark restarts at zero with reporting enabled',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const item={...t.item,Type:'Movie',RunTimeTicks:3600*10000000,UserData:{PlaybackPositionTicks:1800*10000000}};
+ t.video.duration=900;await t.ui.play(item);t.video.listeners.loadedmetadata();
+ assert.equal(t.video.currentTime,0);assert.equal(t.ui.state.player.resumeApplied,true);assert.equal(t.ui.state.player.reportingReady,true);
+ assert.match(t.ui.state.notice,/Starting from the beginning/);await t.ui.reportProgress('progress');
+ const body=JSON.parse(t.requests.findLast(request=>request.url.endsWith('/Sessions/Playing/Progress')).options.body);
+ assert.equal(body.PositionTicks,0);await t.ui.signOut();
+});
+test('unsupported HTTPS live TV does not allocate a lease or stop current library playback',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.play(t.item);const before=t.requests.length,source=t.video.src,player=t.ui.state.player;
+ await assert.rejects(t.ui.play({...t.item,Type:'TvChannel'}),/Live TV playback/);
+ assert.equal(t.requests.length,before);assert.equal(t.video.src,source);assert.equal(t.ui.state.player,player);
+ await t.ui.signOut();
 });

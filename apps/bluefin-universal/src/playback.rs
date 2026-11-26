@@ -297,16 +297,7 @@ pub fn plan(session: &Session, item: Item, selection: Selection, info: &Value) -
         (pinned_url(&session.base, &prefix, raw)?, "Transcode")
     };
     let hls = url.path().ends_with(".m3u8");
-    let offset = if hls {
-        url.query_pairs()
-            .find(|(k, _)| k.eq_ignore_ascii_case("StartTimeTicks"))
-            .map(|(_, v)| v.parse::<u64>().map(|n| n as f64 / 10_000_000.0))
-            .transpose()
-            .map_err(|_| "Invalid HLS offset")?
-            .unwrap_or(0.0)
-    } else {
-        0.0
-    };
+    let offset = timeline_offset(&url, hls, method, item.kind == "Audio")?;
     let tracks: Vec<Track> =
         serde_json::from_value(source.get("MediaStreams").cloned().unwrap_or(json!([])))
             .map_err(|_| "Invalid stream list")?;
@@ -335,6 +326,20 @@ pub fn plan(session: &Session, item: Item, selection: Selection, info: &Value) -
         selection,
         tracks,
     })
+}
+/// HLS manifests enumerate the complete source timeline even when their
+/// initial encoder job starts at a resume segment. Progressive audio is a
+/// cropped stream and starts its browser clock at zero.
+fn timeline_offset(url: &Url, hls: bool, method: &str, audio: bool) -> Result<f64> {
+    if hls || method != "Transcode" || !audio { return Ok(0.0); }
+    let mut values = url.query_pairs().filter(|(key,_)| key.eq_ignore_ascii_case("StartTimeTicks"));
+    let value = values.next().map(|(_,value)| value.into_owned());
+    if values.next().is_some() { return Err("Ambiguous audio stream offset".into()); }
+    value.map(|value| value.parse::<u64>()
+        .ok().filter(|ticks| *ticks <= 9_007_199_254_740_991)
+        .map(|ticks| ticks as f64 / 10_000_000.0)
+        .ok_or_else(|| "Invalid audio stream offset".to_owned()))
+        .transpose().map(|value| value.unwrap_or(0.0))
 }
 pub async fn report(
     session: &Session,
@@ -493,6 +498,17 @@ impl QueueRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn full_hls_and_progressive_audio_have_distinct_timelines() {
+        let hls=Url::parse("https://example.test/Videos/id/master.m3u8?StartTimeTicks=18000000000").unwrap();
+        let mp3=Url::parse("https://example.test/Audio/id/stream.mp3?StartTimeTicks=18000000000").unwrap();
+        assert_eq!(timeline_offset(&hls,true,"Transcode",false).unwrap(),0.0);
+        assert_eq!(timeline_offset(&hls,true,"Transcode",true).unwrap(),0.0);
+        assert_eq!(timeline_offset(&mp3,false,"Transcode",true).unwrap(),1800.0);
+        assert_eq!(timeline_offset(&mp3,false,"DirectPlay",true).unwrap(),0.0);
+        let bad=Url::parse("https://example.test/Audio/id/stream.mp3?StartTimeTicks=bad").unwrap();
+        assert!(timeline_offset(&bad,false,"Transcode",true).is_err());
+    }
     #[test]
     fn url_pins_and_header_credentials() {
         let base = Url::parse("https://example.test/root/").unwrap();
