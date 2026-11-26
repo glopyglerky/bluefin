@@ -25,7 +25,7 @@ function setup(reply){
   setTimeout,clearTimeout,setInterval(){},localStorage:{getItem(){throw Error('Unavailable');}},getComputedStyle:()=>({visibility:'visible'})});
  context.window=context;context.addEventListener=()=>{};context.scrollTo=()=>{};
  context.BluefinPolicy={load:()=>Promise.resolve(),apply:()=>({})};context.BluefinPlatform={name:'Test TV',init(){},exit(){},position:()=>({}),stop(){}};
- vm.runInContext(source.replace(/\}\(\)\);\s*$/,"globalThis.contract={show,search,searchMore,searchCall,homeRecommendations,acceptLogin,setAccount:function(t,u){token=t;user=u;server='https://bluefin.test';},state:function(){return {epoch:epoch,viewName:viewName,searchState:searchState};}};}());"),context);
+ vm.runInContext(source.replace(/\}\(\)\);\s*$/,"globalThis.contract={browse,show,search,searchMore,searchCall,homeRecommendations,acceptLogin,setAccount:function(t,u){token=t;user=u;server='https://bluefin.test';},state:function(){return {epoch:epoch,viewName:viewName,searchState:searchState};}};}());"),context);
  context.contract.setAccount('fixture-token',user);
  return {ui:context.contract,requests,content:node('content'),nodes,user};
 }
@@ -66,4 +66,12 @@ test('smart TV metadata controls survive initial search and changed search gener
  await t.ui.show('search');await t.ui.search('later',{scope:'movies'});
  finish();for(let n=0;n<20;n++)await new Promise(setImmediate);
  assert.match(t.content.textContent,/Studio from server/);assert.match(t.content.textContent,/Service: Acme\+/);
+});
+
+test('smart TV artist selection pages through credited media instead of a folder',async()=>{
+ const t=setup(),artist='77777777777747778777777777777777';
+ for(const start of [0,40])await t.ui.browse({Id:artist,Name:'Account artist',Type:'MusicArtist'},start);
+ const requests=t.requests.filter(request=>request.url.searchParams.get('ArtistIds')===artist);
+ assert.equal(requests.length,2);assert.equal(requests[1].url.searchParams.get('StartIndex'),'40');
+ for(const {url}of requests){assert.equal(url.searchParams.has('ParentId'),false);assert.equal(url.searchParams.get('IncludeItemTypes'),'MusicAlbum,Audio,MusicVideo');}
 });

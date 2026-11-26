@@ -41,7 +41,7 @@ export function App({deviceId}: Props) {
   const [shelves,setShelves]=useState<{title:string;items:Item[]}[]>([]),[featured,setFeatured]=useState<Item|null>(null);
   const [sports,setSports]=useState<any[]>([]),[filters,setFilters]=useState<Filters>({scope:'all'});
   const [pages,setPages]=useState<SearchPage[]>([]),[facets,setFacets]=useState<any>(null),[filterPanel,setFilterPanel]=useState<string|null>(null);
-  const [categoryPage,setCategoryPage]=useState<{type:string;next:number;total:number}|null>(null);
+  const [categoryPage,setCategoryPage]=useState<{type:string;next:number;total:number;parent?:string}|null>(null);
   const browseEpoch=useRef(0),browseController=useRef<AbortController|null>(null);
   const searchRequest=useRef<{term:string;filters:Filters}|null>(null);
   const queueRevision = useRef<number | null>(null);
@@ -92,7 +92,7 @@ export function App({deviceId}: Props) {
   }
   async function moreCategory() {
     if(!categoryPage)return;const page=categoryPage,request=browseRequest();
-    const result=await request.client.library(page.type,'',page.next,request.signal);if(!request.current())return;
+    const result=page.parent?await request.client.children(page.parent,request.signal,page.type,page.next):await request.client.library(page.type,'',page.next,request.signal);if(!request.current())return;
     const found:Item[]=result.Items||[];setItems(previous=>mergeSearchPage({items:previous,next:page.next},result).items);
     const next=page.next+found.length;setCategoryPage({...page,next,total:found.length?Number(result.TotalRecordCount)||next:next});
   }
@@ -102,7 +102,7 @@ export function App({deviceId}: Props) {
     const detail=await request.client.item(key.replace(/-/g,''),request.signal);if(request.current())setSelected(detail);
   }
   async function openCollections(){
-    const request=browseRequest();setUtility('collections');setSelected(null);setFilterPanel(null);setItems([]);setStatus('Loading collections…');
+    const request=browseRequest();setUtility('collections');setSelected(null);setFilterPanel(null);setCategoryPage(null);setItems([]);setStatus('Loading collections…');
     const result=await request.client.collections(request.signal);if(request.current()){setItems(result.Items||[]);setStatus('');}
   }
   async function openSearch(){
@@ -295,8 +295,8 @@ export function App({deviceId}: Props) {
           <Text style={{color:palette.muted}}>Live guide information. Use the server’s admitted live playback client to watch this channel.</Text>:
           control(selected.IsFolder||['Series','Season','MusicAlbum','MusicArtist','Playlist','BoxSet','CollectionFolder'].includes(selected.Type)?'Browse':'Play',async()=>{
            if(selected.IsFolder||['Series','Season','MusicAlbum','MusicArtist','Playlist','BoxSet','CollectionFolder'].includes(selected.Type)){
-            const request=browseRequest(),result=await request.client.children(selected.Id.replace(/-/g,''),request.signal);
-            if(request.current()){setItems(result.Items||[]);setSelected(null);setUtility('collections');}
+            const parent=selected.Id.replace(/-/g,''),kind=selected.Type,request=browseRequest(),result=await request.client.children(parent,request.signal,kind);
+            if(request.current()){const values:Item[]=result.Items||[];setItems(values);setCategoryPage({type:kind,parent,next:values.length,total:Number(result.TotalRecordCount)||values.length});setSelected(null);setUtility('collections');}
            }else await play(selected);
           })}
         {(selected.MediaStreams||[]).filter(track=>track.Type==='Audio'||track.Type==='Subtitle').slice(0,32).map(track=>control('Source '+track.Type+': '+(track.DisplayTitle||track.Index),()=>play(selected,Math.round((video.current?.currentTime||0)*10000000),track.Type==='Audio'?{audio:track.Index}:{subtitle:track.Index})))}
@@ -330,7 +330,7 @@ export function App({deviceId}: Props) {
           {pages.map(page=><View key={page.lane}><Text style={{color:palette.text,fontSize:28}}>{{library:'Your library',artists:'Artists',programmes:'On now and upcoming',channels:'Channels'}[page.lane as 'library']}</Text>
             {cards(page.items)}{page.next<page.total&&control('More '+page.lane+' results',()=>moreSearch(page),false,true)}</View>)}
         </>}
-      </View>:utility==='collections'?<View><Text style={{color:palette.text,fontSize:28}}>Collections</Text>{cards(items)}</View>:<>
+      </View>:utility==='collections'?<View><Text style={{color:palette.text,fontSize:28}}>Collections</Text>{cards(items)}{categoryPage&&categoryPage.next<categoryPage.total&&control('More titles',moreCategory,false,true)}</View>:<>
         {category==='Home'?<View>
           {featured&&<View style={{height:380,borderRadius:20,overflow:'hidden',backgroundColor:palette.panel,marginVertical:20}}>
             {session.current?.artworkSource(featured,true)&&<Image source={session.current.artworkSource(featured,true)} resizeMode="cover" style={{position:'absolute',width:'100%',height:'100%'}}/>}

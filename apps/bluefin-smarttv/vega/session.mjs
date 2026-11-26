@@ -153,7 +153,7 @@ export class Session {
     return {games:[],items:rows(page)};
   }
   collections(signal){return this.catalogRequest('/Users/'+this.#user+'/Views',signal);}
-  children(id,signal) { if (!/^[a-f0-9]{32}$/i.test(id)) throw Error('Invalid item.'); return this.catalogRequest('/Items?UserId='+this.#user+'&ParentId='+id+'&Limit=40',signal); }
+  children(id,signal,kind='',start=0) { if (!/^[a-f0-9]{32}$/i.test(id)||!Number.isSafeInteger(start)||start<0) throw Error('Invalid item.'); const filter=kind==='MusicArtist'?'ArtistIds='+id+'&IncludeItemTypes=MusicAlbum,Audio,MusicVideo&Recursive=true':'ParentId='+id;return this.catalogRequest('/Items?UserId='+this.#user+'&'+filter+'&Limit=40&StartIndex='+start,signal); }
   item(id,signal) { if (!/^[a-f0-9]{32}$/i.test(id)) throw Error('Invalid item.'); return this.catalogRequest('/Items/'+id+'?UserId='+this.#user,signal); }
   guide(signal) { const now = encodeURIComponent(new Date().toISOString()); return this.catalogRequest('/LiveTv/Programs?UserId='+this.#user+'&Limit=200&IsAiring=true&MaxStartDate='+now+'&MinEndDate='+now,signal); }
   artworkSource(item,backdrop=false){

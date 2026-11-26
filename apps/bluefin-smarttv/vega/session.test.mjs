@@ -107,3 +107,11 @@ test('Vega partial facet aggregation cannot outlive its account',async()=>{
  await s.signIn('v','p');const pending=s.searchFacets();await ready;await s.logout();deliver(response({Tags:['private group']}));
  await assert.rejects(pending,/account|refinements/i);
 });
+
+test('Vega artist navigation retains credited-media scope on following pages',async()=>{
+ const {s,calls}=fixture();await s.signIn('viewer','synthetic password');
+ for(const start of [0,40])await s.children(id,undefined,'MusicArtist',start);
+ const requested=calls.map(call=>new URL(call.url)).filter(url=>url.searchParams.get('ArtistIds')===id);
+ assert.equal(requested.length,2);assert.equal(requested[1].searchParams.get('StartIndex'),'40');
+ for(const url of requested){assert.equal(url.searchParams.has('ParentId'),false);assert.equal(url.searchParams.get('IncludeItemTypes'),'MusicAlbum,Audio,MusicVideo');}
+});

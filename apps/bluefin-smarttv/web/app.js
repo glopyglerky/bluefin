@@ -368,19 +368,22 @@
   }
   function loadItems(types,offset){var version=epoch;return readCatalog(itemsPath(types,offset)).then(function(result){if(version!==epoch)return;var old=content.querySelector('.results');if(old)old.remove();var host=el('div',undefined,'results');renderItems(result.Items||[],host);var actions=el('div',undefined,'actions');if(offset)actions.appendChild(button('Previous page',function(){return loadItems(types,Math.max(0,offset-40));}));if((result.Items||[]).length===40)actions.appendChild(button('Next page',function(){return loadItems(types,offset+40);}));host.appendChild(actions);content.appendChild(host);focusFirst(host);});}
   function details(item){if((item.Type==='Program'||item.Type==='LiveTvProgram')&&/^[a-f0-9-]{32,36}$/i.test(item.ChannelId||''))item={Id:item.ChannelId,Type:'TvChannel'};epoch++;var version=epoch;return request('/Items/'+encodeURIComponent(item.Id)+'?Fields=Overview,MediaStreams,ExternalUrls,RunTimeTicks').then(function(detail){if(version!==epoch)return;pushBrowse();var host=el('section',undefined,'detail');host.appendChild(el('h1',detail.Name||'Untitled'));if(detail.Overview)host.appendChild(el('p',detail.Overview));var actions=el('div',undefined,'actions');
-    if(detail.IsFolder||detail.Type==='Series'||detail.Type==='MusicAlbum'){actions.appendChild(button('Browse',function(){return browse(detail);},true));}
+    if(detail.IsFolder||['Series','Season','MusicAlbum','MusicArtist','Playlist','BoxSet','CollectionFolder'].indexOf(detail.Type)>=0){actions.appendChild(button('Browse',function(){return browse(detail);},true));}
     else {actions.appendChild(button('Play',function(){return play(detail);},true));if(detail.UserData&&detail.UserData.PlaybackPositionTicks)actions.appendChild(button('Resume',function(){return play(detail,detail.UserData.PlaybackPositionTicks);}));if(detail.Type==='Audio')actions.appendChild(button('Add to queue',function(){queue=policy.apply({op:'queue',state:queue,action:'add',item:detail.Id.replace(/-/g,'')});message('Added to this TV queue.');}));}
     (detail.ExternalUrls||[]).slice(0,10).forEach(function(link){try{var handoff=policy.apply({op:'handoff',url:link.Url});actions.appendChild(button('Open '+handoff.provider,function(){return stop().then(function(){return platform.handoff(handoff.url);});}));}catch(e){/* Only exact supported public provider watch URLs get a handoff. */}});
     actions.appendChild(button('Back',backToBrowse));host.appendChild(actions);content.appendChild(host);focusFirst(host);
   });}
-  function browse(item) {
-    var version = ++epoch;
-    return request('/Items?ParentId='+encodeURIComponent(item.Id)+'&Limit=40&Fields=Overview,MediaStreams,ExternalUrls,RunTimeTicks').then(function(result) {
+  function browse(item,offset) {
+    offset=offset||0;var version = ++epoch;
+    var filter=item.Type==='MusicArtist'?'ArtistIds='+encodeURIComponent(item.Id)+'&IncludeItemTypes=MusicAlbum,Audio,MusicVideo&Recursive=true':'ParentId='+encodeURIComponent(item.Id);
+    return readCatalog('/Items?UserId='+encodeURIComponent(user)+'&'+filter+'&Limit=40&StartIndex='+offset+'&Fields=Overview,MediaStreams,ExternalUrls,RunTimeTicks').then(function(result) {
       if (version !== epoch) return;
       pushBrowse();
       content.appendChild(el('h2',item.Name));
       content.appendChild(button('Back',backToBrowse));
       renderItems(result.Items||[],content);
+      if(offset)content.appendChild(button('Previous page',function(){return browse(item,Math.max(0,offset-40));}));
+      if((result.Items||[]).length===40)content.appendChild(button('Next page',function(){return browse(item,offset+40);}));
       focusFirst(content);
     });
   }

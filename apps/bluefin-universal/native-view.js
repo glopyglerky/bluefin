@@ -144,7 +144,7 @@ function toggleShuffle(){
  syncLocalQueue();render();
 }
 
-const artworkPending=new Set(),artworkMissing=new Set(),requestControllers=new Set();let artworkActive=0;
+const artworkPending=new Map(),artworkMissing=new Set(),imageControllers=new Set(),requestControllers=new Set();let artworkActive=0,artworkScrollTimer;
 function assertLive(epoch=state.epoch,session){if(pageRetired||epoch!==state.epoch||(session!==undefined&&session!==state.session))throw Error('This page or account changed. Resume the current connection.');}
 function clearPrivateView(){routeController?.abort();routeController=null;state.featured=null;state.homeHistory=null;state.facets=null;state.search=null;state.rows=[];state.shelves=[];state.back=[];state.query='';state.route={kind:'home'};state.queue=[];state.unshuffledQueue=[];state.queueIndex=0;state.shuffle=false;state.local=false;state.localQuery='';state.localSnapshot=null;state.repeat='off';state.capabilities=null;state.capability=null;state.code='';state.meshName='';state.pairing=null;state.device=null;state.invitation=null;}
 const paths={
@@ -580,7 +580,7 @@ async function loadRoute(){
   }else if(route.kind==='search'){route.filters=cleanSearchFilters(route.filters);route.query=route.query??state.query;route.liveAfter??=new Date().toISOString();await loadSearch(route,get,current);}
   else if(route.kind==='collection'){
    const q=[['Limit',100],['StartIndex',route.start||0],['Recursive',true],['Fields','Overview,PrimaryImageAspectRatio'],['SortBy',route.type==='Audio'&&route.parent?'ParentIndexNumber,IndexNumber,SortName':'SortName']];
-   if(route.type)q.push(['IncludeItemTypes',route.type]);if(route.parent)q.push(['ParentId',route.parent]);
+   if(route.type)q.push(['IncludeItemTypes',route.type]);if(route.parent)q.push(['ParentId',route.parent]);if(route.artist)q.push(['ArtistIds',route.artist]);
    const value=await get('Users/'+user+'/Items',q);current();state.rows=items(value);route.total=Number(value.TotalRecordCount)||state.rows.length;
   }else if(route.kind==='detail'){
    const value=await get('Users/'+user+'/Items/'+id(route.item.Id));current();if(!uuid(value.Id))throw Error('The item is no longer available.');route.item=value;
@@ -601,7 +601,7 @@ async function navigate(tab){
  else state.route={kind:({Home:'home',Sports:'sports',Music:'music','Live TV':'live'})[tab]||'home'};
  await loadRoute();
 }
-async function openCollection(title,type,parent){state.back.push({...state.route});state.route={kind:'collection',title,type,parent,start:0};await loadRoute();}
+async function openCollection(title,type,parent,artist){state.back.push({...state.route});state.route={kind:'collection',title,type,parent,artist,start:0};await loadRoute();}
 async function openItem(item,recordSelection=true){
  if(recordSelection&&state.route.kind==='search')recordHomeSearch(state.route.query,item).catch(()=>{});
  if(['Program','LiveTvProgram'].includes(item.Type)){
@@ -611,7 +611,7 @@ async function openItem(item,recordSelection=true){
   return openItem({...channel,Type:'TvChannel'},false);
  }
  if(item.Type==='LiveTvChannel')item={...item,Type:'TvChannel'};
-if(item.Type==='TvChannel'&&state.mode!=='mesh'){state.back.push({...state.route});state.route={kind:'detail',item};return;}if(isLocalItem(item)){const queue=localItems();return playLocal(item,queue,queue.findIndex(track=>track.Id===item.Id));}if(item.Type==='Audio')return play(item,[item],0);if(['MusicAlbum','MusicArtist','Playlist','Series','Season','CollectionFolder','Folder','BoxSet'].includes(item.Type)||item.IsFolder){return openCollection(item.Name,item.Type==='Series'||item.Type==='Season'?'Episode':(item.Type==='MusicArtist'?'MusicAlbum':['MusicAlbum','Playlist'].includes(item.Type)?'Audio':null),id(item.Id));}state.back.push({...state.route});state.route={kind:'detail',item};await loadRoute();}
+if(item.Type==='TvChannel'&&state.mode!=='mesh'){state.back.push({...state.route});state.route={kind:'detail',item};return;}if(isLocalItem(item)){const queue=localItems();return playLocal(item,queue,queue.findIndex(track=>track.Id===item.Id));}if(item.Type==='Audio')return play(item,[item],0);if(item.Type==='MusicArtist')return openCollection(item.Name,'MusicAlbum,Audio,MusicVideo',null,id(item.Id));if(['MusicAlbum','MusicArtist','Playlist','Series','Season','CollectionFolder','Folder','BoxSet'].includes(item.Type)||item.IsFolder){return openCollection(item.Name,item.Type==='Series'||item.Type==='Season'?'Episode':(item.Type==='MusicArtist'?'MusicAlbum':['MusicAlbum','Playlist'].includes(item.Type)?'Audio':null),id(item.Id));}state.back.push({...state.route});state.route={kind:'detail',item};await loadRoute();}
 function artKey(item,backdrop=false){return (backdrop?'b:':'p:')+id(item.Id);}
 function applyArtwork(element,url,backdrop=false){if(backdrop){element.style.backgroundImage='linear-gradient(180deg,rgba(6,23,39,.05),rgba(6,23,39,.9)),url("'+url+'")';element.style.backgroundSize='cover';element.style.backgroundPosition='center';return;}const image=node('img');image.alt='';image.src=url;image.loading='lazy';image.onerror=()=>{element.replaceChildren(icon('music'));};element.replaceChildren(image);}
 function bindArtwork(element,item,backdrop=false){if(isLocalItem(item))return;const key=artKey(item,backdrop);element.dataset.artKey=key;element.dataset.artId=id(item.Id);if(backdrop)element.dataset.backdrop='true';const cached=state.images.get(key);if(cached)applyArtwork(element,cached,backdrop);}
@@ -619,28 +619,42 @@ function cover(item,square=false){const d=node('div',undefined,'artwork'+(square
 async function imageBytes(item,backdrop,session,mode){
  if(mode==='mesh')return (await runtime().engine()).webMeshArtwork(session.handle,item,backdrop);
  const url=endpoint('Items/'+item+'/Images/'+(backdrop?'Backdrop':'Primary'),[['maxWidth',backdrop?1200:400],['quality',85]]);
- const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);imageControllers.add(controller);
  try{const response=await fetch(url,{headers:{Authorization:authorization(session.token)},credentials:'omit',redirect:'error',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});
  if(!response.ok||!['image/jpeg','image/png','image/webp'].includes((response.headers.get('Content-Type')||'').split(';')[0].trim()))throw Error('Artwork unavailable');
  const reader=response.body.getReader(),parts=[];let total=0;try{for(;;){const {done,value}=await reader.read();if(done)break;total+=value.length;if(total>2*1024*1024)throw Error('Artwork limit');parts.push(value);}}catch(e){await reader.cancel().catch(()=>{});throw e;}
  const bytes=new Uint8Array(total);let at=0;for(const part of parts){bytes.set(part,at);at+=part.length;}return bytes;
- }finally{clearTimeout(timer);}
+ }finally{clearTimeout(timer);imageControllers.delete(controller);}
 }
 function imageType(bytes){if(bytes.length>2&&bytes[0]===255&&bytes[1]===216&&bytes[2]===255)return 'image/jpeg';
  if(bytes.length>8&&[137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v))return 'image/png';
  if(bytes.length>12&&String.fromCharCode(...bytes.slice(0,4))==='RIFF'&&String.fromCharCode(...bytes.slice(8,12))==='WEBP')return 'image/webp';
  throw Error('Unsupported artwork format');}
+function visibleArtwork(){
+ return Array.from(document.querySelectorAll('[data-art-key]')).filter(element=>{
+  if(typeof element.getBoundingClientRect!=='function')return true;
+  const rect=element.getBoundingClientRect();return rect.bottom>=-200&&rect.top<=(globalThis.innerHeight||1080)+200&&rect.right>=0&&rect.left<=(globalThis.innerWidth||1920);
+ });
+}
 function pumpArtwork(){if(!state.session)return;const epoch=state.imageEpoch,session=state.session,mode=state.mode;
- for(const element of document.querySelectorAll('[data-art-key]')){
-  if(artworkActive>=3)break;const key=element.dataset.artKey;if(state.images.has(key)||artworkPending.has(key)||artworkMissing.has(key))continue;
-  if(state.images.size>=64)break;artworkPending.add(key);artworkActive++;
+ const elements=visibleArtwork(),visible=new Set(elements.map(element=>element.dataset.artKey));
+ for(const element of elements){
+  if(artworkActive>=2)break;const key=element.dataset.artKey;if(state.images.has(key)||artworkPending.has(key)||artworkMissing.has(key))continue;
+  while(state.images.size+artworkPending.size>=64){
+   const evict=Array.from(state.images.keys()).find(candidate=>!visible.has(candidate));
+   if(evict===undefined)break;URL.revokeObjectURL(state.images.get(evict));state.images.delete(evict);
+  }
+  if(state.images.size+artworkPending.size>=64)break;artworkPending.set(key,epoch);artworkActive++;
   const item=element.dataset.artId,backdrop=element.dataset.backdrop==='true';
   imageBytes(item,backdrop,session,mode).then(bytes=>{
    if(epoch!==state.imageEpoch||session!==state.session)return;const url=URL.createObjectURL(new Blob([bytes],{type:imageType(bytes)}));state.images.set(key,url);
    for(const target of document.querySelectorAll('[data-art-key]'))if(target.dataset.artKey===key)applyArtwork(target,url,target.dataset.backdrop==='true');
-  }).catch(()=>{if(epoch===state.imageEpoch)artworkMissing.add(key);}).finally(()=>{artworkActive--;artworkPending.delete(key);if(epoch===state.imageEpoch)pumpArtwork();});
+  }).catch(()=>{if(epoch===state.imageEpoch){if(artworkMissing.size>=256)artworkMissing.delete(artworkMissing.values().next().value);artworkMissing.add(key);}})
+   .finally(()=>{artworkActive--;if(artworkPending.get(key)===epoch)artworkPending.delete(key);pumpArtwork();});
  }
 }
+addEventListener('scroll',()=>{clearTimeout(artworkScrollTimer);artworkScrollTimer=setTimeout(pumpArtwork,80);},{passive:true,capture:true});
+
 function poster(item){
  const square=['MusicAlbum','MusicArtist'].includes(item.Type),b=button('',()=>perform(()=>openItem(item)),'poster'+(square?' album':''));
  const copy=node('span',undefined,'poster-copy');copy.append(node('strong',item.Name));
@@ -1010,7 +1024,7 @@ async function signOut(){
  state.mode='https';state.base=hostedBase();state.server=null;state.options={};state.remember=false;
  if(cleanup)throw Error('Signed out in this tab. Remote cleanup is not confirmed; '+String(cleanup.message||cleanup));
 }
-function clearImages(){state.imageEpoch++;artworkMissing.clear();for(const url of state.images.values())URL.revokeObjectURL(url);state.images.clear();}
+function clearImages(){state.imageEpoch++;clearTimeout(artworkScrollTimer);for(const controller of imageControllers)controller.abort();imageControllers.clear();artworkPending.clear();artworkMissing.clear();for(const url of state.images.values())URL.revokeObjectURL(url);state.images.clear();}
 function render(){
  if(pageRetired)return;
  const active=document.activeElement,activeId=active?.id,activeKey=active?.dataset?.focusKey;

@@ -333,7 +333,11 @@ sub activate(action as Object)
     else if action.kind = "browse"
         rememberScreen()
         m.libraryTitle = action.item.Name
-        loadLibrary("/Items?Limit=100&ParentId=" + action.item.Id + "&Fields=Overview,MediaStreams",0)
+        if action.item.Type = "MusicArtist"
+            loadLibrary("/Items?Limit=100&Recursive=true&ArtistIds=" + action.item.Id + "&IncludeItemTypes=MusicAlbum,Audio,MusicVideo&Fields=Overview,MediaStreams",0)
+        else
+            loadLibrary("/Items?Limit=100&ParentId=" + action.item.Id + "&Fields=Overview,MediaStreams",0)
+        end if
     else if action.kind = "play"
         m.playbackScreen = screen()
         beginPlay(action.item, invalid)
@@ -654,7 +658,7 @@ sub response()
         m.detail = data
         labels = []
         actions = []
-        if data.IsFolder = true or data.Type = "Series" or data.Type = "MusicAlbum"
+        if data.IsFolder = true or data.Type = "Series" or data.Type = "Season" or data.Type = "MusicAlbum" or data.Type = "MusicArtist" or data.Type = "Playlist" or data.Type = "BoxSet" or data.Type = "CollectionFolder"
             labels.Push("Browse")
             actions.Push({kind:"browse", item:data})
         else

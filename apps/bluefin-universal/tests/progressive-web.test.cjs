@@ -72,7 +72,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  Object.defineProperty(context,'localStorage',{get(){throw Error('Default view touched localStorage');}});
  Object.defineProperty(context,'sessionStorage',{get(){throw Error('Default view touched sessionStorage');}});
  vm.runInContext(source('local-music.js'),context);
- const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,startSearch,openSearch,searchCall,loadMoreSearch,loadSearchFacets,recordHomeSearch,clearHomeSearchHistory,importInvitationImage:readInvitationImage};})();');
+ const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={pumpArtwork,clearImages,state,connect,signIn,navigate,openItem,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,startSearch,openSearch,searchCall,loadMoreSearch,loadSearchFacets,recordHomeSearch,clearHomeSearchHistory,importInvitationImage:readInvitationImage};})();');
  vm.runInContext(script,context);
  return {context,ui:context.contract,root,video,requests,events,item,pending};
 }
@@ -646,4 +646,37 @@ test('moonlit explicit search history uses the current account revision and surv
  assert.equal(payload.query,'ocean');assert.equal(payload.generation,3);assert(!('userId' in payload));assert(payload.eventId);
  await t.ui.clearHomeSearchHistory();rejectOld();await pending;
  assert.equal(t.ui.state.homeHistory.generation,4);
+});
+
+test('artist results browse credited media and preserve the credit filter when paging',async()=>{
+ const artist='77777777777747778777777777777777',t=setup();
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.openItem({Id:artist,Name:'Account artist',Type:'MusicArtist'});
+ t.ui.state.route.start=100;await t.ui.loadRoute();
+ const requests=t.requests.map(request=>new URL(request.url)).filter(url=>url.searchParams.get('ArtistIds')===artist);
+ assert.equal(requests.length,2);
+ assert.equal(requests[0].searchParams.get('StartIndex'),'0');assert.equal(requests[1].searchParams.get('StartIndex'),'100');
+ for(const url of requests){assert.equal(url.searchParams.get('IncludeItemTypes'),'MusicAlbum,Audio,MusicVideo');assert.equal(url.searchParams.has('ParentId'),false);}
+});
+
+test('artwork cache rotates offscreen entries instead of stopping permanently at 64 images',async()=>{
+ const bytes=Uint8Array.from([255,216,255,217]),wanted='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+ const t=setup({apiResponse:u=>u.pathname.includes('/Images/')?new Response(bytes,{headers:{'Content-Type':'image/jpeg'}}):undefined});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ for(let i=1;i<=64;i++)t.ui.state.images.set('p:'+i.toString(16).padStart(32,'0'),URL.createObjectURL(new Blob([bytes])));
+ const target=new Element('div');target.dataset.artKey='p:'+wanted;target.dataset.artId=wanted;
+ t.context.document.querySelectorAll=selector=>selector==='[data-art-key]'?[target]:[];
+ t.ui.pumpArtwork();await until(()=>t.ui.state.images.has('p:'+wanted));
+ assert.equal(t.ui.state.images.size,64);assert.equal(target.children[0].tagName,'IMG');
+ const request=t.requests.find(request=>new URL(request.url).pathname.includes('/Images/'));
+ assert(request.options.headers.Authorization.includes('synthetic-private-bearer'));assert(!request.url.includes('synthetic-private-bearer'));
+ t.context.document.querySelectorAll=()=>[];t.ui.clearImages();
+});
+test('clearing account artwork aborts its HTTP request and rejects the late response',async()=>{
+ let finish,signal;const t=setup({apiResponse:async(u,o)=>{if(u.pathname.includes('/Images/')){signal=o.signal;await new Promise(resolve=>finish=resolve);return new Response(Uint8Array.from([255,216,255,217]),{headers:{'Content-Type':'image/jpeg'}});}}});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const target=new Element('div');target.dataset.artKey='p:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';target.dataset.artId='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+ t.context.document.querySelectorAll=selector=>selector==='[data-art-key]'?[target]:[];
+ t.ui.pumpArtwork();await until(()=>finish);t.context.document.querySelectorAll=()=>[];t.ui.clearImages();assert.equal(signal.aborted,true);
+ finish();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(t.ui.state.images.size,0);assert.equal(target.children.length,0);
 });
