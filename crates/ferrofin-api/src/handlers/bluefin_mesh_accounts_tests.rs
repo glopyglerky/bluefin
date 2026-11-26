@@ -113,6 +113,87 @@ async fn mesh_login_claims_once_across_devices_and_only_exact_device_retry_recov
     assert!(sqlx::query("UPDATE BluefinMeshInvites SET State='issued'").execute(f.db.writer()).await.is_err());
 }
 #[tokio::test]
+async fn mesh_finish_transaction_abort_preserves_the_consumed_browser_proof_for_exact_retry(){
+    use tower::ServiceExt;
+    use axum::{body::Body,http::Request as HttpRequest};
+    let f=Fixture::new().await;let (user,mut authenticator)=f.login_account().await;
+    let device=DeviceIdentity::from_seed([71;32]).unwrap();
+    let invite=f.invite(InviteIntent::Login,Some(user)).await;
+    let start=begin(&f,invite.clone(),&device,1,None).await;
+    let request=finish_request(&start,&device,2,json!({"browser":true}));
+    let url=Url::parse(start["body"]["passkey_options"]["browserUrl"].as_str().unwrap()).unwrap();
+    let (challenge,secret)=url.fragment().unwrap().split_once('.').unwrap();
+    let body=json!({"challenge":challenge,"secret":secret,"credential":assertion(&mut authenticator,&start)});
+    let router=web::routes().with_state(f.state.clone().with_mesh_accounts(f.service.clone()));
+    let post=||HttpRequest::builder().method("POST").uri("/Bluefin/Accounts/Mesh/Passkey/Verify")
+        .header("content-type","application/json").header("origin","https://accounts.example")
+        .body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap();
+    assert_eq!(router.clone().oneshot(post()).await.unwrap().status(),axum::http::StatusCode::NO_CONTENT);
+    let credential:String=sqlx::query_scalar("SELECT Credential FROM BluefinPasskeys")
+        .fetch_one(f.db.pool()).await.unwrap();
+    // Abort after the grant and credential update, before the receipt can commit.
+    sqlx::query("CREATE TRIGGER FailMeshFinishReceipt BEFORE INSERT ON BluefinMeshReceipts BEGIN SELECT RAISE(ABORT,'fixture receipt failure'); END")
+        .execute(f.db.writer()).await.unwrap();
+    assert!(f.service.handle(&f.state,&device.public_key(),request.clone()).await.is_err());
+    sqlx::query("DROP TRIGGER FailMeshFinishReceipt").execute(f.db.writer()).await.unwrap();
+    assert_eq!(f.service.invite_row(&invite).await.unwrap().get::<String,_>("State"),"claimed");
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshSessions").fetch_one(f.db.pool()).await.unwrap(),0);
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshReceipts").fetch_one(f.db.pool()).await.unwrap(),0);
+    assert_eq!(sqlx::query_scalar::<_,String>("SELECT Credential FROM BluefinPasskeys").fetch_one(f.db.pool()).await.unwrap(),credential);
+    // The one-use browser proof stays consumed, but the signed original request
+    // still owns it. Neither a changed request nor another device may take over.
+    assert!(!router.oneshot(post()).await.unwrap().status().is_success());
+    let changed=finish_request(&start,&device,3,json!({"browser":true}));
+    assert!(f.service.handle(&f.state,&device.public_key(),changed).await.is_err());
+    let mut changed=request.clone();changed["body"]["passkey_response"]=json!({});
+    assert!(f.service.handle(&f.state,&device.public_key(),changed).await.is_err());
+    let other=DeviceIdentity::from_seed([72;32]).unwrap();
+    assert!(f.service.handle(&f.state,&other.public_key(),request.clone()).await.is_err());
+    let key=device.public_key();
+    let (first,retry)=tokio::join!(
+        f.service.handle(&f.state,&key,request.clone()),
+        f.service.handle(&f.state,&key,request));
+    let completed=first.unwrap();assert_eq!(retry.unwrap(),completed);
+    assert_eq!(completed["body"]["session"]["kind"],"session");
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshSessions").fetch_one(f.db.pool()).await.unwrap(),1);
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshReceipts").fetch_one(f.db.pool()).await.unwrap(),1);
+    assert!(!f.service.pending.lock().await.contains_key(challenge));
+}
+
+#[tokio::test]
+async fn mesh_cancelled_finish_keeps_the_exact_attempt_for_retry(){
+    use std::{future::{Future,poll_fn},task::Poll};
+    let f=Fixture::new().await;let (user,mut authenticator)=f.login_account().await;
+    let device=DeviceIdentity::from_seed([73;32]).unwrap();
+    let start=begin(&f,f.invite(InviteIntent::Login,Some(user)).await,&device,1,None).await;
+    let request=finish_request(&start,&device,2,assertion(&mut authenticator,&start));
+    let envelope:Envelope<Request>=serde_json::from_value(request.clone()).unwrap();
+    let request_hash=digest(&serde_json::to_vec(&envelope.body).unwrap());
+    let Request::Finish{request_id,challenge_id,passkey_response,device_signature}=envelope.body else {panic!("finish request")};
+    let key=device.public_key();
+    // The in-memory fixture uses one shared reader/writer connection. Holding
+    // it suspends Finish at its first DB read, after accepting the device proof.
+    let connection=f.db.writer().acquire().await.unwrap();
+    let mut attempt=Box::pin(f.service.finish(&f.state,&key,request_id,request_hash,&challenge_id,passkey_response,&device_signature));
+    poll_fn(|cx|{
+        assert!(attempt.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    }).await;
+    drop(attempt);
+    drop(connection);
+    {
+        let pending=f.service.pending.lock().await;
+        assert_eq!(pending.get(&challenge_id).unwrap().finish_attempt,Some((request_id,request_hash)));
+    }
+    let changed=finish_request(&start,&device,3,json!({}));
+    assert!(f.service.handle(&f.state,&key,changed).await.is_err());
+    let completed=f.service.handle(&f.state,&key,request.clone()).await.unwrap();
+    assert_eq!(completed["body"]["session"]["kind"],"session");
+    assert_eq!(f.service.handle(&f.state,&key,request).await.unwrap(),completed);
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshSessions").fetch_one(f.db.pool()).await.unwrap(),1);
+}
+
+#[tokio::test]
 async fn mesh_invalid_device_proof_cannot_spend_or_steal_an_invitation(){
     let f=Fixture::new().await;let (user,mut authenticator)=f.login_account().await;
     let invite=f.invite(InviteIntent::Login,Some(user)).await;

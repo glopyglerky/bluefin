@@ -44,6 +44,7 @@ struct Pending {
     begin_id:[u8;32], begin_hash:[u8;32], invite:ConnectInvite, peer:Vec<u8>,
     label:String, expires:i64, proof:String, ceremony:Ceremony, response:Value,
     browser_secret_hash:[u8;32], browser_response:Option<Value>, browser_used:bool,
+    finish_attempt:Option<([u8;32],[u8;32])>,
 }
 /// This is an adapter over the account database, not another identity store.
 pub struct Service {
@@ -246,21 +247,26 @@ impl Service {
             .bind(self.epoch.to_vec()).bind(now()).execute(&mut *tx).await.map_err(storage)?.rows_affected();
         if changed!=1{return Err(used());}
         tx.commit().await.map_err(storage)?;
-        pending.insert(challenge,Pending {begin_id:request_id,begin_hash:request_hash,invite,peer:peer.to_vec(),label,expires,proof,ceremony,response:response.clone(),browser_secret_hash:digest(browser_secret.as_bytes()),browser_response:None,browser_used:false});
+        pending.insert(challenge,Pending {begin_id:request_id,begin_hash:request_hash,invite,peer:peer.to_vec(),label,expires,proof,ceremony,response:response.clone(),browser_secret_hash:digest(browser_secret.as_bytes()),browser_response:None,browser_used:false,finish_attempt:None});
         Ok(response)
     }
 
     async fn finish(&self,state:&AppState,peer:&[u8],request_id:[u8;32],request_hash:[u8;32],challenge:&str,response:Value,signature:&[u8])->Result<Value,ApiError>{
-        let pending={
-            let mut map=self.pending.lock().await;
-            let current=map.get(challenge).filter(|v|v.expires>now()&&v.peer==peer).ok_or_else(used)?;
-            verify_device_signature(peer,current.proof.as_bytes(),signature).map_err(|_|failed())?;
-            if response==json!({"browser":true}) && current.browser_response.is_none() {
-                return Err(ApiError::Conflict("Complete the passkey request in your browser, then retry.".into()));
-            }
-            // Invalid passkeys discard this ceremony without spending the invitation.
-            map.remove(challenge).ok_or_else(used)?
-        };
+        // Retain the ceremony until its grant and receipt commit together. Dropping
+        // this future or a failed transaction must not strand an already claimed QR.
+        let mut map=self.pending.lock().await;
+        let pending=map.get_mut(challenge).filter(|v|v.expires>now()&&v.peer==peer).ok_or_else(used)?;
+        verify_device_signature(peer,pending.proof.as_bytes(),signature).map_err(|_|failed())?;
+        if response==json!({"browser":true}) && pending.browser_response.is_none() {
+            return Err(ApiError::Conflict("Complete the passkey request in your browser, then retry.".into()));
+        }
+        // The hash includes the original passkey response and device signature.
+        // Retrying after any error may only continue this exact accepted attempt.
+        match pending.finish_attempt {
+            Some(previous) if previous!=(request_id,request_hash)=>return Err(failed()),
+            Some(_)=>{},
+            None=>pending.finish_attempt=Some((request_id,request_hash)),
+        }
         let claim=self.invite_row(&pending.invite).await?;
         if claim.get::<String,_>("State")!="claimed"
             || claim.get::<Option<Vec<u8>>,_>("ClaimedDevice").as_deref()!=Some(peer)
@@ -269,23 +275,23 @@ impl Service {
             return Err(used());
         }
         let response=if response==json!({"browser":true}) { pending.browser_response.clone().ok_or_else(failed)? } else {response};
-        let (user,registration,username,credential_update)=match pending.ceremony {
+        let (user,registration,username,credential_update)=match &pending.ceremony {
             Ceremony::Login {user,state:ceremony}=>{
-                self.account_allowed(state,user).await?;
+                self.account_allowed(state,*user).await?;
                 let credential=serde_json::from_value(response).map_err(|_|failed())?;
-                let result=self.webauthn.finish_passkey_authentication(&credential,&ceremony).map_err(|_|failed())?;
+                let result=self.webauthn.finish_passkey_authentication(&credential,ceremony).map_err(|_|failed())?;
                 let previous:String=sqlx::query_scalar("SELECT Credential FROM BluefinPasskeys WHERE UserId=? AND CredentialId=?")
-                    .bind(guid_to_db(user)).bind(result.cred_id().as_ref()).fetch_optional(self.db.pool()).await.map_err(storage)?.ok_or_else(failed)?;
+                    .bind(guid_to_db(*user)).bind(result.cred_id().as_ref()).fetch_optional(self.db.pool()).await.map_err(storage)?.ok_or_else(failed)?;
                 let mut key:Passkey=serde_json::from_str(&previous).map_err(storage)?;
                 if key.update_credential(&result).is_none(){return Err(failed());}
                 let updated=serde_json::to_string(&key).map_err(storage)?;
-                (Some(user),None,None,Some((result.cred_id().as_ref().to_vec(),previous,updated)))
+                (Some(*user),None,None,Some((result.cred_id().as_ref().to_vec(),previous,updated)))
             },
             Ceremony::Signup {username,state:ceremony}=>{
                 if !self.policy(state).await?.allow_signups {return Err(failed());}
                 let credential=serde_json::from_value(response).map_err(|_|failed())?;
-                let key=self.webauthn.finish_passkey_registration(&credential,&ceremony).map_err(|_|failed())?;
-                (None,Some((key.cred_id().as_ref().to_vec(),serde_json::to_string(&key).map_err(storage)?)),Some(username),None)
+                let key=self.webauthn.finish_passkey_registration(&credential,ceremony).map_err(|_|failed())?;
+                (None,Some((key.cred_id().as_ref().to_vec(),serde_json::to_string(&key).map_err(storage)?)),Some(username.clone()),None)
             },
         };
         let outcome=hex(&random()?);
@@ -321,6 +327,8 @@ impl Service {
             .bind(request_id.to_vec()).bind(peer).bind(request_hash.to_vec()).bind(serde_json::to_string(&receipt).map_err(storage)?)
             .execute(&mut *tx).await.map_err(storage)?;
         tx.commit().await.map_err(storage)?;
+        map.remove(challenge);
+        drop(map);
         if user.is_none() && self.policy(state).await?.mesh_signup_approval==super::bluefin_accounts::SignupApproval::Automatic {
             // A provisioning failure leaves one pending, reviewable request.
             let _=state.users.approve_mesh_signup(&outcome).await;
