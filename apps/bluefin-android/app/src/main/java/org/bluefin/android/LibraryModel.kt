@@ -52,9 +52,11 @@ class LibraryModel(application: Application) : AndroidViewModel(application) {
     private var generation = 0
     private var job: Job? = null
     private var parentId: String? = null
+    private var artistId: String? = null
     private data class Shelf(
         val section: String, val search: String, val parent: String?,
-        val items: List<LibraryItem>, val total: Int, val selected: LibraryItem?, val nextIndex: Int
+        val items: List<LibraryItem>, val total: Int, val selected: LibraryItem?, val nextIndex: Int,
+        val artist: String?
     )
     private val previousShelves = ArrayDeque<Shelf>()
     val canGoBack: Boolean get() = selected != null || parentId != null || section != "Home"
@@ -119,6 +121,7 @@ class LibraryModel(application: Application) : AndroidViewModel(application) {
         section = previous.section
         query = previous.search
         parentId = previous.parent
+        artistId = previous.artist
         rows = previous.items
         total = previous.total
         nextIndex = previous.nextIndex
@@ -157,10 +160,10 @@ class LibraryModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    fun browse(name: String, search: String = "", parent: String? = null, append: Boolean = false) {
+    fun browse(name: String, search: String = "", parent: String? = null, append: Boolean = false, artist: String? = null) {
         job?.cancel(); val epoch = ++generation
         val owner = core.account
-        section = name; query = search; parentId = parent; selected = null; error = null
+        section = name; query = search; parentId = parent; artistId = artist; selected = null; error = null
         if (!append) { nextIndex = 0; rows = emptyList(); total = 0 }
         if (name != "Home") homeShelves = emptyList()
         if (name != "Sports") sportsListings = emptyList()
@@ -213,9 +216,10 @@ class LibraryModel(application: Application) : AndroidViewModel(application) {
                 val fields = if (name == "Search") criteria.fields(search, if (append) nextIndex else 0)
                     else JSONObject().put("limit", 50).put("startIndex", if (append) nextIndex else 0)
                 parent?.let { fields.put("parentId", it) }
+                artist?.let { fields.put("artistId", it).put("kind", "albums") }
                 if (search.isNotBlank()) fields.put("searchTerm", search.take(128))
                 when (name) { "Movies" -> fields.put("includeItemTypes", "Movie"); "TV Shows" -> fields.put("includeItemTypes", "Series"); "Episodes" -> fields.put("includeItemTypes", "Episode"); "Music" -> fields.put("includeItemTypes", "Audio,MusicAlbum,MusicArtist,Playlist") }
-                val op = when { name == "Live TV" -> "liveChannels"; name == "Library" && parent == null && search.isEmpty() -> "libraries"; else -> "items" }
+                val op = when { artist != null -> "musicItems"; name == "Live TV" -> "liveChannels"; name == "Library" && parent == null && search.isEmpty() -> "libraries"; else -> "items" }
                 val result = core.callOwned(owner, op, fields)
                 if (epoch == generation && core.account == owner) {
                     val next = result.items()
@@ -229,11 +233,13 @@ class LibraryModel(application: Application) : AndroidViewModel(application) {
         }
     }
     val hasMore: Boolean get() = nextIndex < total && section !in setOf("Home", "Sports")
-    fun more() = browse(section, query, parentId, true)
+    fun more() = browse(section, query, parentId, true, artistId)
     fun children(item: LibraryItem) {
         if (previousShelves.size == 16) previousShelves.removeFirst()
-        previousShelves.addLast(Shelf(section, query, parentId, rows, total, item, nextIndex))
-        browse(if (item.type == "Series") "Episodes" else "Library", parent = item.id)
+        previousShelves.addLast(Shelf(section, query, parentId, rows, total, item, nextIndex, artistId))
+        val artist = item.id.takeIf { item.type == "MusicArtist" }
+        browse(if (artist != null) "Music" else if (item.type == "Series") "Episodes" else "Library",
+            parent = item.id.takeIf { artist == null }, artist = artist)
     }
     fun login(server: String, user: String, password: String, create: Boolean = false, onRefused: () -> Unit = {}, done: () -> Unit) {
         viewModelScope.launch {
