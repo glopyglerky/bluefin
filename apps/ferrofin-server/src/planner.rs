@@ -4191,10 +4191,7 @@ mod tests {
             args.windows(2).any(|w| w[0] == "-ac" && w[1] == channels),
             "{args:?}"
         );
-        assert!(
-            !without_temp_dir(&args.join(" ")).contains("pan="),
-            "{args:?}"
-        );
+        assert!(!args.iter().any(|arg| arg.contains("pan=")), "{args:?}");
     }
 
     /// Upstream `GetProgressiveVideoAudioArguments_StereoDownmix_UsesFilterInsteadOfChannelCount`.
@@ -4203,7 +4200,7 @@ mod tests {
         let args = progressive_downmix_arguments(false, 6, 2, 2.0).await;
         assert!(!args.iter().any(|arg| arg == "-ac"), "{args:?}");
         assert!(
-            without_temp_dir(&args.join(" ")).contains("pan=stereo"),
+            args.iter().any(|arg| arg.contains("pan=stereo")),
             "{args:?}"
         );
     }
