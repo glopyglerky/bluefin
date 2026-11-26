@@ -145,6 +145,7 @@
 		6DE406BEF60072CF1707F48E /* AuthorizedUse.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BDDAA60743495AF5D9F39A5 /* AuthorizedUse.swift */; };
 		6DE9362DB33BCD47DF35076A /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */; };
 		702DB01A916BBCFCE5D011B1 /* HomeAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */; };
+		14013F85717739037999A648 /* MusicAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83A32D4A7225B8F579C7A18B /* MusicAssistant.swift */; };
 		702FB15FE4E329C4A2425DAE /* MusicPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */; };
 		70BB1BFA18EB02A031CD67B9 /* WatchAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30BB216A32E9D03C0DF699C7 /* WatchAPI.swift */; };
 		7145E6B7A1845C7DE956CC84 /* RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706B3CC35EBF8FE54AD7791A /* RustBridge.swift */; };
@@ -210,6 +211,7 @@
 		A02912D1E56DC9A629BB7418 /* RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706B3CC35EBF8FE54AD7791A /* RustBridge.swift */; };
 		A075CE57D0925C6422EA86FA /* KaraokeAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D9BCFE68C5BB0A2D5703231 /* KaraokeAudio.swift */; };
 		A08DD4D6F9B92C107A6520E1 /* HomeAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */; };
+		9C3C0BF3947BDBA6752D9842 /* MusicAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83A32D4A7225B8F579C7A18B /* MusicAssistant.swift */; };
 		A09BD06984B2DA35F6ECAF80 /* MusicLibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D006ABB8323A0134B9F3E64C /* MusicLibraryModel.swift */; };
 		A15FC18F81D614B23AEB0758 /* WatchCompanion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49E55D2D281781288D3567DC /* WatchCompanion.swift */; };
 		A18604A6D17207CBD4FC1107 /* BluefinOceanStudy.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = 26BD4A8C5AB4CFEA96586328 /* BluefinOceanStudy.mp4 */; };
@@ -258,9 +260,11 @@
 		C28FBD6BBC426D48A1937E43 /* KaraokeContinuityLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C687D323B772AA3B1A871B01 /* KaraokeContinuityLifecycle.swift */; };
 		C5C8F63F9166746987128869 /* MusicDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = C161B9D616DEA7BA78CA3269 /* MusicDesign.swift */; };
 		C6231739C6CA06F75BCD50C9 /* HomeAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */; };
+		4EC2D220D3A43A4D2DD81FA1 /* MusicAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83A32D4A7225B8F579C7A18B /* MusicAssistant.swift */; };
 		C6C5113C0D4CEEE467771A49 /* SportsStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E92A57ECD46DFF66059C2CC2 /* SportsStoreTests.swift */; };
 		C6FA6FBC3122D174C81DF986 /* NativeKaraokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4951D96A1B8535945F7F30B /* NativeKaraokeTests.swift */; };
 		C74034FB7E23FB1DFEE49248 /* HomeAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */; };
+		E7658738F5FA7767DB93EA15 /* MusicAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83A32D4A7225B8F579C7A18B /* MusicAssistant.swift */; };
 		C7411E5172D40837D1AB87CF /* PlaybackLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DED8DE60C9EF16484D7401 /* PlaybackLifecycle.swift */; };
 		C854B0A308957C9C255C8B24 /* CoreAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8004301C4A8B9B7CF56DB3F4 /* CoreAdmission.swift */; };
 		C8CF443AEF3073ADB148ED34 /* KaraokePreparation.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA965C7003B2CD5A408C2903 /* KaraokePreparation.swift */; };
@@ -461,6 +465,7 @@
 
 /* Begin PBXFileReference section */
 		056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeAssistant.swift; sourceTree = "<group>"; };
+		83A32D4A7225B8F579C7A18B /* MusicAssistant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicAssistant.swift; sourceTree = "<group>"; };
 		05B1F9CBDB9782B42D2EC439 /* NativeTitleSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTitleSelection.swift; sourceTree = "<group>"; };
 		0C571608A3F14B07D357FF34 /* SharePlayContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharePlayContractTests.swift; sourceTree = "<group>"; };
 		0CCE1271A6DE0258BD662552 /* BluefinTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BluefinTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -736,6 +741,7 @@
 				4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */,
 				8004301C4A8B9B7CF56DB3F4 /* CoreAdmission.swift */,
 				056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */,
+				83A32D4A7225B8F579C7A18B /* MusicAssistant.swift */,
 				B49DB857C424585BC6F92237 /* IrohSettings.swift */,
 				1D9BCFE68C5BB0A2D5703231 /* KaraokeAudio.swift */,
 				3D7322B01463782B4656C7DD /* KaraokeContinuityAudio.swift */,
@@ -1281,6 +1287,7 @@
 				E0AD3117873ABF4819A50671 /* CarPlayVideoSupport.swift in Sources */,
 				B9F23B80F1EE42B726D20C84 /* CoreAdmission.swift in Sources */,
 				C6231739C6CA06F75BCD50C9 /* HomeAssistant.swift in Sources */,
+				4EC2D220D3A43A4D2DD81FA1 /* MusicAssistant.swift in Sources */,
 				36F22BB19587DC3F898AD26A /* IrohSettings.swift in Sources */,
 				25B7D8ECF82305CB1D3BFE1D /* KaraokeAudio.swift in Sources */,
 				9AD5EBFBCE756E6825B644D6 /* KaraokeContinuityAudio.swift in Sources */,
@@ -1362,6 +1369,7 @@
 				3B7BCF23A632D9CBE11F4F74 /* CarPlayVideoSupport.swift in Sources */,
 				2DBD381BD622504214533F10 /* CoreAdmission.swift in Sources */,
 				702DB01A916BBCFCE5D011B1 /* HomeAssistant.swift in Sources */,
+				14013F85717739037999A648 /* MusicAssistant.swift in Sources */,
 				7B45817160C57283E7345606 /* IrohSettings.swift in Sources */,
 				24415DC1C342F2E9D6F64C72 /* KaraokeAudio.swift in Sources */,
 				EF3D16707A5FD8797E720C4B /* KaraokeContinuityAudio.swift in Sources */,
@@ -1443,6 +1451,7 @@
 				7209AB85ACC87684283BDA78 /* CarPlayVideoSupport.swift in Sources */,
 				A3252E50E50A85C7FE2069B0 /* CoreAdmission.swift in Sources */,
 				C74034FB7E23FB1DFEE49248 /* HomeAssistant.swift in Sources */,
+				E7658738F5FA7767DB93EA15 /* MusicAssistant.swift in Sources */,
 				DDCB363D61718146B31E630D /* IrohSettings.swift in Sources */,
 				F922F8BEF4FA6E315324F5CD /* KaraokeAudio.swift in Sources */,
 				BCCE5089AE9C13D7D2DF8CEE /* KaraokeContinuityAudio.swift in Sources */,
@@ -1551,6 +1560,7 @@
 				97E6881D69BE50868A46817B /* CarPlayVideoSupport.swift in Sources */,
 				C854B0A308957C9C255C8B24 /* CoreAdmission.swift in Sources */,
 				A08DD4D6F9B92C107A6520E1 /* HomeAssistant.swift in Sources */,
+				9C3C0BF3947BDBA6752D9842 /* MusicAssistant.swift in Sources */,
 				452A3FCF6B81F530F66D67A3 /* IrohSettings.swift in Sources */,
 				A075CE57D0925C6422EA86FA /* KaraokeAudio.swift in Sources */,
 				EA7BC265662C06603E9D40F7 /* KaraokeContinuityAudio.swift in Sources */,

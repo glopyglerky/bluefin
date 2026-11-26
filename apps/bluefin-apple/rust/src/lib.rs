@@ -12,6 +12,7 @@ mod local_assistance;
 mod client_platform;
 mod discovery;
 mod home_assistant;
+mod music_assistant;
 mod iroh_transport;
 mod mesh_onboarding;
 mod mesh_browser;
@@ -574,6 +575,18 @@ pub fn call(v: &Value) -> Result<Value> {
         return Ok(
             json!({"localCleanupComplete":streams && cache,"serverRevoked":revoked,"playbackReleaseComplete":released,"cleanupResources":pending}),
         );
+    }
+    if matches!(
+        op,
+        "musicAssistantConnect"
+            | "musicAssistantPlayers"
+            | "musicAssistantLibrary"
+            | "musicAssistantSearch"
+            | "musicAssistantQueue"
+            | "musicAssistantPlay"
+            | "musicAssistantControl"
+    ) {
+        return music_assistant::call(v, op);
     }
     if matches!(
         op,
