@@ -246,6 +246,125 @@ async fn mesh_autoapproval_is_server_policy_and_never_grants_administration(){
     let user=f.state.users.get_user_by_name("autoviewer").await.unwrap().unwrap();
     assert!(!f.state.users.get_user_dto(&user,None).await.unwrap().policy.unwrap().is_administrator);
 }
+async fn committed_finish_receipt(f:&Fixture)->Value{
+    tokio::time::timeout(std::time::Duration::from_secs(10),async{
+        loop{
+            if let Some(saved)=sqlx::query_scalar::<_,String>("SELECT Response FROM BluefinMeshReceipts LIMIT 1")
+                .fetch_optional(f.db.pool()).await.unwrap(){
+                return serde_json::from_str(&saved).unwrap();
+            }
+            tokio::task::yield_now().await;
+        }
+    }).await.expect("Finish did not commit its receipt before optional approval")
+}
+
+#[tokio::test]
+async fn mesh_autoapproval_resumes_exact_receipt_after_postcommit_cancellation(){
+    let f=Fixture::new().await;let device=DeviceIdentity::from_seed([74;32]).unwrap();
+    std::fs::write(f.directory.path().join("bluefin-accounts.json"),r#"{"allowSignups":true,"meshSignupApproval":"automatic"}"#).unwrap();
+    let start=begin(&f,f.invite(InviteIntent::Signup,None).await,&device,1,Some("resumedviewer")).await;
+    let mut authenticator=WebauthnAuthenticator::new(SoftPasskey::new(true));
+    let request=finish_request(&start,&device,2,registration(&mut authenticator,&start));
+    let key=device.public_key();
+    // This is the real settings-write gate. Finish may commit, but optional
+    // provisioning cannot read policy or create an account until it is released.
+    let policy_gate=f.state.account_gate.lock().await;
+    let mut attempt=Box::pin(f.service.handle(&f.state,&key,request.clone()));
+    let receipt=tokio::select!{
+        _=&mut attempt=>panic!("Finish returned before the held policy gate"),
+        receipt=committed_finish_receipt(&f)=>receipt,
+    };
+    drop(attempt);drop(policy_gate);
+    let handle=receipt["body"]["session"]["handle"].as_str().unwrap();
+    assert_eq!(sqlx::query_scalar::<_,String>("SELECT State FROM BluefinMeshSignups WHERE Id=?")
+        .bind(handle).fetch_one(f.db.pool()).await.unwrap(),"pending");
+    assert!(f.state.users.get_user_by_name("resumedviewer").await.unwrap().is_none());
+    let (first,retry)=tokio::join!(
+        f.service.handle(&f.state,&key,request.clone()),
+        f.service.handle(&f.state,&key,request.clone()));
+    assert_eq!(first.unwrap(),receipt);assert_eq!(retry.unwrap(),receipt);
+    let user=f.state.users.get_user_by_name("resumedviewer").await.unwrap().unwrap();
+    let policy=f.state.users.get_user_dto(&user,None).await.unwrap().policy.unwrap();
+    assert!(!policy.is_administrator&&!policy.enable_all_folders&&!policy.enable_public_sharing);
+    let status=f.service.status(&f.state,&key,handle).await.unwrap();
+    assert_eq!(status["body"]["state"],"approved");
+    assert_eq!(f.service.status(&f.state,&key,handle).await.unwrap(),status);
+    assert_eq!(f.service.handle(&f.state,&key,request).await.unwrap(),receipt);
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshReceipts").fetch_one(f.db.pool()).await.unwrap(),1);
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshSignups").fetch_one(f.db.pool()).await.unwrap(),1);
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinPasskeys").fetch_one(f.db.pool()).await.unwrap(),1);
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshSessions").fetch_one(f.db.pool()).await.unwrap(),1);
+}
+
+#[tokio::test]
+async fn mesh_autoapproval_policy_read_failure_preserves_receipt_and_status_recovers(){
+    let f=Fixture::new().await;let device=DeviceIdentity::from_seed([75;32]).unwrap();
+    let settings=f.directory.path().join("bluefin-accounts.json");
+    std::fs::write(&settings,r#"{"allowSignups":true,"meshSignupApproval":"automatic"}"#).unwrap();
+    let start=begin(&f,f.invite(InviteIntent::Signup,None).await,&device,1,Some("policyrecovery")).await;
+    let mut authenticator=WebauthnAuthenticator::new(SoftPasskey::new(true));
+    let request=finish_request(&start,&device,2,registration(&mut authenticator,&start));
+    let key=device.public_key();
+    let policy_gate=f.state.account_gate.lock().await;
+    let mut attempt=Box::pin(f.service.handle(&f.state,&key,request.clone()));
+    let receipt=tokio::select!{
+        _=&mut attempt=>panic!("Finish returned before the held policy gate"),
+        receipt=committed_finish_receipt(&f)=>receipt,
+    };
+    // Corrupt policy only after the signup and receipt are durable.
+    std::fs::write(&settings,"invalid policy").unwrap();drop(policy_gate);
+    assert_eq!(attempt.await.unwrap(),receipt);
+    assert_eq!(f.service.handle(&f.state,&key,request.clone()).await.unwrap(),receipt);
+    let handle=receipt["body"]["session"]["handle"].as_str().unwrap();
+    assert_eq!(f.service.status(&f.state,&key,handle).await.unwrap()["body"]["state"],"pending");
+    assert!(f.state.users.get_user_by_name("policyrecovery").await.unwrap().is_none());
+    std::fs::write(&settings,r#"{"allowSignups":true,"meshSignupApproval":"automatic"}"#).unwrap();
+    let other=DeviceIdentity::from_seed([76;32]).unwrap().public_key();
+    assert!(f.service.status(&f.state,&other,handle).await.is_err());
+    assert!(f.service.handle(&f.state,&other,request.clone()).await.is_err());
+    assert!(f.state.users.get_user_by_name("policyrecovery").await.unwrap().is_none());
+    assert_eq!(f.service.status(&f.state,&key,handle).await.unwrap()["body"]["state"],"approved");
+    assert_eq!(f.service.handle(&f.state,&key,request).await.unwrap(),receipt);
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshReceipts").fetch_one(f.db.pool()).await.unwrap(),1);
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinPasskeys").fetch_one(f.db.pool()).await.unwrap(),1);
+}
+
+#[tokio::test]
+async fn mesh_autoapproval_recovery_obeys_current_manual_disabled_and_denied_decisions(){
+    for (current_policy,denied) in [
+        (r#"{"allowSignups":true,"meshSignupApproval":"manual"}"#,false),
+        (r#"{"allowSignups":false,"meshSignupApproval":"automatic"}"#,false),
+        (r#"{"allowSignups":true,"meshSignupApproval":"automatic"}"#,true),
+    ]{
+        let f=Fixture::new().await;let device=DeviceIdentity::from_seed([77;32]).unwrap();
+        let settings=f.directory.path().join("bluefin-accounts.json");
+        std::fs::write(&settings,r#"{"allowSignups":true,"meshSignupApproval":"automatic"}"#).unwrap();
+        let start=begin(&f,f.invite(InviteIntent::Signup,None).await,&device,1,Some("reviewviewer")).await;
+        let mut authenticator=WebauthnAuthenticator::new(SoftPasskey::new(true));
+        let request=finish_request(&start,&device,2,registration(&mut authenticator,&start));
+        // Force the real account owner's transaction to fail after Finish commits.
+        sqlx::query("CREATE TRIGGER FailMeshAutoApproval BEFORE UPDATE ON BluefinMeshSignups WHEN NEW.State='approved' BEGIN SELECT RAISE(ABORT,'fixture approval failure'); END")
+            .execute(f.db.writer()).await.unwrap();
+        let key=device.public_key();
+        let receipt=f.service.handle(&f.state,&key,request.clone()).await.unwrap();
+        let handle=receipt["body"]["session"]["handle"].as_str().unwrap();
+        assert!(f.state.users.get_user_by_name("reviewviewer").await.unwrap().is_none());
+        sqlx::query("DROP TRIGGER FailMeshAutoApproval").execute(f.db.writer()).await.unwrap();
+        std::fs::write(&settings,current_policy).unwrap();
+        if denied{
+            sqlx::query("UPDATE BluefinMeshSignups SET State='denied' WHERE Id=? AND State='pending'")
+                .bind(handle).execute(f.db.writer()).await.unwrap();
+        }
+        assert_eq!(f.service.handle(&f.state,&key,request).await.unwrap(),receipt);
+        let status=f.service.status(&f.state,&key,handle).await.unwrap();
+        assert_eq!(status["body"]["state"],if denied{"denied"}else{"pending"});
+        assert!(f.state.users.get_user_by_name("reviewviewer").await.unwrap().is_none());
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshReceipts").fetch_one(f.db.pool()).await.unwrap(),1);
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinPasskeys").fetch_one(f.db.pool()).await.unwrap(),0);
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshSessions").fetch_one(f.db.pool()).await.unwrap(),0);
+    }
+}
+
 #[tokio::test]
 async fn mesh_new_epoch_fences_old_process_and_old_qr_but_retains_device_receipts(){
     let f=Fixture::new().await;let (user,mut authenticator)=f.login_account().await;

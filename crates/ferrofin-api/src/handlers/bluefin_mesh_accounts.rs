@@ -198,6 +198,11 @@ impl Service {
                     .bind(id).bind(peer).bind(now()).fetch_optional(self.db.pool()).await.map_err(storage)?;
                 let user=Uuid::parse_str(&active.ok_or_else(failed)?).map_err(|_|failed())?;
                 self.account_allowed(state,user).await?;
+            } else if saved["body"]["session"]["kind"]=="signup" {
+                let handle=saved["body"]["session"]["handle"].as_str().filter(|id|id_valid(id)).ok_or_else(failed)?;
+                // The immutable receipt survives interrupted optional provisioning.
+                // Only this same verified device may resume its pending signup.
+                let _=self.resume_automatic_signup(state,peer,handle).await;
             }
             return Ok(saved);
         }
@@ -339,11 +344,31 @@ impl Service {
         tx.commit().await.map_err(storage)?;
         map.remove(challenge);
         drop(map);
-        if user.is_none() && self.policy(state).await?.mesh_signup_approval==super::bluefin_accounts::SignupApproval::Automatic {
-            // A provisioning failure leaves one pending, reviewable request.
-            let _=state.users.approve_mesh_signup(&outcome).await;
+        if user.is_none() {
+            // The committed receipt is returned even if optional provisioning fails.
+            // Its original device can retry by replaying Finish or polling status.
+            let _=self.resume_automatic_signup(state,peer,&outcome).await;
         }
         Ok(receipt)
+    }
+    async fn resume_automatic_signup(&self,state:&AppState,peer:&[u8],handle:&str)->Result<bool,ApiError>{
+        if !id_valid(handle) || peer.len()!=1952 {return Err(failed());}
+        // Finish drops the pending-map lock before entering here. All callers
+        // hold the mesh gate, then this policy gate, then acquire DB resources.
+        // The account owner does not reacquire either gate.
+        let _policy_gate=state.account_gate.lock().await;
+        let policy=self.policy(state).await?;
+        if !policy.allow_signups || policy.mesh_signup_approval!=super::bluefin_accounts::SignupApproval::Automatic {
+            return Ok(false);
+        }
+        self.live().await?;
+        let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM BluefinMeshSignups WHERE Id=? AND DevicePublicKey=? AND State='pending' AND UserId IS NULL)")
+            .bind(handle).bind(peer).fetch_one(self.db.pool()).await.map_err(storage)?;
+        if !pending {return Ok(false);}
+        // The account owner atomically checks pending state, creates one
+        // restricted account and attaches its passkey. Denials remain final.
+        state.users.approve_mesh_signup(handle).await?;
+        Ok(true)
     }
     async fn descriptor(&self,state:&AppState,id:&str,user:Uuid,expires:i64)->Result<Value,ApiError>{
         let account=state.users.get_user_by_id(user).await?.ok_or_else(failed)?;
@@ -359,8 +384,12 @@ impl Service {
     async fn status(&self,state:&AppState,peer:&[u8],handle:&str)->Result<Value,ApiError>{
         self.live().await?;
         if !id_valid(handle){return Err(failed());}
-        let row=sqlx::query("SELECT * FROM BluefinMeshSignups WHERE Id=? AND DevicePublicKey=?")
+        let mut row=sqlx::query("SELECT * FROM BluefinMeshSignups WHERE Id=? AND DevicePublicKey=?")
             .bind(handle).bind(peer).fetch_optional(self.db.pool()).await.map_err(storage)?.ok_or_else(failed)?;
+        if row.get::<String,_>("State")=="pending" && self.resume_automatic_signup(state,peer,handle).await.unwrap_or(false) {
+            row=sqlx::query("SELECT * FROM BluefinMeshSignups WHERE Id=? AND DevicePublicKey=?")
+                .bind(handle).bind(peer).fetch_optional(self.db.pool()).await.map_err(storage)?.ok_or_else(failed)?;
+        }
         let status:String=row.get("State");
         if status!="approved" {return Ok(json!({"version":1,"body":{"type":"status_result","handle":handle,"state":status}}));}
         let stored_user:Option<String>=row.get("UserId");
