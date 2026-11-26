@@ -1,5 +1,7 @@
 #ifndef BLUEFIN_H
 #define BLUEFIN_H
+#include <stddef.h>
+#include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -17,6 +19,9 @@ extern "C" {
  * persisted. Cache roots must have no symlink path components.
  * Original report ticks = player ticks + startOffsetTicks. See Rust README. */
 char *bluefin_call(const char *json);
+/* Input is a readable PNG/JPEG buffer, 1..8 MiB. Output owns invitation secrets.
+ * Call off the main thread and release the result with bluefin_free. */
+char *bluefin_decode_qr_image(const uint8_t *input, size_t len);
 void bluefin_free(char *json);
 #ifdef __cplusplus
 }

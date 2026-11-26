@@ -14,6 +14,7 @@ mod discovery;
 mod home_assistant;
 mod iroh_transport;
 mod mesh_onboarding;
+mod mesh_browser;
 mod mesh_connection;
 mod mesh_proxy;
 mod mesh_discovery;
@@ -536,8 +537,9 @@ pub fn call(v: &Value) -> Result<Value> {
     if matches!(op, "localAssistPrepare" | "localAssistComplete" | "localAssistCancel") {
         return local_assistance::call(v, op);
     }
+    if matches!(op,"meshBrowserValidate"|"meshBrowserCallback") { return mesh_browser::call(v,op); }
     if matches!(op,"meshLanDecode"|"meshLanRefresh") { return mesh_discovery::call(v,op); }
-    if matches!(op,"meshIdentityCreate"|"meshBegin"|"meshFinishPrepare"|"meshFinish"|"meshStatus"|"meshImage"|"meshCloseResources") {
+    if matches!(op,"meshRequestIdCreate"|"meshRevoke"|"meshIdentityCreate"|"meshBegin"|"meshFinishPrepare"|"meshFinish"|"meshStatus"|"meshImage"|"meshCloseResources") {
         return mesh_connection::call(v,op);
     }
     if matches!(op, "meshInviteDecode" | "meshInviteQr") {
@@ -595,6 +597,16 @@ pub fn call(v: &Value) -> Result<Value> {
         offline::logout(v)?;
     }
     let api = Api::new(v)?;
+    if op == "meshAccountInvite" {
+        return api.post(&["Bluefin","Accounts","Mesh","Invite"], json!({"intent":"login","lifetimeSeconds":600}));
+    }
+    if op == "meshAccountInviteStatus" {
+        let handle=text(v,"handle")?;
+        if handle.len()!=64||!handle.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b)){
+            return Err(err("Invalid invitation handle."));
+        }
+        return api.get(&["Bluefin","Accounts","Mesh","Invites",handle],vec![]);
+    }
     if matches!(
         op,
         "karaokeManifest"
@@ -907,8 +919,8 @@ fn envelope(input: &[u8]) -> Value {
 /// Output is sensitive because it includes the canonical one-use invitation.
 #[allow(deprecated)]
 pub fn decode_mesh_qr_image(input: &[u8]) -> Value {
-    if input.len() > 12 * 1024 * 1024 {
-        return json!({"ok":false,"error":"Choose an image smaller than 12 MiB."});
+    if input.len() > 8 * 1024 * 1024 {
+        return json!({"ok":false,"error":"Choose an image smaller than 8 MiB."});
     }
     if ACTIVE.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < 4).then_some(n + 1)).is_err() {
         return json!({"ok":false,"error":"Client busy"});
@@ -924,7 +936,7 @@ pub fn decode_mesh_qr_image(input: &[u8]) -> Value {
 #[no_mangle]
 pub unsafe extern "C" fn bluefin_decode_qr_image(input: *const u8, len: usize) -> *mut c_char {
     let result = std::panic::catch_unwind(|| {
-        if input.is_null() || len == 0 || len > 12 * 1024 * 1024 {
+        if input.is_null() || len == 0 || len > 8 * 1024 * 1024 {
             return json!({"ok":false,"error":"Invalid connection image."});
         }
         decode_mesh_qr_image(unsafe { std::slice::from_raw_parts(input, len) })

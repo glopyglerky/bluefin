@@ -69,6 +69,8 @@ async fn exchange(v:&Value,identity:&DeviceIdentity,server:&ServerAddress,messag
 }
 pub(super) fn call(v:&Value,operation:&str)->Result<Value>{
     match operation{
+        "meshRequestIdCreate"=>Ok(json!({"requestId":hex(&random()?)})),
+        "meshRevoke"=>runtime()?.block_on(revoke(v)),
         "meshIdentityCreate"=>{
             let device=DeviceIdentity::generate().map_err(|_|failure())?;
             let seed=device.export_seed();
@@ -228,4 +230,29 @@ pub(super) fn request_with_headers(v:&Value,method:&str,target:&Url,body:Option<
     if !(200..300).contains(&response.status){return Err(format!("The server refused this request (HTTP {}).",response.status));}
     let value=if response.bytes.is_empty(){Value::Null}else{serde_json::from_slice(&response.bytes).map_err(|_|err("The server returned an invalid response."))?};
     Ok((value,response.etag))
+}
+
+pub(super) async fn revoke(v:&Value)->Result<Value>{
+    let config=Config::from_request(v)?;
+    let request_id=bytes32(text(v,"requestId")?)?;
+    let endpoint=PqcEndpoint::client_with_policy(&config.identity,config.relay_policy.clone()).await.map_err(|_|failure())?;
+    let result=tokio::time::timeout(Duration::from_secs(20),async{
+        let mut connection=endpoint.connect_server(&config.server).await.map_err(|_|failure())?;
+        let result=async{
+            connection.send(&json!({"version":1,"body":{"type":"revoke_session",
+                "session_id":config.session_id,"request_id":request_id,"binding":connection.binding()}}))
+                .await.map_err(|_|failure())?;
+            let response:Value=connection.receive().await.map_err(|_|failure())?;
+            if response["version"]!=1||response["body"]["type"]!="session_revoked"
+                ||response["body"]["session_id"]!=config.session_id
+                ||response["body"]["request_id"]!=json!(request_id){
+                return Err(err("The server did not confirm revocation."));
+            }
+            Ok(Value::Null)
+        }.await;
+        connection.close().await;
+        result
+    }).await.map_err(|_|err("Remote sign-out is not confirmed yet."));
+    endpoint.close().await;
+    result?
 }
