@@ -43,6 +43,14 @@ the first ordinary library read, so a lost/failed library request does not
 leave an untracked device key. Signup approval resumes using the distinct
 device-bound handle.
 
+The committed Finish receipt remains unchanged if automatic signup provisioning
+is interrupted. The original device can replay that exact Finish or poll its
+signup status to retry provisioning. Each retry reads the current account
+settings while holding the settings-write gate; it requires both enabled
+signups and automatic approval. Manual, disabled and denied requests stay
+unapproved, and provisioning failures leave the durable request available for
+later retry or administrator review.
+
 ## Saved session and media
 
 `AccountSession` contains a public vault reference, not the mesh device seed.
