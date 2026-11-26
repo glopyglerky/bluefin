@@ -4,6 +4,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const {webcrypto}=require('node:crypto');
+const {File}=require('node:buffer');
 const source=name=>fs.readFileSync(path.join(__dirname,'..',name),'utf8');
 class Element{
  constructor(tag){this.tagName=tag.toUpperCase();this.children=[];this.dataset={};this.style={};this.attributes={};this.listeners={};this.value='';this.text='';this.className='';this.classList={add(){},remove(){},toggle(){}};}
@@ -53,9 +54,10 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
   else body={Items:[item]};
   return new Response(JSON.stringify(body),{headers:{'Content-Type':'application/json'}});
  };
+ const register=(name,fn)=>{const previous=events[name];events[name]=(...args)=>{previous?.(...args);fn(...args);};};
  const context=vm.createContext({document,location:new URL(document.baseURI),navigator:{},
-  crypto:webcrypto,URL,Uint8Array,Uint32Array,Blob,TextEncoder,TextDecoder,AbortController,Response,fetch,
-  setTimeout,clearTimeout,setInterval:()=>1,clearInterval(){},addEventListener:(name,fn)=>events[name]=fn,
+  crypto:webcrypto,URL,Uint8Array,Uint32Array,Blob,File,TextEncoder,TextDecoder,AbortController,Response,fetch,
+  setTimeout,clearTimeout,setInterval:()=>1,clearInterval(){},addEventListener:register,
   isSecureContext:true,WebAssembly:undefined});
  context.window=context;
  context.BluefinRuntime={engine:async()=>{throw Error(meshFailure?'Blocked optional engine':'Wasm unavailable');},ready:()=>null,
@@ -63,7 +65,8 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  Object.defineProperty(context,'indexedDB',{get(){throw Error('Default view touched IndexedDB');}});
  Object.defineProperty(context,'localStorage',{get(){throw Error('Default view touched localStorage');}});
  Object.defineProperty(context,'sessionStorage',{get(){throw Error('Default view touched sessionStorage');}});
- const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest};})();');
+ vm.runInContext(source('local-music.js'),context);
+ const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle};})();');
  vm.runInContext(script,context);
  return {context,ui:context.contract,root,video,requests,events,item,pending};
 }
@@ -193,4 +196,56 @@ test('legacy compatibility requires its complete version and rejects secret-rout
  for(const raw of ['https://evil.test/Bluefin/TV/v1/media/'+secret+'/0','/Bluefin/TV/v1/media/'+secret+'/0?api_key=x',
  '/Bluefin/TV/v1/media/'+secret+'/%30','/Bluefin/TV/v1/media/'+secret+'/../0','/Bluefin/Web/v1/media/'+secret+'/0'])
   assert.throws(()=>t.ui.tvLeasePath(raw,'media',secret));
+});
+
+test('temporary local Files play and search without any account, storage, worker or network',async()=>{
+ const t=setup();t.ui.openLocalMusic();
+ await t.ui.addLocalFiles([new File([Buffer.from('ID3local fixture')],'private-original.mp3')]);
+ assert.equal(t.ui.state.rows.length,1);assert.equal(t.requests.length,0);
+ const track=t.ui.state.rows[0];assert.match(track.Id,/^local-file-/);
+ await t.ui.play(track,[track],0);assert.equal(t.ui.state.player.mode,'local');assert.match(t.video.src,/^blob:/);
+ assert.equal(t.requests.length,0);
+ await t.ui.navigate('Search');assert.equal(t.requests.length,0);
+ t.ui.state.localQuery='private';await t.ui.loadRoute();assert.equal(t.ui.state.rows.length,1);assert.equal(t.requests.length,0);
+ t.ui.state.expanded=true;t.ui.render();assert.match(t.root.textContent,/Local file/);
+ assert.equal(t.requests.length,0);
+ await t.ui.signOut();assert.equal(t.video.src,'');assert.equal(t.ui.state.local,false);assert.equal(t.ui.localItems().length,0);
+ assert.equal(t.requests.length,0);
+});
+test('replacing remote playback with a local File retires its remote lease before local playback',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.play(t.item);const before=t.requests.length;
+ t.ui.openLocalMusic();await t.ui.addLocalFiles([new File([Buffer.from('ID3local fixture')],'never-upload-this-title.mp3')]);
+ const track=t.ui.state.rows[0];await t.ui.play(track,[track],0);
+ assert.equal(t.ui.state.player.mode,'local');assert.equal(t.requests.length,before+1);
+ assert.equal(t.requests.at(-1).options.method,'DELETE');
+ assert(!t.requests.some(request=>(request.options.body||'').includes('never-upload-this-title')));
+ t.events.pagehide();assert.equal(t.video.src,'');assert.equal(t.ui.state.player,null);assert.equal(t.ui.state.session,null);
+});
+test('local source removal stops the shared player and prevents stale ID replay',async()=>{
+ const t=setup();t.ui.openLocalMusic();
+ await t.ui.addLocalFiles([new File([Buffer.from('ID3local fixture')],'remove-me.mp3')]);
+ const track=t.ui.state.rows[0];await t.ui.play(track,[track],0);
+ t.ui.localOwner().remove(track.Id);assert.equal(t.video.src,'');assert.equal(t.ui.state.player,null);
+ await assert.rejects(t.ui.play(track,[track],0),/Choose this file again/);assert.equal(t.requests.length,0);
+});
+test('resume progress, duration and seek use the same original timeline as the Rust player',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const item={...t.item,RunTimeTicks:3600*10000000,UserData:{PlaybackPositionTicks:1800*10000000}};
+ t.video.duration=1800;await t.ui.play(item);t.video.currentTime=12;
+ await t.ui.reportProgress('progress');
+ const body=JSON.parse(t.requests.findLast(request=>request.url.endsWith('/Sessions/Playing/Progress')).options.body);
+ assert.equal(body.PositionTicks,1812*10000000);
+ const timeline=t.ui.playbackTimeline();assert.equal(timeline.position,1812);assert.equal(timeline.duration,3600);assert.equal(timeline.minimum,1800);
+ t.ui.seekPlayback(1820);assert.equal(t.video.currentTime,20);
+ t.ui.seekPlayback(1700);assert.equal(t.video.currentTime,0);
+ await t.ui.signOut();
+});
+test('turning shuffle off restores the original queue and keeps the current selection',async()=>{
+ const t=setup();t.ui.openLocalMusic();
+ await t.ui.addLocalFiles(['one','two','three'].map(name=>new File([Buffer.from('ID3'+name)],name+'.mp3')));
+ const order=t.ui.state.rows.slice();await t.ui.play(order[1],order,1);
+ t.ui.toggleShuffle();assert.equal(t.ui.state.queue[0].Id,order[1].Id);
+ t.ui.toggleShuffle();assert.deepEqual(Array.from(t.ui.state.queue,item=>item.Id),Array.from(order,item=>item.Id));
+ assert.equal(t.ui.state.queueIndex,1);assert.equal(t.requests.length,0);await t.ui.signOut();
 });
