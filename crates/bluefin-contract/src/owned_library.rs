@@ -172,7 +172,7 @@ impl OwnedLibrary {
     pub fn import_track(&mut self, track: OwnedTrack) -> Result<bool, LibraryError> {
         self.validate()?;
         track.validate()?;
-        if let existing = self.track(&track.id) {
+        if let Some(existing) = self.track(&track.id) {
             if existing.byte_length != track.byte_length || existing.format != track.format {
                 return Err(LibraryError("The imported audio conflicts with its saved content identity."));
             }
