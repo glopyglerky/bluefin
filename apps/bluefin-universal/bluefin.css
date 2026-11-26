@@ -12,3 +12,5 @@
 .local-track{display:flex;align-items:center;gap:.5rem}.local-track>.list-row{flex:1;min-width:0}.file-action{display:flex;align-items:center;justify-content:center;min-height:44px;padding:.6rem 1rem;border-radius:12px;background:var(--secondary);color:var(--accent);font-weight:600;cursor:pointer}.file-action input{max-width:17rem;margin-inline-start:.7rem}.queue-track{display:block;width:100%;text-align:start;margin-block:.3rem}
 
 .file-action:focus-within{outline:3px solid var(--accent);outline-offset:4px}.local-track+.local-track{border-top:1px solid var(--line)}
+
+body.video-playing #media-status:not(:empty){position:fixed;z-index:26;top:calc(58px + env(safe-area-inset-top));left:16px;right:16px;max-width:760px;padding:8px 12px;border-radius:8px;background:#000b;color:#fff}

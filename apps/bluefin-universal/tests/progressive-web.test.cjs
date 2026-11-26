@@ -324,3 +324,20 @@ test('full HLS video seeks to the bookmark and never reports a doubled or premat
  t.ui.seekPlayback(1700);assert.equal(t.video.currentTime,1700);
  await t.ui.signOut();
 });
+
+test('an out-of-range video bookmark restarts at zero with reporting enabled',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const item={...t.item,Type:'Movie',RunTimeTicks:3600*10000000,UserData:{PlaybackPositionTicks:1800*10000000}};
+ t.video.duration=900;await t.ui.play(item);t.video.listeners.loadedmetadata();
+ assert.equal(t.video.currentTime,0);assert.equal(t.ui.state.player.resumeApplied,true);assert.equal(t.ui.state.player.reportingReady,true);
+ assert.match(t.ui.state.notice,/Starting from the beginning/);await t.ui.reportProgress('progress');
+ const body=JSON.parse(t.requests.findLast(request=>request.url.endsWith('/Sessions/Playing/Progress')).options.body);
+ assert.equal(body.PositionTicks,0);await t.ui.signOut();
+});
+test('unsupported HTTPS live TV does not allocate a lease or stop current library playback',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.play(t.item);const before=t.requests.length,source=t.video.src,player=t.ui.state.player;
+ await assert.rejects(t.ui.play({...t.item,Type:'TvChannel'}),/Live TV playback/);
+ assert.equal(t.requests.length,before);assert.equal(t.video.src,source);assert.equal(t.ui.state.player,player);
+ await t.ui.signOut();
+});

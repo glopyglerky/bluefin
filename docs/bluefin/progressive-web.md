@@ -198,3 +198,9 @@ use zero timeline offset and seek to the bookmark after metadata is available.
 HTTP progress reporting waits for that initial seek instead of overwriting a
 saved bookmark with zero. Progressive MP3 is a separate cropped stream whose
 browser clock starts at zero, so only that profile adds its requested offset.
+
+The current ordinary HTTPS lease adapter accepts local library files and rejects
+live/infinite sources. Its Live TV view therefore explicitly offers browsing
+only; attempting live playback cannot stop an existing library player or create
+a doomed lease. A stale video bookmark beyond the returned finite duration starts
+at zero with a visible notice and restores progress reporting deterministically.
