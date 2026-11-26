@@ -7,7 +7,7 @@ const {webcrypto}=require('node:crypto');
 const {File}=require('node:buffer');
 const source=name=>fs.readFileSync(path.join(__dirname,'..',name),'utf8');
 class Element{
- constructor(tag){this.tagName=tag.toUpperCase();this.children=[];this.dataset={};this.style={};this.attributes={};this.listeners={};this.value='';this.text='';this.className='';this.classList={add(){},remove(){},toggle(){}};}
+ constructor(tag){this.tagName=tag.toUpperCase();this.children=[];this.dataset={};this.style={setProperty(name,value){this[name]=String(value);},getPropertyValue(name){return this[name]||'';}};this.attributes={};this.listeners={};this.value='';this.text='';this.className='';this.classList={add(){},remove(){},toggle(){}};}
  append(...values){this.children.push(...values);}
  replaceChildren(...values){this.children=values;}
  setAttribute(k,v){this.attributes[k]=String(v);}
@@ -72,7 +72,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  Object.defineProperty(context,'localStorage',{get(){throw Error('Default view touched localStorage');}});
  Object.defineProperty(context,'sessionStorage',{get(){throw Error('Default view touched sessionStorage');}});
  vm.runInContext(source('local-music.js'),context);
- const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={pumpArtwork,clearImages,state,connect,signIn,navigate,openItem,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,startSearch,openSearch,searchCall,loadMoreSearch,loadSearchFacets,recordHomeSearch,clearHomeSearchHistory,importInvitationImage:readInvitationImage};})();');
+ const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={loadLyrics,pumpArtwork,clearImages,state,connect,signIn,navigate,openItem,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,startSearch,openSearch,searchCall,loadMoreSearch,loadSearchFacets,recordHomeSearch,clearHomeSearchHistory,importInvitationImage:readInvitationImage};})();');
  vm.runInContext(script,context);
  return {context,ui:context.contract,root,video,requests,events,item,pending};
 }
@@ -751,4 +751,135 @@ test('signout aborts account refinement requests and late tags cannot enter the 
  assert(!t.root.textContent.includes('Old account private tag'));
  const latest=t.requests.filter(request=>new URL(request.url).pathname==='/Items/Filters2').at(-1);
  assert.equal(new URL(latest.url).searchParams.get('UserId'),'88888888888848888888888888888888');
+});
+
+
+function lyricLine(root,index){return findElement(root,e=>e.dataset.lyricLine===String(index));}
+function cueWords(line){return (line?.children||[]).filter(e=>e.dataset.lyricWord!==undefined);}
+function lyricsResponse(lines,metadata={}){return new Response(JSON.stringify({Metadata:metadata,Lyrics:lines}),{headers:{'Content-Type':'application/json'}});}
+async function openLyrics(t){
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.play(t.item);await until(()=>t.ui.state.player?.lyrics?.status!=='loading'&&!!t.ui.state.player?.lyrics);
+ t.ui.state.expanded=true;t.ui.state.nowPanel='lyrics';t.ui.render();
+}
+test('server lyric ticks and real UTF-16 word cues follow the playing clock and offset',async()=>{
+ const lines=[{Text:'Rise 🎵 together',Start:10000000,Cues:[
+  {Position:0,EndPosition:4,Start:10000000,End:20000000},
+  {Position:5,EndPosition:7,Start:20000000,End:30000000},
+  {Position:8,EndPosition:16,Start:30000000,End:40000000}]},
+  {Text:'The harbor wakes',Start:40000000}];
+ const t=setup({apiResponse:u=>u.pathname.endsWith('/Lyrics')?lyricsResponse(lines,{Offset:10000000,IsSynced:true}):undefined});
+ await openLyrics(t);
+ const request=t.requests.find(r=>r.url.endsWith('/Lyrics'));
+ assert(request.options.headers.Authorization.includes('synthetic-private-bearer'));
+ assert(!request.url.includes('synthetic-private-bearer'));
+ t.video.currentTime=1.9;t.video.listeners.timeupdate();
+ assert.equal(lyricLine(t.root,0).getAttribute('aria-current'),null);
+ t.video.currentTime=3.5;t.video.listeners.timeupdate();
+ const first=lyricLine(t.root,0),words=cueWords(first);
+ assert.equal(first.getAttribute('aria-current'),'true');
+ assert.equal(words[1].textContent,'🎵');
+ assert.equal(words[0].style.getPropertyValue('--word-progress'),'100%');
+ assert.equal(words[1].style.getPropertyValue('--word-progress'),'50%');
+ assert.equal(words[2].style.getPropertyValue('--word-progress'),'0%');
+ t.video.currentTime=5;t.video.listeners.timeupdate();
+ assert.equal(first.getAttribute('aria-current'),null);
+ assert.equal(lyricLine(t.root,1).getAttribute('aria-current'),'true');
+ t.video.paused=true;t.video.listeners.pause();
+ assert.equal(lyricLine(t.root,1).getAttribute('aria-current'),'true');
+ await t.ui.signOut();
+});
+test('clicking a timed line seeks the real player and resumes following the song',async()=>{
+ const t=setup({apiResponse:u=>u.pathname.endsWith('/Lyrics')?lyricsResponse([
+  {Text:'Along the quiet water',Start:10000000},{Text:'We find our way',Start:40000000}],{Offset:10000000}):undefined});
+ await openLyrics(t);
+ const scrolling=findElement(t.root,e=>e.className==='lyrics-scroll');
+ scrolling.listeners.wheel();assert.equal(t.ui.state.player.lyrics.follow,false);
+ const follow=findElement(t.root,e=>e.textContent==='Follow song'&&e.tagName==='BUTTON');assert.equal(follow.hidden,false);
+ lyricLine(t.root,1).listeners.click();await until(()=>!t.ui.state.busy);
+ assert.equal(t.video.currentTime,5);assert.equal(t.ui.state.player.lyrics.follow,true);
+ assert.equal(lyricLine(t.root,1).getAttribute('aria-current'),'true');
+ await t.ui.signOut();
+});
+test('untimed lyrics remain readable without invented synchronization or seek controls',async()=>{
+ const t=setup({apiResponse:u=>u.pathname.endsWith('/Lyrics')?lyricsResponse([
+  {Text:'An original unsynchronized line'},{Text:'A second original line'}],{IsSynced:true}):undefined});
+ await openLyrics(t);
+ assert.match(t.root.textContent,/Timing is not available/);
+ assert.equal(lyricLine(t.root,0).tagName,'P');
+ assert.equal(lyricLine(t.root,0).getAttribute('aria-current'),null);
+ t.video.currentTime=35;t.video.listeners.timeupdate();
+ assert.equal(lyricLine(t.root,0).getAttribute('aria-current'),null);
+ await t.ui.signOut();
+});
+test('missing lyrics never interrupt playback or advertise karaoke',async()=>{
+ const t=setup({apiResponse:u=>u.pathname.endsWith('/Lyrics')?new Response('{}',{status:404}):undefined});
+ await openLyrics(t);
+ assert.equal(t.ui.state.player.lyrics.status,'missing');assert.equal(t.video.paused,false);
+ assert.match(t.root.textContent,/Lyrics aren’t available for this song/);
+ assert(!/microphone|Sing ready|karaoke ready/i.test(t.root.textContent));
+ await t.ui.signOut();
+});
+test('changing songs aborts and fences late lyrics while keeping Now Playing open',async()=>{
+ let release,firstSignal;
+ const t=setup({apiResponse:async(u,options)=>{
+  if(!u.pathname.endsWith('/Lyrics'))return undefined;
+  if(u.pathname.includes('22222222')){firstSignal=options.signal;await new Promise(resolve=>release=resolve);return lyricsResponse([{Text:'Old song must stay private',Start:0}]);}
+  return lyricsResponse([{Text:'A new song in the harbor',Start:0}]);
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.play(t.item);await until(()=>release);
+ t.ui.state.expanded=true;t.ui.state.nowPanel='lyrics';t.ui.render();
+ const next={...t.item,Id:'44444444444444448444444444444444',Name:'Another original song'};
+ await t.ui.play(next,[t.item,next],1);await until(()=>t.ui.state.player.lyrics?.status==='ready');
+ assert.equal(firstSignal.aborted,true);assert.equal(t.ui.state.expanded,true);assert.equal(t.ui.state.nowPanel,'lyrics');
+ release();await new Promise(setImmediate);t.ui.render();
+ assert.match(t.root.textContent,/A new song in the harbor/);assert(!t.root.textContent.includes('Old song must stay private'));
+ await t.ui.signOut();assert.equal(t.ui.state.player,null);
+});
+test('sign-out erases lyrics and aborts their optional request even if the response arrives late',async()=>{
+ let release,signal;
+ const t=setup({apiResponse:async(u,options)=>{
+  if(!u.pathname.endsWith('/Lyrics'))return undefined;
+  signal=options.signal;await new Promise(resolve=>release=resolve);return lyricsResponse([{Text:'Private words',Start:0}]);
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);await t.ui.play(t.item);await until(()=>release);
+ const retired=t.ui.state.player;await t.ui.signOut();assert.equal(signal.aborted,true);
+ const count=t.requests.length;await t.ui.loadLyrics(retired,true);assert.equal(t.requests.length,count);
+ release();await new Promise(setImmediate);t.ui.render();
+ assert.equal(t.ui.state.player,null);assert(!t.root.textContent.includes('Private words'));
+});
+test('malformed word ranges cannot split a surrogate pair or create fake timed words',async()=>{
+ const t=setup({apiResponse:u=>u.pathname.endsWith('/Lyrics')?lyricsResponse([
+  {Text:'A 🎵 rises',Start:0,Cues:[{Position:2,EndPosition:3,Start:0,End:10000000}]}]):undefined});
+ await openLyrics(t);
+ const line=lyricLine(t.root,0);assert.equal(line.textContent,'A 🎵 rises');assert.equal(cueWords(line).length,0);
+ await t.ui.signOut();
+});
+
+test('tapping an earlier lyric renews a cropped audio lease at the requested line',async()=>{
+ const t=setup({apiResponse:u=>u.pathname.endsWith('/Lyrics')?lyricsResponse([
+  {Text:'Back to the opening shore',Start:100000000},{Text:'Farther along the tide',Start:18050000000}]):undefined});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const resumed={...t.item,RunTimeTicks:36000000000,UserData:{PlaybackPositionTicks:18000000000}};
+ await t.ui.play(resumed,[resumed]);await until(()=>t.ui.state.player.lyrics?.status==='ready');
+ t.ui.state.expanded=true;t.ui.state.nowPanel='lyrics';t.ui.render();
+ lyricLine(t.root,0).listeners.click();await until(()=>!t.ui.state.busy);
+ const leases=t.requests.filter(r=>r.url.endsWith('/Bluefin/Web/v1/leases')&&r.options.method==='POST');
+ assert.equal(JSON.parse(leases.at(-1).options.body).playback.startTicks,100000000);
+ assert.equal(t.ui.state.player.offset,10);assert.equal(t.ui.state.expanded,true);assert.equal(t.ui.state.nowPanel,'lyrics');
+ await t.ui.signOut();
+});
+test('lyrics use the authenticated mesh request and its owned audio clock without HTTP fallback',async()=>{
+ const calls=[];let missing=false;
+ const engine={webMeshRequest:async(...args)=>{calls.push(args);if(missing)throw 'The peer returned HTTP 404.';return JSON.stringify({Lyrics:[{Text:'At the start',Start:100000000},{Text:'At the next shore',Start:120000000},{Text:'Much later',Start:990000000}]});},webMeshStop:async()=>{},webMeshLogout:async()=>{}};
+ const t=setup({engine:async()=>engine});t.context.BluefinRuntime.ready=()=>engine;
+ Object.assign(t.ui.state,{phase:'library',mode:'mesh',session:{handle:'owned-preview-handle',user:'11111111111141118111111111111111'}});
+ const player={mode:'mesh',handle:t.ui.state.session.handle,item:t.item,session:t.ui.state.session,offset:10,snapshot:{plan:{},position:99,duration:120}};
+ t.ui.state.player=player;t.video.currentTime=2;t.video.__bluefinOutputOwner={revision:1};
+ await t.ui.loadLyrics(player);t.ui.state.expanded=true;t.ui.state.nowPanel='lyrics';t.ui.render();
+ assert.equal(calls[0][0],'owned-preview-handle');assert.equal(calls[0][1],'GET');assert.equal(calls[0][2],'Audio/'+t.item.Id+'/Lyrics');assert.equal(t.requests.length,0);
+ assert.equal(lyricLine(t.root,1).getAttribute('aria-current'),'true');assert.equal(lyricLine(t.root,2).getAttribute('aria-current'),null);
+ missing=true;await t.ui.loadLyrics(player,true);assert.equal(player.lyrics.status,'missing');assert.equal(t.requests.length,0);
+ await t.ui.signOut();
 });
