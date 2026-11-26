@@ -198,7 +198,11 @@ fn import(v: &Value, root: &Dir, media: &Dir, disk: &mut DiskLibrary) -> Result<
     output.sync_all().map_err(|_| err("The imported audio could not be saved."))?;
     media.sync()?;
     track.id = format!("{:x}", hash.finalize());
-    let imported = disk.catalog.track(&track.id).is_none();
+    // Recovery may publish this file and must then be able to commit its catalog
+    // record. Reject conflicts before retaining a completed pending import. An
+    // error here leaves only the uncommitted part, which ordinary recovery removes.
+    let mut proposed = disk.catalog.clone();
+    let imported = proposed.import_track(track.clone()).map_err(|e| e.to_string())?;
     let id = track.id.clone();
     disk.pending_import = Some(PendingImport { part, track: Some(track) });
     save(root, disk)?;
@@ -307,6 +311,35 @@ mod tests {
         let catalog = call(&fixture.input(), "ownedLibraryList").unwrap();
         assert_eq!(catalog, first["catalog"]);
         assert_eq!(catalog["items"][0]["source"], "user_file_import");
+    }
+
+    #[test]
+    fn conflicting_import_does_not_poison_the_saved_library() {
+        let fixture = Fixture::new();
+        // ID3 metadata is permitted by both bounded container checks. Native
+        // playback validation happens later and cannot repair an import ledger.
+        let original = fixture.0.join("song.mp3");
+        let conflicting = fixture.0.join("song.aac");
+        let bytes = b"ID3same-original-audio-bytes";
+        std::fs::write(&original, bytes).unwrap();
+        std::fs::write(&conflicting, bytes).unwrap();
+        let mut first_request = fixture.import();
+        first_request["sourcePath"] = json!(original.to_str().unwrap());
+        let first = call(&first_request, "ownedLibraryImport").unwrap();
+        let mut second_request = fixture.import();
+        second_request["sourcePath"] = json!(conflicting.to_str().unwrap());
+        assert!(call(&second_request, "ownedLibraryImport").is_err());
+
+        let reopened = call(&fixture.input(), "ownedLibraryList").unwrap();
+        assert_eq!(reopened, first["catalog"]);
+        let mut playback = fixture.input();
+        playback["itemId"] = first["itemId"].clone();
+        assert!(call(&playback, "ownedLibraryPlay").unwrap()["url"]
+            .as_str().unwrap().ends_with(".mp3"));
+        let media = fixture.0.join("library/media");
+        assert_eq!(std::fs::read_dir(media).unwrap().count(), 1);
+        assert_eq!(std::fs::read(original).unwrap(), bytes);
+        assert_eq!(std::fs::read(conflicting).unwrap(), bytes);
     }
 
     #[test]
