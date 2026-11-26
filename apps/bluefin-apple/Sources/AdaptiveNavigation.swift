@@ -1,6 +1,17 @@
 import SwiftUI
 import CoreImage
 
+private struct BluefinShowHomeKey: EnvironmentKey {
+    static let defaultValue: (() -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var bluefinShowHome: (() -> Void)? {
+        get { self[BluefinShowHomeKey.self] }
+        set { self[BluefinShowHomeKey.self] = newValue }
+    }
+}
+
 /// Navigation follows the current scene, including resized and folded windows.
 struct BluefinNavigation<Content: View>: View {
     private let content: Content
@@ -156,6 +167,7 @@ struct TVMediaNavigation<Content: View>: View {
 
 private struct TVBackControl: ViewModifier {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.bluefinShowHome) private var showHome
     let action: (() -> Void)?
     private func goBack() {
         if let action { action() }
@@ -167,6 +179,11 @@ private struct TVBackControl: ViewModifier {
                 HStack {
                     TVBackButton(action: goBack)
                         .frame(width: 154, height: 58)
+                    if let showHome {
+                        Button(action: showHome) { Label("Home", systemImage: "house") }
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("bluefinHome")
+                    }
                     Spacer()
                 }.padding(.horizontal, 32).padding(.vertical, 10)
                     .background(BluefinStyle.background)
@@ -202,12 +219,27 @@ private struct TVBackButton: UIViewRepresentable {
 }
 #endif
 
+private struct BluefinHomeControl: ViewModifier {
+    @Environment(\.bluefinShowHome) private var showHome
+
+    func body(content: Content) -> some View {
+        content.toolbar {
+            if let showHome {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: showHome) { Label("Home", systemImage: "house") }
+                        .accessibilityIdentifier("bluefinHome")
+                }
+            }
+        }
+    }
+}
+
 extension View {
     @ViewBuilder func bluefinBackNavigation(_ action: (() -> Void)? = nil) -> some View {
         #if os(tvOS)
         modifier(TVBackControl(action: action))
         #else
-        self
+        modifier(BluefinHomeControl())
         #endif
     }
 }
@@ -805,31 +837,28 @@ struct TVHomeView: View {
                     Label("Sample library", systemImage: "sparkles")
                         .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 32)
                 }
-                if sports.saved?.preferences.sports_only != true {
-                    let featured = store.home.resume.first ?? store.home.latest.first
-                    if let featured { TVFeaturedItem(item: featured) }
-                }
-                if store.loading && store.home.latest.isEmpty && store.home.resume.isEmpty {
+                if let featured = store.home.resume.first ?? store.home.latest.first { TVFeaturedItem(item: featured) }
+                if (store.loading || (!store.initialHomeLoaded && !store.preview)) && store.home.latest.isEmpty && store.home.resume.isEmpty && store.home.nextUp.isEmpty {
                     ProgressView("Loading your library").padding(.horizontal, 32)
                 }
-                if sports.saved?.preferences.sports_only != true {
-                    if !store.home.resume.isEmpty { MediaShelf(title: "Continue watching", items: store.home.resume) }
-                    if !store.home.nextUp.isEmpty { MediaShelf(title: "Up next", items: store.home.nextUp) }
-                    let movies = store.home.latest.filter { $0.Type == "Movie" }
-                    let shows = store.home.latest.filter { ["Series", "Season", "Episode"].contains($0.Type ?? "") }
-                    if !movies.isEmpty { MediaShelf(title: store.homeFromCatalog ? "Movies" : "Recently added movies", items: movies) }
-                    if !shows.isEmpty { MediaShelf(title: store.homeFromCatalog ? "TV Shows" : "Recently added shows", items: shows) }
-                }
+                if !store.home.resume.isEmpty { MediaShelf(title: "Continue watching", items: store.home.resume) }
+                if !store.home.nextUp.isEmpty { MediaShelf(title: "Up next", items: store.home.nextUp) }
+                let movies = store.home.latest.filter { $0.Type == "Movie" }
+                let shows = store.home.latest.filter { ["Series", "Season", "Episode"].contains($0.Type ?? "") }
+                if !movies.isEmpty { MediaShelf(title: store.homeFromCatalog ? "Movies" : "Recently added movies", items: movies) }
+                if !shows.isEmpty { MediaShelf(title: store.homeFromCatalog ? "TV Shows" : "Recently added shows", items: shows) }
                 if let issue = store.libraryProblem {
                     VStack(alignment: .leading, spacing: 12) {
                         Label(issue, systemImage: "arrow.clockwise").font(.callout).foregroundStyle(.secondary).lineLimit(2)
                         Button("Refresh library") { Task { await store.refresh() } }.disabled(store.loading)
                     }.padding(.horizontal, 32)
                 }
-                if sports.available {
-                    NavigationLink(destination: NativeSportsGuide(sports: sports)) {
-                        Label("Sports guide", systemImage: "sportscourt")
-                    }.buttonStyle(.bordered).padding(.horizontal, 32)
+                if !store.preview {
+                    if sports.feed == nil {
+                        NavigationLink(destination: SportsDashboard(sports: sports).bluefinBackNavigation()) {
+                            Label("Sports guide", systemImage: "sportscourt")
+                        }.buttonStyle(.bordered).padding(.horizontal, 32)
+                    }
                     SportsHomeSection(sports: sports)
                 }
             }.padding(.vertical, 28)

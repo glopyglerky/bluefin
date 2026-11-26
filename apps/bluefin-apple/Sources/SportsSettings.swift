@@ -19,7 +19,6 @@ struct SportsSettingsView: View {
         Form {
             if let preferences, draftAccount == account {
                 Section {
-                    Toggle("Sports Home", isOn: boolean(\.sports_only))
                     Toggle("Include native Home", isOn: boolean(\.native_home))
                     Toggle("Home games", isOn: boolean(\.home))
                     Toggle("Away games", isOn: boolean(\.away))

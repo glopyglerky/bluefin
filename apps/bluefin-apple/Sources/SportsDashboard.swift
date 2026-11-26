@@ -20,6 +20,7 @@ struct SportsDashboard: View {
     private var leagues: [String] { Set(sports.feed?.games.compactMap { $0.event?.league_name } ?? []).sorted() }
     var body: some View {
         List {
+            scheduleResults
             Section {
                 Toggle("Favorites only", isOn: $favoritesOnly)
                 Picker("League", selection: $league) {
@@ -30,7 +31,10 @@ struct SportsDashboard: View {
             } footer: {
                 Text("Dates use \(zone.identifier). All dates shows every game returned by the server, including games without a start time.")
             }
-            scheduleResults
+            SportsProviderSection(providers: sports.feed?.providers ?? [])
+            Section {
+                NavigationLink("Favorites and preferences", destination: SportsSettingsView(sports: sports).bluefinBackNavigation())
+            }
         }
         .environment(\.timeZone, zone)
         .navigationTitle("Sports")
@@ -95,8 +99,6 @@ struct SportsDashboard: View {
                     ForEach(SportsSchedule.sorted(feed.local_broadcasts)) { SportsBroadcastRow(option: $0) }
                 } header: { Text("Sports on your channels") }
             }
-            SportsProviderSection(providers: sports.feed?.providers ?? [])
-            Section { NavigationLink("Favorites and preferences", destination: SportsSettingsView(sports: sports)) }
         }
     }
     private func moveDay(_ amount: Int) {
@@ -107,14 +109,16 @@ struct SportsDashboard: View {
 struct SportsProviderSection: View {
     var providers: [SportsFeed.Provider]
     var body: some View {
-        Section {
-            ForEach(providers.filter { $0.kind == "STARTING_POINT" && $0.action == "CHECK_ACCESS" }) { provider in
-                if let destination = ProviderDestination.validated(name: provider.name, rawURL: provider.url) {
-                    ProviderHandoffButton(destination: destination, label: "Check \(provider.name) access")
+        let destinations = providers.compactMap { provider -> ProviderDestination? in
+            guard provider.kind == "STARTING_POINT", provider.action == "CHECK_ACCESS" else { return nil }
+            return ProviderDestination.validated(name: provider.name, rawURL: provider.url)
+        }
+        if !destinations.isEmpty {
+            Section("Provider shortcuts") {
+                ForEach(destinations) { destination in
+                    ProviderHandoffButton(destination: destination, label: "Check \(destination.name) access")
                 }
             }
-        } header: { Text("Provider starting points") } footer: {
-            Text("These open a provider, not this game. Availability depends on your subscription, region and blackout rules.")
         }
     }
 }
@@ -122,7 +126,17 @@ struct SportsProviderSection: View {
 struct SportsWatchSheet: View {
     let option: SportsOption
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.bluefinShowHome) private var showHome
     @EnvironmentObject private var store: LibraryStore
+    @State private var listingChanged = false
+
+    private var broadcasterDestinations: [ProviderDestination] {
+        let names = option.event?.broadcasters ?? []
+        return ProviderDestination.common.filter { destination in
+            names.contains { $0.caseInsensitiveCompare(destination.name) == .orderedSame }
+        }
+    }
+
     var body: some View {
         NavigationView {
             List {
@@ -132,16 +146,44 @@ struct SportsWatchSheet: View {
                     if let names = option.event?.broadcasters, !names.isEmpty {
                         Label(names.joined(separator: ", "), systemImage: "tv")
                     }
-                    if option.canOpenChannel, let id = option.channel_id {
-                        NavigationLink("View \(option.channel_name ?? "channel") and schedule", destination: LiveChannelView(channel: MediaItem(Id: id, Name: option.channel_name ?? "Live channel", Type: "TvChannel")))
+                }
+                if option.canOpenChannel, let id = option.channel_id {
+                    let channel = MediaItem(Id: id, Name: option.channel_name ?? "Live channel", Type: "TvChannel")
+                    Section("Your live TV") {
+                        Text(channel.title).font(.headline)
+                        if !listingChanged && option.isAiring(on: Date()) {
+                            Button {
+                                guard option.isAiring(on: Date()) else { listingChanged = true; return }
+                                dismiss()
+                                Task { await store.play(channel) }
+                            } label: { Label("Watch channel", systemImage: "play.fill") }
+                                .disabled(store.startingPlayback)
+                        }
+                        if listingChanged { Text("Check the channel schedule for the current program.").foregroundStyle(.secondary) }
+                        NavigationLink("View channel schedule", destination: LiveChannelView(channel: channel))
                     }
-                    Text("No verified provider app link was supplied for this event.").foregroundStyle(.secondary)
-                } footer: {
-                    Text("A channel listing or broadcaster name does not confirm playback rights. Open the channel to check its current schedule and your account's access.")
+                }
+                if !broadcasterDestinations.isEmpty {
+                    Section {
+                        ForEach(broadcasterDestinations) { destination in
+                            ProviderHandoffButton(destination: destination, label: "Open \(destination.name)")
+                        }
+                    } header: {
+                        Text("Broadcaster apps")
+                    } footer: {
+                        Text("Check the provider for this game and your subscription access.")
+                    }
                 }
                 SportsProviderSection(providers: store.sports.feed?.providers ?? [])
             }.navigationTitle("Where to watch")
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                    if let showHome {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Home") { dismiss(); showHome() }.accessibilityIdentifier("bluefinHome")
+                        }
+                    }
+                }
         }.navigationViewStyle(.stack)
     }
 }

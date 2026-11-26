@@ -7,9 +7,9 @@ struct SportsHomeSection: View {
         if let feed = sports.feed {
             VStack(alignment: .leading, spacing: 18) {
                 HStack {
-                    NavigationLink(destination: SportsDashboard(sports: sports)) { Label("Sports", systemImage: "sportscourt").font(.title2.bold()) }
+                    NavigationLink(destination: SportsDashboard(sports: sports).bluefinBackNavigation()) { Label("Sports", systemImage: "sportscourt").font(.title2.bold()) }
                     Spacer()
-                    NavigationLink(destination: SportsSettingsView(sports: sports)) { Image(systemName: "slider.horizontal.3").frame(minWidth: 44, minHeight: 44) }.accessibilityLabel("Sports preferences")
+                    NavigationLink(destination: SportsSettingsView(sports: sports).bluefinBackNavigation()) { Image(systemName: "slider.horizontal.3").frame(minWidth: 44, minHeight: 44) }.accessibilityLabel("Sports preferences")
                 }.padding(.horizontal, 24)
                 if feed.games.isEmpty && feed.local_broadcasts.isEmpty {
                     Text("No sports guide listings are available in this page. Your preferences are kept.").foregroundStyle(.secondary).padding(.horizontal, 24)
@@ -76,7 +76,7 @@ struct SportsBroadcastRow: View {
             if let channel = option.channel_name { Text(channel).font(.subheadline).foregroundStyle(.secondary) }
             if let status = option.recording_status { Text(status).font(.caption).foregroundStyle(.secondary) }
             if option.canOpenChannel, let id = option.channel_id {
-                NavigationLink(destination: LiveChannelView(channel: MediaItem(Id: id, Name: option.channel_name ?? "Live channel", Type: "TvChannel"))) {
+                MediaNavigationLink(destination: .channel(MediaItem(Id: id, Name: option.channel_name ?? "Live channel", Type: "TvChannel"))) {
                     Label(option.kind == "UPCOMING" ? "View channel and schedule" : "Open channel", systemImage: "tv")
                 }.buttonStyle(.bordered)
             } else if option.kind == "RECORDING" {
