@@ -12,7 +12,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["ui", "direct"]
-ui = ["dep:eframe"]
+ui = ["dep:eframe", "dep:image"]
 direct = ["dep:bluefin-iroh-modern"]
 
 [dependencies]
@@ -24,6 +24,7 @@ uuid = { version = "1", features = ["serde", "v4", "js"] }
 url = { version = "2", features = ["serde"] }
 futures-util = "0.3"
 base64 = "0.22"
+image = { version = "=0.25.10", optional = true, default-features = false, features = ["png", "jpeg"] }
 eframe = { version = "=0.33.3", optional = true, default-features = false, features = ["default_fonts", "wgpu"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

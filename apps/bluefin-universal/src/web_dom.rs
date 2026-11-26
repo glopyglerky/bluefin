@@ -147,24 +147,143 @@ fn account(app: &Bluefin) -> (bool, Option<String>) {
         app.model.session.as_ref().map(|s| s.token.clone()),
     )
 }
+fn artwork_markup(app: &Bluefin, item: &Item, backdrop: bool) -> String {
+    app.artwork
+        .url(item.id, backdrop)
+        .map_or(String::new(), |url| {
+            format!(
+                "<img src=\"{}\" alt=\"\" decoding=\"async\" loading=\"lazy\">",
+                esc(url)
+            )
+        })
+}
+fn media_card(app: &Bluefin, item: &Item) -> String {
+    let Some(index) = app.model.rows.iter().position(|row| row.id == item.id) else {
+        return String::new();
+    };
+    let mut markup = format!(
+        "<article class=\"legacy-card\"><button type=\"button\" data-action=\"detail:{index}\" data-artwork=\"{}:false\">{}<span class=\"legacy-card-caption\"><strong>{}</strong><span>{}</span></span>",
+        item.id,
+        artwork_markup(app, item, false),
+        esc(&item.name),
+        esc(item.channel_name.as_deref().unwrap_or(&item.kind))
+    );
+    if item.progress() > 0.0 {
+        markup.push_str(&format!(
+            "<progress value=\"{}\" max=\"1\" aria-label=\"Viewing progress\"></progress>",
+            item.progress()
+        ));
+    }
+    markup.push_str("</button></article>");
+    markup
+}
+fn featured(app: &Bluefin, item: &Item) -> String {
+    let mut markup = format!(
+        "<section class=\"legacy-featured\" data-artwork=\"{}:true\">{}<div><h2>{}</h2>",
+        item.id,
+        artwork_markup(app, item, true),
+        esc(&item.name)
+    );
+    if item.playable() {
+        markup.push_str(&button(
+            "hero-play",
+            if item.progress() > 0.0 {
+                "Continue"
+            } else {
+                "Play"
+            },
+            false,
+        ));
+    }
+    markup.push_str(&button("hero-detail", "Details", false));
+    markup.push_str("</div></section>");
+    markup
+}
+fn search_filters(app: &Bluefin) -> String {
+    let mut markup = String::from(
+        "<div class=\"legacy-refinements\"><label>Media type<select id=\"search-scope\">",
+    );
+    for (index, scope) in SearchScope::ALL.iter().enumerate() {
+        markup.push_str(&format!(
+            "<option value=\"{index}\" {}>{}</option>",
+            if *scope == app.filters.scope {
+                "selected"
+            } else {
+                ""
+            },
+            scope.title()
+        ));
+    }
+    markup.push_str("</select></label>");
+    if let Some(facets) = &app.facets {
+        for (id, title, options, selected) in [
+            (
+                "search-studio",
+                "Studio",
+                &facets.studios,
+                app.filters.studio,
+            ),
+            (
+                "search-collection",
+                "Collection",
+                &facets.collections,
+                app.filters.collection,
+            ),
+        ] {
+            markup.push_str(&format!(
+                "<label>{title}<select id=\"{id}\"><option value=\"\">All</option>"
+            ));
+            for option in options {
+                markup.push_str(&format!(
+                    "<option value=\"{}\" {}>{}</option>",
+                    option.id,
+                    if Some(option.id) == selected {
+                        "selected"
+                    } else {
+                        ""
+                    },
+                    esc(&option.name)
+                ));
+            }
+            markup.push_str("</select></label>");
+        }
+        markup.push_str("<label>Tag<select id=\"search-tag\"><option value=\"\">All tags</option>");
+        for tag in &facets.tags {
+            markup.push_str(&format!(
+                "<option value=\"{}\" {}>{}</option>",
+                esc(tag),
+                if *tag == app.filters.tag {
+                    "selected"
+                } else {
+                    ""
+                },
+                esc(tag)
+            ));
+        }
+        markup.push_str("</select></label>");
+        if facets.truncated {
+            markup.push_str(
+                "<p>Showing a limited set of choices. Search still covers the full account.</p>",
+            );
+        }
+        if !facets.warning.is_empty() {
+            markup.push_str(&format!("<p role=\"status\">{}</p>", esc(&facets.warning)));
+        }
+    }
+    markup.push_str(&button("clear-filters", "Clear refinements", false));
+    markup.push_str(
+        "</div><p>Studios, service tags and custom collections come from your server.</p>",
+    );
+    markup
+}
 fn view(app: &Bluefin) -> String {
     let connected = app.model.session.is_some() || app.model.fixture;
     let mut h = String::from(
-        "<header><a href=\"#content\" class=\"brand\">Bluefin</a><span>Your library, anywhere</span></header>",
+        "<header><a href=\"#content\" class=\"brand\"><svg viewBox=\"200 210 610 640\" width=\"36\" height=\"38\" aria-hidden=\"true\"><path fill=\"currentColor\" d=\"M225 604C388 534 410 344 620 239C580 399 670 554 790 604C560 554 420 687 225 604Z\"/><path fill=\"none\" stroke=\"currentColor\" stroke-width=\"24\" d=\"M235 724C430 789 575 644 790 712M235 784C430 849 575 704 790 772\"/></svg>Bluefin</a><span>Your library, anywhere</span></header>",
     );
     if connected {
         h.push_str("<nav aria-label=\"Library\">");
-        for (n, section) in [
-            Section::Movies,
-            Section::Shows,
-            Section::Music,
-            Section::Guide,
-            Section::Queue,
-            Section::Discovery,
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        for (n, section) in Section::PRIMARY.into_iter().enumerate() {
             h.push_str(&format!(
                 "<button type=\"button\" data-action=\"nav:{n}\" aria-current=\"{}\">{}</button>",
                 if section == app.model.section {
@@ -175,7 +294,13 @@ fn view(app: &Bluefin) -> String {
                 Bluefin::section_title(section)
             ));
         }
-        h.push_str("<a href=\"#account\">Account</a></nav>");
+        h.push_str(
+            "</nav><div class=\"legacy-utilities\" role=\"group\" aria-label=\"Library tools\">",
+        );
+        for (index, section) in Section::UTILITIES.iter().enumerate() {
+            h.push_str(&button(&format!("utility:{index}"), section.title(), false));
+        }
+        h.push_str("</div>");
     }
     h.push_str("<main id=\"content\"><h1>");
     h.push_str(if connected {
@@ -187,25 +312,56 @@ fn view(app: &Bluefin) -> String {
     if !connected {
         h.push_str("<section class=\"card login\" aria-label=\"Connect with an invitation\"><h2>Connect with an invitation</h2>");
         if let Some(step) = &app.mesh_step {
-            if step.awaiting_approval { h.push_str("<p>Your signup request is waiting for administrator approval.</p>"); }
+            if step.awaiting_approval {
+                h.push_str("<p>Your signup request is waiting for administrator approval.</p>");
+            }
             if let Some(url) = &step.external_url {
                 h.push_str(&format!("<p><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">Open passkey page</a></p><p>After verifying, return here to finish.</p>", esc(url)));
             }
-            let label = if step.awaiting_approval { "Check approval" } else if step.needs_begin_retry { "Retry saved request" } else { "Verify and finish" };
+            let label = if step.awaiting_approval {
+                "Check approval"
+            } else if step.needs_begin_retry {
+                "Retry saved request"
+            } else {
+                "Verify and finish"
+            };
             h.push_str(&button("mesh-proceed", label, !ready(app)));
         } else {
             h.push_str("<form data-form=\"mesh-connect\">");
-            h.push_str(&field("mesh-code", "Paste a connection code or launch link", "password", ""));
-            if !app.mesh_code.is_empty() { h.push_str("<p role=\"status\">An invitation is ready to connect.</p>"); }
-            h.push_str(&field("mesh-name", "Username for a signup invitation", "text", &app.mesh_name));
-            h.push_str(if ready(app) { "<button>Connect</button></form>" } else { "<button disabled>Connect</button></form>" });
+            h.push_str(&field(
+                "mesh-code",
+                "Paste a connection code or launch link",
+                "password",
+                "",
+            ));
+            if !app.mesh_code.is_empty() {
+                h.push_str("<p role=\"status\">An invitation is ready to connect.</p>");
+            }
+            h.push_str(&field(
+                "mesh-name",
+                "Username for a signup invitation",
+                "text",
+                &app.mesh_name,
+            ));
+            h.push_str(if ready(app) {
+                "<button>Connect</button></form>"
+            } else {
+                "<button disabled>Connect</button></form>"
+            });
             h.push_str("<label for=\"mesh-image\">Import QR image or screenshot</label><input id=\"mesh-image\" type=\"file\" accept=\"image/png,image/jpeg\"><label for=\"mesh-camera\">Take a photo of a QR code</label><input id=\"mesh-camera\" type=\"file\" accept=\"image/jpeg,image/png\" capture=\"environment\">");
         }
-        h.push_str(&button("mesh-resume", "Resume saved connection", !ready(app)));
+        h.push_str(&button(
+            "mesh-resume",
+            "Resume saved connection",
+            !ready(app),
+        ));
         h.push_str("<p>Passkeys approve this browser. Invitations are used once.</p></section>");
         h.push_str("<section class=\"card login\" aria-label=\"Sign in\">");
         if let Some(request) = &app.device_sign_in {
-            h.push_str(&format!("<p>Confirmation code <strong>{}</strong></p>", esc(&request.code)));
+            h.push_str(&format!(
+                "<p>Confirmation code <strong>{}</strong></p>",
+                esc(&request.code)
+            ));
             if let Some(page) = &request.page {
                 h.push_str(&format!("<p><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">Open passkey page</a></p>", esc(page.as_str())));
             } else {
@@ -214,27 +370,66 @@ fn view(app: &Bluefin) -> String {
             h.push_str(&button("device-finish", "Finish sign-in", !ready(app)));
             h.push_str(&button("device-cancel", "Cancel", !ready(app)));
         } else if let Some(server) = &app.connected_server {
-            h.push_str(&format!("<h2>{}</h2><form data-form=\"login\">", esc(&server.name)));
+            h.push_str(&format!(
+                "<h2>{}</h2><form data-form=\"login\">",
+                esc(&server.name)
+            ));
             h.push_str(&field("name", "Username", "text", &app.name));
             h.push_str(&field("password", "Password", "password", ""));
-            h.push_str(if ready(app) { "<button>Sign in</button></form>" } else { "<button disabled>Sign in</button></form>" });
-            if server.options.passkeys { h.push_str(&button("device-passkey", "Sign in with a passkey", !ready(app))); }
-            if server.options.quick_connect { h.push_str(&button("device-code", "Quick Connect", !ready(app))); }
-            if server.options.allow_signups { h.push_str(&button("signup", "Create account", !ready(app))); }
+            h.push_str(if ready(app) {
+                "<button>Sign in</button></form>"
+            } else {
+                "<button disabled>Sign in</button></form>"
+            });
+            if server.options.passkeys {
+                h.push_str(&button(
+                    "device-passkey",
+                    "Sign in with a passkey",
+                    !ready(app),
+                ));
+            }
+            if server.options.quick_connect {
+                h.push_str(&button("device-code", "Quick Connect", !ready(app)));
+            }
+            if server.options.allow_signups {
+                h.push_str(&button("signup", "Create account", !ready(app)));
+            }
             h.push_str(&button("change-server", "Change server", !ready(app)));
         } else {
             h.push_str("<form data-form=\"connect\">");
             h.push_str(&field("server", "Server address", "url", &app.server));
-            h.push_str(if ready(app) { "<button>Continue</button></form>" } else { "<button disabled>Continue</button></form>" });
+            h.push_str(if ready(app) {
+                "<button>Continue</button></form>"
+            } else {
+                "<button disabled>Continue</button></form>"
+            });
         }
-        h.push_str(&button("fixture", "Explore original fixtures", !ready(app) || app.device_sign_in.is_some()));
+        h.push_str(&button(
+            "fixture",
+            "Explore original fixtures",
+            !ready(app) || app.device_sign_in.is_some(),
+        ));
         h.push_str(
             "<p>Original generated test patterns and tones. No licensed media.</p></section>",
         );
     } else {
-        h.push_str("<form data-form=\"search\" class=\"search\">");
-        h.push_str(&field("query", "Search this library", "search", &app.query));
-        h.push_str("<button>Search</button></form>");
+        if matches!(app.model.section, Section::Search | Section::Discovery) {
+            h.push_str("<form data-form=\"search\" class=\"search\">");
+            h.push_str(&field(
+                "query",
+                if app.model.section == Section::Search {
+                    "Search all media"
+                } else {
+                    "Search discovery catalog"
+                },
+                "search",
+                &app.query,
+            ));
+            h.push_str("<button>Search</button></form>");
+            if app.model.section == Section::Search {
+                h.push_str(&search_filters(app));
+            }
+        }
         if app.model.section == Section::Queue {
             h.push_str(&format!(
                 "<p>Revision {} · {} tracks</p><ol>",
@@ -341,7 +536,7 @@ fn view(app: &Bluefin) -> String {
                 ));
                 h.push_str("</section>");
             }
-        } else {
+        } else if app.model.section != Section::Account {
             if !app.previous_shelves.is_empty() && app.model.detail.is_none() {
                 h.push_str(&button("close", "Back", false));
             }
@@ -357,56 +552,111 @@ fn view(app: &Bluefin) -> String {
                 if item.kind == "Audio" {
                     h.push_str(&button("enqueue", "Add to queue", false));
                 }
-                if matches!(item.kind.as_str(), "Series" | "MusicAlbum") {
-                    h.push_str(&button("children", "Browse episodes / tracks", false));
+                if item.folder() {
+                    h.push_str(&button("children", "Browse collection", false));
                 }
                 h.push_str(&button("close", "Back", false));
                 h.push_str("</section>");
             }
-            h.push_str("<div class=\"catalog\">");
-            for (i, item) in app.model.rows.iter().enumerate() {
-                h.push_str(&format!(
-                    "<article class=\"card\"><h2>{}</h2><p>{}</p>",
-                    button(&format!("detail:{i}"), &item.name, false),
-                    esc(&item.kind)
-                ));
-                if app.model.section == Section::Guide {
-                    for s in [&item.channel_name, &item.start_date, &item.end_date]
-                        .into_iter()
-                        .flatten()
-                    {
-                        h.push_str(&format!("<p>{}</p>", esc(s)));
-                    }
+            if app.model.section == Section::Home
+                && app.model.detail.is_none()
+                && app.previous_shelves.is_empty()
+                && !app.home.shelves.is_empty()
+            {
+                if let Some(item) = &app.home.featured {
+                    h.push_str(&featured(app, item));
                 }
-                h.push_str("</article>");
+                for shelf in &app.home.shelves {
+                    h.push_str(&format!(
+                        "<section><h2>{}</h2><div class=\"catalog\">",
+                        esc(&shelf.title)
+                    ));
+                    for item in &shelf.items {
+                        h.push_str(&media_card(app, item));
+                    }
+                    h.push_str("</div></section>");
+                }
+            } else if app.model.section == Section::Search
+                && app.model.detail.is_none()
+                && app.previous_shelves.is_empty()
+            {
+                for (index, shelf) in app.search_results.shelves.iter().enumerate() {
+                    h.push_str(&format!(
+                        "<section><h2>{}</h2><div class=\"catalog\">",
+                        shelf.lane.title()
+                    ));
+                    for item in &shelf.page.items {
+                        h.push_str(&media_card(app, item));
+                    }
+                    h.push_str("</div>");
+                    if !shelf.warning.is_empty() {
+                        h.push_str(&format!("<p role=\"status\">{}</p>", esc(&shelf.warning)));
+                    }
+                    if shelf.page.more() {
+                        h.push_str(&button(
+                            &format!("more:{index}"),
+                            "Load more",
+                            app.pending.is_some(),
+                        ));
+                    }
+                    h.push_str("</section>");
+                }
+            } else {
+                h.push_str("<div class=\"catalog\">");
+                for item in &app.model.rows {
+                    h.push_str(&media_card(app, item));
+                }
+                h.push_str("</div>");
+                if app.page.more() {
+                    h.push_str(&button("more", "Load more", app.pending.is_some()));
+                }
             }
-            h.push_str("</div>");
             if app.model.rows.is_empty() && app.pending.is_none() {
                 h.push_str(
-                    "<p>No items to show. Search to load this view or try a different search.</p>",
+                    "<p>No media to show. Search by title or artist, or choose a refinement.</p>",
                 );
             }
         }
-        h.push_str("<section id=\"account\" class=\"card\"><h2>Account</h2>");
-        if app.model.session.as_ref().is_some_and(|session| crate::mesh::is_mesh(&session.token)) {
-            h.push_str("<p>Connected through the encrypted device mesh.</p>");
-        } else { h.push_str("<p>Connected through HTTPS.</p>"); }
-
-        if app.model.fixture {
-            h.push_str("<p>Original synthetic fixtures</p>");
-        }
-        if !app.model.fixture {
-            h.push_str(&button("mesh-issue", "Connect another device", !ready(app)));
-            if let Some(invite) = app.mesh_invite.as_ref().filter(|invite| invite.current()) {
-                h.push_str("<p>Use this once to sign in to your account on another device. Your passkey is still required.</p>");
-                h.push_str(&format!("<img src=\"{}\" alt=\"One-use Bluefin device invitation\" style=\"width:min(100%,340px);height:auto\"><p><a href=\"{}\" download=\"bluefin-invitation.png\">Save QR image</a></p>",esc(&invite.image),esc(&invite.image)));
-                h.push_str(&button("mesh-copy-link","Copy launch link",!ready(app)));
-                h.push_str(&button("mesh-copy-code","Copy code",!ready(app)));
-                h.push_str(&format!("<details><summary>Manual connection code</summary><p><code>{}</code></p></details>",esc(&invite.code)));
+        if app.model.section == Section::Account {
+            h.push_str("<section id=\"account\" class=\"card\"><h2>Account</h2>");
+            h.push_str(&button("queue", "Music queue", false));
+            h.push_str(&button("discovery", "Discover", false));
+            h.push_str("<h3>Home personalization</h3><p>Viewing progress and favorites shape Home on your account's server.</p>");
+            if app.home.history_generation.is_some() {
+                h.push_str("<p>Submitted searches and selected results also help. History stays with this account.</p>");
+                h.push_str(&button(
+                    "clear-history",
+                    "Clear search history",
+                    app.pending.is_some(),
+                ));
             }
+            if app
+                .model
+                .session
+                .as_ref()
+                .is_some_and(|session| crate::mesh::is_mesh(&session.token))
+            {
+                h.push_str("<p>Connected through the encrypted device mesh.</p>");
+            } else {
+                h.push_str("<p>Connected through HTTPS.</p>");
+            }
+
+            if app.model.fixture {
+                h.push_str("<p>Original synthetic fixtures</p>");
+            }
+            if !app.model.fixture {
+                h.push_str(&button("mesh-issue", "Connect another device", !ready(app)));
+                if let Some(invite) = app.mesh_invite.as_ref().filter(|invite| invite.current()) {
+                    h.push_str("<p>Use this once to sign in to your account on another device. Your passkey is still required.</p>");
+                    h.push_str(&format!("<img src=\"{}\" alt=\"One-use Bluefin device invitation\" style=\"width:min(100%,340px);height:auto\"><p><a href=\"{}\" download=\"bluefin-invitation.png\">Save QR image</a></p>",esc(&invite.image),esc(&invite.image)));
+                    h.push_str(&button("mesh-copy-link", "Copy launch link", !ready(app)));
+                    h.push_str(&button("mesh-copy-code", "Copy code", !ready(app)));
+                    h.push_str(&format!("<details><summary>Manual connection code</summary><p><code>{}</code></p></details>",esc(&invite.code)));
+                }
+            }
+            h.push_str(&button("logout", "Sign out", false));
+            h.push_str("</section>");
         }
-        h.push_str(&button("logout", "Sign out", false));
-        h.push_str("</section>");
     }
     if let Some(service) = &app.playback {
         h.push_str("<section class=\"card\" aria-label=\"Playback settings\"><h2>Playback</h2>");
@@ -500,37 +750,54 @@ fn dispatch(app: &mut Bluefin, ctx: &egui::Context, action: &str) {
         "device-finish" if ready(app) => app.finish_device_sign_in(ctx),
         "device-cancel" if ready(app) => app.cancel_device_sign_in(ctx),
         "nav" => {
-            if let Some(s) = [
-                Section::Movies,
-                Section::Shows,
-                Section::Music,
-                Section::Guide,
-                Section::Queue,
-                Section::Discovery,
-            ]
-            .get(index)
-            {
-                app.model.section = *s;
-                app.query.clear();
-                app.discovery = None;
+            if let Some(section) = Section::PRIMARY.get(index) {
+                app.open_section(ctx, *section);
+            }
+        }
+        "utility" => {
+            if let Some(section) = Section::UTILITIES.get(index) {
+                app.open_section(ctx, *section);
+            }
+        }
+        "queue" => app.open_section(ctx, Section::Queue),
+        "discovery" => app.open_section(ctx, Section::Discovery),
+        "search" => {
+            if app.model.section == Section::Search {
+                app.run_search(ctx, true);
+            } else {
                 app.browse(ctx, None);
             }
         }
-        "search" => app.browse(ctx, None),
+        "more" => app.load_more(ctx, if arg.is_empty() { None } else { Some(index) }),
+        "clear-filters" => {
+            app.filters = SearchFilters::default();
+            app.run_search(ctx, false);
+        }
+        "clear-history" => {
+            if let Some(generation) = app.home.history_generation {
+                app.call(
+                    ctx,
+                    "historyClear",
+                    "DELETE",
+                    "Bluefin/Home/Searches".into(),
+                    vec![],
+                    Some(serde_json::json!({"generation":generation})),
+                );
+            }
+        }
         "detail" => {
             if let Some(item) = app.model.rows.get(index).cloned() {
-                if app.model.fixture {
-                    app.model.detail = Some(item);
-                } else if let Some(s) = &app.model.session {
-                    app.call(
-                        ctx,
-                        "detail",
-                        "GET",
-                        format!("Users/{}/Items/{}", s.user, item.id),
-                        vec![],
-                        None,
-                    );
-                }
+                app.open_detail(ctx, item);
+            }
+        }
+        "hero-detail" => {
+            if let Some(item) = app.home.featured.clone() {
+                app.open_detail(ctx, item);
+            }
+        }
+        "hero-play" => {
+            if let Some(item) = app.home.featured.clone() {
+                app.play(item);
             }
         }
         "close" => app.back_to_shelf(),
@@ -566,6 +833,7 @@ fn dispatch(app: &mut Bluefin, ctx: &egui::Context, action: &str) {
                         end_date: None,
                         channel_name: None,
                         channel_id: None,
+                        ..Default::default()
                     },
                     Selection::default(),
                     Some(index),
@@ -711,6 +979,32 @@ pub(crate) fn start() -> Result<(), JsValue> {
                                 }
                             }
                         }
+                    }
+                }
+                if let Some(select) = target.dyn_ref::<HtmlSelectElement>() {
+                    let before = app.filters.clone();
+                    match id.as_str() {
+                        "search-scope" => {
+                            if let Some(scope) = select
+                                .value()
+                                .parse::<usize>()
+                                .ok()
+                                .and_then(|n| SearchScope::ALL.get(n))
+                            {
+                                app.filters.scope = *scope;
+                            }
+                        }
+                        "search-studio" => {
+                            app.filters.studio = uuid::Uuid::parse_str(&select.value()).ok()
+                        }
+                        "search-tag" => app.filters.tag = select.value(),
+                        "search-collection" => {
+                            app.filters.collection = uuid::Uuid::parse_str(&select.value()).ok()
+                        }
+                        _ => {}
+                    }
+                    if before != app.filters {
+                        app.run_search(&ctx, false);
                     }
                 }
                 if id == "repeat"

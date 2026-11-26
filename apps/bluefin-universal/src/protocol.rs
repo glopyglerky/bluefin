@@ -35,9 +35,14 @@ pub fn server(input: &str) -> Result<Url> {
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn hosted_server(page: &str) -> Option<Url> {
     let page = Url::parse(page).ok()?;
-    let path = page.path().strip_suffix("index.html").unwrap_or(page.path());
-    let base_path = path.strip_suffix("/web/bluefin/").or_else(|| path.strip_suffix("/web/"))?;
-    let mut base = page.join("/") .ok()?;
+    let path = page
+        .path()
+        .strip_suffix("index.html")
+        .unwrap_or(page.path());
+    let base_path = path
+        .strip_suffix("/web/bluefin/")
+        .or_else(|| path.strip_suffix("/web/"))?;
+    let mut base = page.join("/").ok()?;
     base.set_path(&format!("{base_path}/"));
     server(base.as_str()).ok()
 }
@@ -46,9 +51,18 @@ pub(crate) fn hosted_server(page: &str) -> Option<Url> {
 #[test]
 fn hosted_web_preserves_the_server_base_path() {
     for (page, expected) in [
-        ("https://media.example/web/bluefin/?presentation=canvas", "https://media.example/"),
-        ("https://media.example/media/web/bluefin/index.html#account", "https://media.example/media/"),
-        ("https://media.example/media/web/", "https://media.example/media/"),
+        (
+            "https://media.example/web/bluefin/?presentation=canvas",
+            "https://media.example/",
+        ),
+        (
+            "https://media.example/media/web/bluefin/index.html#account",
+            "https://media.example/media/",
+        ),
+        (
+            "https://media.example/media/web/",
+            "https://media.example/media/",
+        ),
     ] {
         assert_eq!(hosted_server(page).unwrap().as_str(), expected);
     }
@@ -124,12 +138,17 @@ pub fn api_url(base: &Url, path: &str, query: &[(&str, String)]) -> Result<Url> 
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(25))
-        .build()
-        .expect("HTTP client")
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(25))
+                .build()
+                .expect("HTTP client")
+        })
+        .clone()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -219,21 +238,38 @@ pub struct ConnectedServer {
 
 pub async fn connect(base: Url) -> Result<ConnectedServer> {
     let info = request(&base, "", "GET", "System/Info/Public", &[], None).await?;
-    let name = info["ServerName"].as_str().ok_or("No media server at this address")?.to_owned();
+    let name = info["ServerName"]
+        .as_str()
+        .ok_or("No media server at this address")?
+        .to_owned();
     let options = match request(&base, "", "GET", "Bluefin/Accounts/Options", &[], None).await {
         Ok(reply) => serde_json::from_value(reply).map_err(|_| "Invalid account options")?,
         Err(_) => AccountOptions {
-            quick_connect: request(&base, "", "GET", "QuickConnect/Enabled", &[], None).await
-                .ok().and_then(|v| v.as_bool()).unwrap_or(false),
+            quick_connect: request(&base, "", "GET", "QuickConnect/Enabled", &[], None)
+                .await
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
             ..Default::default()
         },
     };
-    Ok(ConnectedServer { base, name, options })
+    Ok(ConnectedServer {
+        base,
+        name,
+        options,
+    })
 }
 
 pub async fn signup(base: Url, name: String, password: String) -> Result<Session> {
-    request(&base, "", "POST", "Bluefin/Accounts/Create", &[],
-        Some(json!({"username":name, "password":password}))).await?;
+    request(
+        &base,
+        "",
+        "POST",
+        "Bluefin/Accounts/Create",
+        &[],
+        Some(json!({"username":name, "password":password})),
+    )
+    .await?;
     login(base, name, password).await
 }
 
@@ -246,16 +282,33 @@ pub struct DeviceSignIn {
 }
 
 pub async fn begin_device_sign_in(base: Url, passkey: bool) -> Result<DeviceSignIn> {
-    let method = if passkey { "Bluefin/Accounts/Passkey/Initiate" } else { "QuickConnect/Initiate" };
+    let method = if passkey {
+        "Bluefin/Accounts/Passkey/Initiate"
+    } else {
+        "QuickConnect/Initiate"
+    };
     let mut reply = request(&base, "", "POST", method, &[], Some(json!({}))).await?;
     let mut page = None;
     let (field, secret) = if passkey {
         let expected = api_url(&base, "Bluefin/Accounts/Passkey", &[])?;
-        let url = Url::parse(reply["url"].as_str().ok_or("Invalid passkey link")?).map_err(|_| "Invalid passkey link")?;
+        let url = Url::parse(reply["url"].as_str().ok_or("Invalid passkey link")?)
+            .map_err(|_| "Invalid passkey link")?;
         let mut without_ticket = url.clone();
         without_ticket.set_fragment(None);
-        if expected != without_ticket || !url.fragment().is_some_and(|f| f.len() == 32 && f.bytes().all(|b| b.is_ascii_hexdigit())) {
-            let _ = request(&base, "", "POST", "Bluefin/Accounts/Passkey/Cancel", &[], Some(reply["proof"].take())).await;
+        if expected != without_ticket
+            || !url
+                .fragment()
+                .is_some_and(|f| f.len() == 32 && f.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            let _ = request(
+                &base,
+                "",
+                "POST",
+                "Bluefin/Accounts/Passkey/Cancel",
+                &[],
+                Some(reply["proof"].take()),
+            )
+            .await;
             return Err("Invalid passkey link".into());
         }
         page = Some(url);
@@ -263,33 +316,81 @@ pub async fn begin_device_sign_in(base: Url, passkey: bool) -> Result<DeviceSign
     } else {
         ("Code", reply["Secret"].take())
     };
-    let code = reply[field].as_str().ok_or("Missing confirmation code")?.to_owned();
-    Ok(DeviceSignIn { base, code, page, secret })
+    let code = reply[field]
+        .as_str()
+        .ok_or("Missing confirmation code")?
+        .to_owned();
+    Ok(DeviceSignIn {
+        base,
+        code,
+        page,
+        secret,
+    })
 }
 
 impl DeviceSignIn {
     pub async fn finish(&self) -> Result<Option<Session>> {
         let value = if self.page.is_some() {
-            request(&self.base, "", "POST", "Bluefin/Accounts/Passkey/Exchange", &[], Some(self.secret.clone())).await?
+            request(
+                &self.base,
+                "",
+                "POST",
+                "Bluefin/Accounts/Passkey/Exchange",
+                &[],
+                Some(self.secret.clone()),
+            )
+            .await?
         } else {
-            let status = request(&self.base, "", "GET", "QuickConnect/Connect",
-                &[("Secret", self.secret.as_str().ok_or("Invalid sign-in request")?.to_owned())], None).await?;
-            if status["Authenticated"] != true { return Ok(None); }
-            request(&self.base, "", "POST", "Users/AuthenticateWithQuickConnect", &[],
-                Some(json!({"Secret": self.secret}))).await?
+            let status = request(
+                &self.base,
+                "",
+                "GET",
+                "QuickConnect/Connect",
+                &[(
+                    "Secret",
+                    self.secret
+                        .as_str()
+                        .ok_or("Invalid sign-in request")?
+                        .to_owned(),
+                )],
+                None,
+            )
+            .await?;
+            if status["Authenticated"] != true {
+                return Ok(None);
+            }
+            request(
+                &self.base,
+                "",
+                "POST",
+                "Users/AuthenticateWithQuickConnect",
+                &[],
+                Some(json!({"Secret": self.secret})),
+            )
+            .await?
         };
-        if value["pending"] == true { return Ok(None); }
+        if value["pending"] == true {
+            return Ok(None);
+        }
         session_from_reply(self.base.clone(), value).map(Some)
     }
     pub async fn cancel(self) -> Result<()> {
         if self.page.is_some() {
-            request(&self.base, "", "POST", "Bluefin/Accounts/Passkey/Cancel", &[], Some(self.secret)).await?;
+            request(
+                &self.base,
+                "",
+                "POST",
+                "Bluefin/Accounts/Passkey/Cancel",
+                &[],
+                Some(self.secret),
+            )
+            .await?;
         }
         Ok(())
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Item {
     pub id: Uuid,
@@ -307,13 +408,53 @@ pub struct Item {
     pub channel_name: Option<String>,
     #[serde(default)]
     pub channel_id: Option<Uuid>,
+    #[serde(default)]
+    pub run_time_ticks: Option<u64>,
+    #[serde(default)]
+    pub user_data: Option<ItemUserData>,
+}
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "PascalCase", default)]
+pub struct ItemUserData {
+    pub playback_position_ticks: u64,
+    pub played_percentage: Option<f32>,
+    pub played: bool,
 }
 impl Item {
+    pub fn progress(&self) -> f32 {
+        let Some(data) = &self.user_data else {
+            return 0.0;
+        };
+        let percent = data.played_percentage.unwrap_or_else(|| {
+            self.run_time_ticks.filter(|n| *n > 0).map_or(0.0, |n| {
+                data.playback_position_ticks as f32 * 100.0 / n as f32
+            })
+        });
+        if percent.is_finite() {
+            (percent / 100.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+    pub fn folder(&self) -> bool {
+        matches!(
+            self.kind.as_str(),
+            "Series"
+                | "Season"
+                | "MusicAlbum"
+                | "MusicArtist"
+                | "Playlist"
+                | "BoxSet"
+                | "CollectionFolder"
+                | "Folder"
+        )
+    }
     pub fn playable(&self) -> bool {
         matches!(
             self.kind.as_str(),
             "Movie" | "Episode" | "Audio" | "TvChannel"
-        ) || (self.kind == "Program" && self.channel_id.is_some_and(|id| !id.is_nil()))
+        ) || (matches!(self.kind.as_str(), "Program" | "LiveTvProgram")
+            && self.channel_id.is_some_and(|id| !id.is_nil()))
     }
 }
 pub fn items(value: Value) -> Result<Vec<Item>> {
@@ -526,4 +667,106 @@ pub fn fixture_base() -> Result<Url> {
         return Err("Fixtures require the task-owned loopback server".into());
     }
     Ok(base)
+}
+
+/// Artwork remains on the authenticated transport and is never given a bearer URL.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn artwork(session: &Session, id: Uuid, backdrop: bool) -> Result<Vec<u8>> {
+    use futures_util::StreamExt;
+    let url = api_url(
+        &session.base,
+        &format!(
+            "Items/{}/Images/{}",
+            id.simple(),
+            if backdrop { "Backdrop" } else { "Primary" }
+        ),
+        &[
+            ("maxWidth", if backdrop { "1200" } else { "400" }.into()),
+            ("quality", "85".into()),
+            ("format", "jpg".into()),
+        ],
+    )?;
+    let response = client()
+        .get(url)
+        .header("Authorization", authorization(&session.token)?)
+        .send()
+        .await
+        .map_err(|_| "Artwork connection failed")?;
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > 2 * 1024 * 1024)
+    {
+        return Err("Artwork is unavailable".into());
+    }
+    let mut stream = response.bytes_stream();
+    let mut bytes = vec![];
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| "Artwork interrupted")?;
+        if bytes.len() + chunk.len() > 2 * 1024 * 1024 {
+            return Err("Artwork exceeds bounds".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+export async function boundedArtwork(url, authorization, signal) {
+  const controller = new AbortController(), abort = () => controller.abort();
+  signal.addEventListener('abort', abort, {once:true}); if(signal.aborted) abort();
+  const timer = setTimeout(abort, 25000);
+  try {
+    const response = await fetch(url, {headers:{Authorization:authorization},signal:controller.signal,redirect:'error',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer'});
+    if(!response.ok || Number(response.headers.get('content-length')) > 2097152) throw Error('Artwork unavailable');
+    const reader = response.body?.getReader(); if(!reader) throw Error('Artwork unavailable');
+    let size=0; const chunks=[];
+    try { for(;;) { const {done,value}=await reader.read(); if(done)break; size+=value.length; if(size>2097152)throw Error('Artwork bound'); chunks.push(value); } }
+    catch(error) { await reader.cancel(); throw error; }
+    const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}return bytes;
+  } finally { clearTimeout(timer); signal.removeEventListener('abort',abort); }
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(catch, js_name=boundedArtwork)]
+    async fn bounded_artwork(
+        url: &str,
+        authorization: &str,
+        signal: &web_sys::AbortSignal,
+    ) -> std::result::Result<js_sys::Uint8Array, wasm_bindgen::JsValue>;
+}
+#[cfg(target_arch = "wasm32")]
+pub async fn artwork(session: &Session, id: Uuid, backdrop: bool) -> Result<Vec<u8>> {
+    if crate::mesh::is_mesh(&session.token) {
+        return crate::mesh::artwork(&session.token, &id.to_string(), backdrop).await;
+    }
+    struct Guard(web_sys::AbortController);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let guard =
+        Guard(web_sys::AbortController::new().map_err(|_| "Browser cancellation unavailable")?);
+    let url = api_url(
+        &session.base,
+        &format!(
+            "Items/{}/Images/{}",
+            id.simple(),
+            if backdrop { "Backdrop" } else { "Primary" }
+        ),
+        &[
+            ("maxWidth", if backdrop { "1200" } else { "400" }.into()),
+            ("quality", "85".into()),
+            ("format", "jpg".into()),
+        ],
+    )?;
+    bounded_artwork(
+        url.as_str(),
+        &authorization(&session.token)?,
+        &guard.0.signal(),
+    )
+    .await
+    .map(|value| value.to_vec())
+    .map_err(|_| "Artwork unavailable".into())
 }

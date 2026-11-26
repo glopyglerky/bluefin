@@ -511,7 +511,7 @@ pub(crate) async fn artwork(handle: &str, item: &str, backdrop: bool) -> Result<
     ensure_current(&session).await?;
     let base = origin(&session.descriptor.api_origin)?;
     let path = format!("Items/{}/Images/{}", item.simple(), if backdrop { "Backdrop" } else { "Primary" });
-    let url = protocol::api_url(&base,&path,&[("maxWidth",if backdrop { "1200" } else { "400" }.into()),("quality","85".into())])?;
+    let url = protocol::api_url(&base,&path,&[("maxWidth",if backdrop { "1200" } else { "400" }.into()),("quality","85".into()),("format","jpg".into())])?;
     let (status,headers,bytes) = fetch(&session,"GET",&url,&[],Vec::new(),true,2*1024*1024).await?;
     let allowed=headers.iter().any(|(name,value)| name.eq_ignore_ascii_case("content-type")
         && ["image/jpeg","image/png","image/webp"].contains(&value.split(';').next().unwrap_or("").trim()));

@@ -4,21 +4,40 @@ use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
-    Movies,
+    Home,
+    Sports,
     Shows,
-    Music,
+    Movies,
     Guide,
+    Music,
+    Search,
+    Collections,
+    Account,
     Queue,
     Discovery,
 }
 impl Section {
+    pub const PRIMARY: [Self; 6] = [
+        Self::Home,
+        Self::Sports,
+        Self::Shows,
+        Self::Movies,
+        Self::Guide,
+        Self::Music,
+    ];
+    pub const UTILITIES: [Self; 3] = [Self::Search, Self::Collections, Self::Account];
     pub fn title(self) -> &'static str {
         match self {
+            Self::Home => "Home",
+            Self::Sports => "Sports",
+            Self::Shows => "TV Shows",
             Self::Movies => "Movies",
-            Self::Shows => "Shows",
+            Self::Guide => "Live TV",
             Self::Music => "Music",
-            Self::Guide => "Live guide",
-            Self::Queue => "Queue",
+            Self::Search => "Search",
+            Self::Collections => "Collections",
+            Self::Account => "Account",
+            Self::Queue => "Music queue",
             Self::Discovery => "Discover",
         }
     }
@@ -26,7 +45,7 @@ impl Section {
         match self {
             Self::Movies => "Movie",
             Self::Shows => "Series",
-            Self::Music => "MusicAlbum,Audio",
+            Self::Music => "MusicAlbum,Audio,MusicArtist,MusicVideo,Playlist",
             _ => "",
         }
     }
@@ -48,7 +67,7 @@ impl Default for Model {
         Self {
             session: None,
             epoch: 0,
-            section: Section::Movies,
+            section: Section::Home,
             rows: vec![],
             detail: None,
             capabilities: None,
@@ -103,7 +122,7 @@ impl Model {
     }
     pub fn fixture_rows(&self) -> Vec<Item> {
         let entries = match self.section {
-            Section::Movies => vec![(
+            Section::Home | Section::Movies => vec![(
                 1,
                 "Paper moon harbor",
                 "Movie",
@@ -148,6 +167,7 @@ impl Model {
                 end_date: Some("2030-01-01T21:00:00Z".into()),
                 channel_name: Some("Synthetic science".into()),
                 channel_id: None,
+                ..Default::default()
             })
             .collect()
     }

@@ -1,4 +1,5 @@
 use crate::{
+    catalog::{self, Facets, Home, Page, Request, SearchFilters, SearchResults, SearchScope},
     playback::Selection,
     protocol::{self, Item, Session},
     service::{Command as PlaybackCommand, Service},
@@ -6,6 +7,8 @@ use crate::{
 };
 use bluefin_contract::{Capabilities, MusicQueue, PROTOCOL_VERSION, UpdateMusicQueue};
 use eframe::egui;
+#[path = "artwork.rs"]
+mod artwork;
 #[path = "theme.rs"]
 mod theme;
 use futures_util::future::{AbortHandle, Abortable};
@@ -44,11 +47,17 @@ enum Outcome {
     #[cfg(target_arch = "wasm32")]
     MeshEmpty,
     Data(&'static str, Value),
+    Home(Home),
+    Rows(Page, bool),
+    Search(SearchResults, Option<Facets>),
+    SearchMore(usize, Page),
 }
 type Completion = (u64, Result<Outcome, String>);
 struct PreviousShelf {
     rows: Vec<Item>,
     detail: Option<Item>,
+    page: Page,
+    request: Option<Request>,
 }
 pub struct Bluefin {
     styled: bool,
@@ -59,6 +68,14 @@ pub struct Bluefin {
     connected_server: Option<protocol::ConnectedServer>,
     device_sign_in: Option<protocol::DeviceSignIn>,
     query: String,
+    filters: SearchFilters,
+    facets: Option<Facets>,
+    search_results: SearchResults,
+    home: Home,
+    page: Page,
+    catalog_request: Option<Request>,
+    artwork: artwork::Cache,
+    brand_texture: Option<egui::TextureHandle>,
     #[cfg(target_arch = "wasm32")]
     mesh_code: String,
     #[cfg(target_arch = "wasm32")]
@@ -100,6 +117,14 @@ impl Default for Bluefin {
             connected_server: None,
             device_sign_in: None,
             query: String::new(),
+            filters: SearchFilters::default(),
+            facets: None,
+            search_results: SearchResults::default(),
+            home: Home::default(),
+            page: Page::default(),
+            catalog_request: None,
+            artwork: artwork::Cache::default(),
+            brand_texture: None,
             #[cfg(target_arch = "wasm32")]
             mesh_code: crate::mesh::launch_code(),
             #[cfg(target_arch = "wasm32")]
@@ -143,111 +168,434 @@ fn web_hosted_server() -> String {
     String::new()
 }
 
+fn paint_art(ui: &egui::Ui, texture: &egui::TextureHandle, rect: egui::Rect) {
+    let source = texture.size_vec2();
+    let source_ratio = source.x / source.y;
+    let target_ratio = rect.width() / rect.height();
+    let uv = if source_ratio > target_ratio {
+        let fraction = target_ratio / source_ratio;
+        egui::Rect::from_min_max(
+            egui::pos2((1.0 - fraction) / 2.0, 0.0),
+            egui::pos2((1.0 + fraction) / 2.0, 1.0),
+        )
+    } else {
+        let fraction = source_ratio / target_ratio;
+        egui::Rect::from_min_max(
+            egui::pos2(0.0, (1.0 - fraction) / 2.0),
+            egui::pos2(1.0, (1.0 + fraction) / 2.0),
+        )
+    };
+    ui.painter()
+        .image(texture.id(), rect, uv, egui::Color32::WHITE);
+}
 pub fn configure(ctx: &egui::Context) {
     theme::configure(ctx);
 }
 
 impl Bluefin {
-    fn section_title(section: Section) -> &'static str {
-        if section == Section::Guide {
-            "Live TV"
-        } else {
-            section.title()
+    fn brand(&mut self, ui: &mut egui::Ui) {
+        if self.brand_texture.is_none() {
+            if let Ok(image) = image::load_from_memory(include_bytes!("../assets/bluefin-mark.png"))
+            {
+                let image = image.into_rgba8();
+                self.brand_texture = Some(ui.ctx().load_texture(
+                    "bluefin-mark",
+                    egui::ColorImage::from_rgba_unmultiplied(
+                        [image.width() as usize, image.height() as usize],
+                        image.as_raw(),
+                    ),
+                    egui::TextureOptions::LINEAR,
+                ));
+            }
         }
+        ui.horizontal(|ui| {
+            if let Some(texture) = &self.brand_texture {
+                ui.add(egui::Image::new(texture).fit_to_exact_size(egui::vec2(36.0, 36.0)));
+            }
+            ui.label(
+                egui::RichText::new("Bluefin")
+                    .size(24.0)
+                    .strong()
+                    .color(ui.visuals().hyperlink_color),
+            );
+        });
+    }
+    fn section_title(section: Section) -> &'static str {
+        section.title()
+    }
+    fn open_section(&mut self, ctx: &egui::Context, section: Section) {
+        self.model.section = section;
+        self.query.clear();
+        self.previous_shelves.clear();
+        self.discovery = None;
+        if section == Section::Search {
+            self.filters = SearchFilters::default();
+            self.search_results = SearchResults::default();
+        }
+        self.browse(ctx, None);
     }
     fn navigation(&mut self, ui: &mut egui::Ui, compact: bool) {
-        let mut entries = |ui: &mut egui::Ui| {
-            for section in [
-                Section::Movies,
-                Section::Shows,
-                Section::Music,
-                Section::Guide,
-                Section::Queue,
-                Section::Discovery,
-            ] {
-                let response = ui.add_sized(
-                    [if compact { 94.0 } else { ui.available_width() }, 44.0],
-                    egui::Button::new(Self::section_title(section))
-                        .selected(self.model.section == section),
-                );
-                if !compact && response.gained_focus() {
-                    response.scroll_to_me(Some(egui::Align::Center));
-                }
-                if response.clicked() {
-                    self.model.section = section;
-                    self.query.clear();
-        self.previous_shelves.clear();
-                    self.discovery = None;
-                    self.browse(&ui.ctx().clone(), None);
-                }
+        for (name, sections) in [
+            ("Categories", Section::PRIMARY.as_slice()),
+            ("Library tools", Section::UTILITIES.as_slice()),
+        ] {
+            if !compact && name == "Library tools" {
+                ui.add_space(16.0);
+                ui.small(name);
             }
-        };
-        if compact {
-            ui.horizontal_wrapped(entries);
-        } else {
-            entries(ui);
+            let mut entries = |ui: &mut egui::Ui| {
+                for section in sections {
+                    let response = ui.add_sized(
+                        [if compact { 94.0 } else { ui.available_width() }, 44.0],
+                        egui::Button::new(section.title()).selected(self.model.section == *section),
+                    );
+                    if !compact && response.gained_focus() {
+                        response.scroll_to_me(Some(egui::Align::Center));
+                    }
+                    if response.clicked() {
+                        self.open_section(&ui.ctx().clone(), *section);
+                    }
+                }
+            };
+            if compact {
+                ui.horizontal_wrapped(entries);
+            } else {
+                entries(ui);
+            }
         }
     }
+    fn open_detail(&mut self, ctx: &egui::Context, mut item: Item) {
+        if self.model.fixture {
+            self.model.detail = Some(item);
+            return;
+        }
+        let Some(session) = self.model.session.clone() else {
+            return;
+        };
+        let selected = item.id;
+        if matches!(item.kind.as_str(), "Program" | "LiveTvProgram") {
+            let Some(channel) = item.channel_id.filter(|id| !id.is_nil()) else {
+                self.model.detail = Some(item);
+                return;
+            };
+            item.id = channel;
+            item.kind = "TvChannel".into();
+        }
+        let history = (self.model.section == Section::Search)
+            .then_some(self.home.history_generation)
+            .flatten();
+        let query = self.query.clone();
+        self.launch(ctx, async move {
+            let path = format!("Users/{}/Items/{}", session.user, item.id);
+            let fetch = protocol::request(&session.base, &session.token, "GET", &path, &[], None);
+            let signal = async {
+                if let Some(generation) = history {
+                    catalog::record_search(&session, generation, &query, Some(selected)).await;
+                }
+            };
+            let (value, ()) = futures_util::join!(fetch, signal);
+            value.map(|value| Outcome::Data("detail", value))
+        });
+    }
     fn catalog_item(&mut self, ui: &mut egui::Ui, item: &Item, tile: bool) {
-        egui::Frame::new()
-            .fill(ui.visuals().window_fill)
-            .corner_radius(12)
-            .inner_margin(14)
-            .show(ui, |ui| {
-                if tile {
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), 104.0),
-                        egui::Sense::hover(),
-                    );
-                    ui.painter()
-                        .rect_filled(rect, 8.0, ui.visuals().faint_bg_color);
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "No artwork",
-                        egui::FontId::proportional(14.0),
-                        ui.visuals().weak_text_color(),
-                    );
-                    ui.add_space(6.0);
-                }
-                if ui
-                    .add(
-                        egui::Button::new(egui::RichText::new(&item.name).strong())
-                            .wrap()
-                            .min_size(egui::vec2(ui.available_width(), 44.0)),
-                    )
-                    .clicked()
-                {
-                    if self.model.fixture {
-                        self.model.detail = Some(item.clone());
+        let width = ui.available_width();
+        let height = if tile {
+            (width * 1.35).clamp(180.0, 300.0)
+        } else {
+            100.0
+        };
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+        if ui.is_rect_visible(rect) {
+            self.artwork.request(item.id, false);
+        }
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &item.name));
+        ui.painter()
+            .rect_filled(rect, 10.0, ui.visuals().faint_bg_color);
+        if let Some(texture) = self.artwork.texture(item.id, false) {
+            let target = if tile {
+                rect
+            } else {
+                egui::Rect::from_min_size(rect.min, egui::vec2(70.0, 100.0))
+            };
+            paint_art(ui, &texture, target);
+        }
+        let footer = if tile {
+            egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 76.0), rect.max)
+        } else {
+            egui::Rect::from_min_max(rect.min + egui::vec2(80.0, 0.0), rect.max)
+        };
+        ui.painter().rect_filled(
+            footer,
+            if tile { 8.0 } else { 0.0 },
+            egui::Color32::from_rgba_unmultiplied(6, 23, 39, 235),
+        );
+        let name = ui.painter().layout(
+            item.name.clone(),
+            egui::FontId::proportional(16.0),
+            egui::Color32::from_rgb(232, 237, 237),
+            footer.width() - 20.0,
+        );
+        ui.painter().with_clip_rect(footer.shrink(8.0)).galley(
+            footer.min + egui::vec2(10.0, 8.0),
+            name,
+            egui::Color32::WHITE,
+        );
+        let meta = if self.model.section == Section::Guide {
+            item.channel_name.as_deref().unwrap_or(&item.kind)
+        } else {
+            &item.kind
+        };
+        ui.painter().text(
+            egui::pos2(footer.left() + 10.0, footer.bottom() - 17.0),
+            egui::Align2::LEFT_CENTER,
+            meta,
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_rgb(174, 188, 199),
+        );
+        if item.progress() > 0.0 {
+            let track = egui::Rect::from_min_size(
+                egui::pos2(rect.left(), rect.bottom() - 4.0),
+                egui::vec2(rect.width() * item.progress(), 4.0),
+            );
+            ui.painter()
+                .rect_filled(track, 2.0, egui::Color32::from_rgb(169, 162, 201));
+        }
+        if response.hovered() || response.has_focus() {
+            ui.painter().rect_stroke(
+                rect,
+                10.0,
+                egui::Stroke::new(2.0_f32, ui.visuals().hyperlink_color),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if response.clicked() {
+            self.open_detail(&ui.ctx().clone(), item.clone());
+        }
+    }
+    fn media_grid(&mut self, ui: &mut egui::Ui, rows: &[Item]) {
+        let tiled = ui.available_width() >= 520.0 && self.model.section != Section::Guide;
+        if tiled {
+            let columns = ((ui.available_width() / 200.0) as usize).clamp(2, 5);
+            for row in rows.chunks(columns) {
+                ui.columns(columns, |uis| {
+                    for (item, column) in row.iter().zip(uis) {
+                        self.catalog_item(column, item, true);
+                    }
+                });
+                ui.add_space(12.0);
+            }
+        } else {
+            for item in rows {
+                self.catalog_item(ui, item, false);
+                ui.add_space(8.0);
+            }
+        }
+    }
+    fn featured(&mut self, ui: &mut egui::Ui, item: &Item) {
+        self.artwork.request(item.id, true);
+        let width = ui.available_width();
+        let height = (width * 0.46).clamp(260.0, 390.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, 14.0, egui::Color32::from_rgb(6, 23, 39));
+        if let Some(texture) = self.artwork.texture(item.id, true) {
+            paint_art(ui, &texture, rect);
+        }
+        let footer =
+            egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 160.0), rect.max);
+        ui.painter().rect_filled(
+            footer,
+            10.0,
+            egui::Color32::from_rgba_unmultiplied(6, 23, 39, 225),
+        );
+        let content = footer.shrink(18.0);
+        let title = ui.painter().layout(
+            item.name.clone(),
+            egui::FontId::proportional(26.0),
+            egui::Color32::from_rgb(232, 237, 237),
+            content.width(),
+        );
+        ui.painter()
+            .with_clip_rect(egui::Rect::from_min_size(
+                content.min,
+                egui::vec2(content.width(), 76.0),
+            ))
+            .galley(content.min, title, egui::Color32::WHITE);
+        let button_y = rect.bottom() - 62.0;
+        if item.playable()
+            && ui
+                .put(
+                    egui::Rect::from_min_size(
+                        egui::pos2(rect.left() + 18.0, button_y),
+                        egui::vec2(130.0, 42.0),
+                    ),
+                    theme::primary_button(
+                        ui,
+                        if item.progress() > 0.0 {
+                            "Continue"
+                        } else {
+                            "Play"
+                        },
+                    ),
+                )
+                .clicked()
+        {
+            self.play(item.clone());
+        }
+        let offset = if item.playable() { 160.0 } else { 18.0 };
+        if ui
+            .put(
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.left() + offset, button_y),
+                    egui::vec2(110.0, 42.0),
+                ),
+                egui::Button::new("Details"),
+            )
+            .clicked()
+        {
+            self.open_detail(&ui.ctx().clone(), item.clone());
+        }
+    }
+    fn search_controls(&mut self, ui: &mut egui::Ui) {
+        let before = self.filters.clone();
+        ui.horizontal_wrapped(|ui| {
+            egui::ComboBox::from_label("Media type")
+                .selected_text(self.filters.scope.title())
+                .show_ui(ui, |ui| {
+                    for scope in SearchScope::ALL {
+                        ui.selectable_value(&mut self.filters.scope, scope, scope.title());
+                    }
+                });
+            if let Some(facets) = &self.facets {
+                let studio = facets
+                    .studios
+                    .iter()
+                    .find(|item| Some(item.id) == self.filters.studio)
+                    .map_or("All studios", |item| item.name.as_str());
+                egui::ComboBox::from_label("Studio")
+                    .selected_text(studio)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.filters.studio, None, "All studios");
+                        for item in &facets.studios {
+                            ui.selectable_value(
+                                &mut self.filters.studio,
+                                Some(item.id),
+                                &item.name,
+                            );
+                        }
+                    });
+                egui::ComboBox::from_label("Tag")
+                    .selected_text(if self.filters.tag.is_empty() {
+                        "All tags"
                     } else {
-                        self.call(
-                            &ui.ctx().clone(),
-                            "detail",
-                            "GET",
-                            format!(
-                                "Users/{}/Items/{}",
-                                self.model.session.as_ref().unwrap().user,
-                                item.id
-                            ),
-                            vec![],
-                            None,
-                        );
-                    }
+                        &self.filters.tag
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.filters.tag, String::new(), "All tags");
+                        for tag in &facets.tags {
+                            ui.selectable_value(&mut self.filters.tag, tag.clone(), tag);
+                        }
+                    });
+                let collection = facets
+                    .collections
+                    .iter()
+                    .find(|item| Some(item.id) == self.filters.collection)
+                    .map_or("All collections", |item| item.name.as_str());
+                egui::ComboBox::from_label("Collection")
+                    .selected_text(collection)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.filters.collection, None, "All collections");
+                        for item in &facets.collections {
+                            ui.selectable_value(
+                                &mut self.filters.collection,
+                                Some(item.id),
+                                &item.name,
+                            );
+                        }
+                    });
+            }
+            if ui.button("Clear refinements").clicked() {
+                self.filters = SearchFilters::default();
+            }
+        });
+        ui.small("Studios, service tags and custom collections come from your server.");
+        if let Some(facets) = &self.facets {
+            if facets.truncated {
+                ui.small("Showing a limited set of refinement choices. Search still covers your full account.");
+            }
+            if !facets.warning.is_empty() {
+                ui.label(&facets.warning);
+            }
+        }
+        if self.filters != before {
+            self.run_search(&ui.ctx().clone(), false);
+        }
+    }
+    fn run_search(&mut self, ctx: &egui::Context, record: bool) {
+        self.model.detail = None;
+        self.previous_shelves.clear();
+        self.model.rows.clear();
+        self.search_results = SearchResults::default();
+        let Some(session) = self.model.session.clone() else {
+            return;
+        };
+        let filters = self.filters.clone();
+        let query = self.query.clone();
+        let needs_facets = self.facets.is_none();
+        let generation = self.home.history_generation.filter(|_| record);
+        self.launch(ctx, async move {
+            let choices = async {
+                if needs_facets {
+                    catalog::facets(&session).await.map(Some)
+                } else {
+                    Ok(None)
                 }
-                ui.small(&item.kind);
-                if self.model.section == Section::Guide {
-                    if let Some(channel) = &item.channel_name {
-                        ui.label(channel);
-                    }
-                    if let Some(start) = &item.start_date {
-                        ui.small(start);
-                    }
-                    if let Some(end) = &item.end_date {
-                        ui.small(format!("to {end}"));
-                    }
+            };
+            let signal = async {
+                if let Some(generation) = generation {
+                    catalog::record_search(&session, generation, &query, None).await;
                 }
+            };
+            let (results, facets, ()) =
+                futures_util::join!(catalog::search(&session, &query, &filters), choices, signal);
+            Ok(Outcome::Search(results?, facets?))
+        });
+    }
+    fn load_more(&mut self, ctx: &egui::Context, lane: Option<usize>) {
+        if self.pending.is_some() {
+            return;
+        }
+        let Some(session) = self.model.session.clone() else {
+            return;
+        };
+        if let Some(index) = lane {
+            let Some(shelf) = self
+                .search_results
+                .shelves
+                .get(index)
+                .filter(|shelf| shelf.page.more())
+            else {
+                return;
+            };
+            let request = shelf.request.clone();
+            let start = shelf.page.next;
+            self.launch(ctx, async move {
+                catalog::page(&session, &request, start)
+                    .await
+                    .map(|page| Outcome::SearchMore(index, page))
             });
+        } else if self.page.more()
+            && let Some(request) = self.catalog_request.clone()
+        {
+            let start = self.page.next;
+            self.launch(ctx, async move {
+                catalog::page(&session, &request, start)
+                    .await
+                    .map(|page| Outcome::Rows(page, true))
+            });
+        }
     }
     fn cancel(&mut self) {
         if let Some(handle) = self.pending.take() {
@@ -259,11 +607,24 @@ impl Bluefin {
         let old_session = self.model.session.clone();
         self.cancel();
         self.model.clear();
+        self.artwork.clear();
+        self.home = Home::default();
+        self.filters = SearchFilters::default();
+        self.facets = None;
+        self.search_results = SearchResults::default();
+        self.page = Page::default();
+        self.catalog_request = None;
+        self.previous_shelves.clear();
         self.password.clear();
         self.connected_server = None;
         self.device_sign_in = None;
         #[cfg(target_arch = "wasm32")]
-        { self.mesh_code.clear(); self.mesh_name.clear(); self.mesh_step = None; self.mesh_invite = None; }
+        {
+            self.mesh_code.clear();
+            self.mesh_name.clear();
+            self.mesh_step = None;
+            self.mesh_invite = None;
+        }
         self.query.clear();
         self.discovery = None;
         self.form = None;
@@ -290,9 +651,15 @@ impl Bluefin {
     }
     fn connect_server(&mut self, ctx: &egui::Context) {
         let address = self.server.trim();
-        let preferred = if address.contains("://") { address.to_owned() } else { format!("https://{address}") };
+        let preferred = if address.contains("://") {
+            address.to_owned()
+        } else {
+            format!("https://{address}")
+        };
         match protocol::server(&preferred) {
-            Ok(base) => self.launch(ctx, async move { protocol::connect(base).await.map(Outcome::Connected) }),
+            Ok(base) => self.launch(ctx, async move {
+                protocol::connect(base).await.map(Outcome::Connected)
+            }),
             Err(error) => self.error = error,
         }
     }
@@ -309,29 +676,51 @@ impl Bluefin {
     fn begin_mesh(&mut self, ctx: &egui::Context) {
         let code = self.mesh_code.clone();
         let name = self.mesh_name.clone();
-        self.launch_sign_in(ctx, async move { crate::mesh::begin(code, name, false).await.map(Self::mesh_result) });
+        self.launch_sign_in(ctx, async move {
+            crate::mesh::begin(code, name, false)
+                .await
+                .map(Self::mesh_result)
+        });
     }
     #[cfg(target_arch = "wasm32")]
     fn resume_mesh(&mut self, ctx: &egui::Context) {
-        self.launch_sign_in(ctx, async { crate::mesh::resume().await.map(Self::mesh_result) });
+        self.launch_sign_in(ctx, async {
+            crate::mesh::resume().await.map(Self::mesh_result)
+        });
     }
     #[cfg(target_arch = "wasm32")]
     fn proceed_mesh(&mut self, ctx: &egui::Context) {
-        self.launch_sign_in(ctx, async { crate::mesh::proceed().await.map(Self::mesh_result) });
+        self.launch_sign_in(ctx, async {
+            crate::mesh::proceed().await.map(Self::mesh_result)
+        });
     }
     #[cfg(target_arch = "wasm32")]
     fn issue_mesh_invite(&mut self, ctx: &egui::Context) {
         self.mesh_invite = None;
-        self.call(ctx, "meshInvite", "POST", "Bluefin/Accounts/Mesh/Invite".into(), vec![],
-            Some(serde_json::json!({"intent":"login","lifetimeSeconds":600})));
+        self.call(
+            ctx,
+            "meshInvite",
+            "POST",
+            "Bluefin/Accounts/Mesh/Invite".into(),
+            vec![],
+            Some(serde_json::json!({"intent":"login","lifetimeSeconds":600})),
+        );
     }
     #[cfg(target_arch = "wasm32")]
     fn copy_mesh_invite(&mut self, ctx: &egui::Context, link: bool) {
-        let Some(invite) = self.mesh_invite.as_ref().filter(|invite| invite.current()) else { return };
-        let value = if link { invite.link.clone() } else { invite.code.clone() };
+        let Some(invite) = self.mesh_invite.as_ref().filter(|invite| invite.current()) else {
+            return;
+        };
+        let value = if link {
+            invite.link.clone()
+        } else {
+            invite.code.clone()
+        };
         self.launch(ctx, async move {
-            crate::mesh::copy_code(&value).await.map_err(|_| "Copy was not allowed. Select and copy the code below.".to_string())?;
-            Ok(Outcome::Data("meshCopied",Value::Null))
+            crate::mesh::copy_code(&value)
+                .await
+                .map_err(|_| "Copy was not allowed. Select and copy the code below.".to_string())?;
+            Ok(Outcome::Data("meshCopied", Value::Null))
         });
     }
     #[cfg(target_arch = "wasm32")]
@@ -355,37 +744,62 @@ impl Bluefin {
     }
 
     fn submit_account(&mut self, ctx: &egui::Context, create: bool) {
-        let Some(server) = &self.connected_server else { return };
-        if create && (!server.options.allow_signups || self.password.chars().count() < 15) { return; }
+        let Some(server) = &self.connected_server else {
+            return;
+        };
+        if create && (!server.options.allow_signups || self.password.chars().count() < 15) {
+            return;
+        }
         let base = server.base.clone();
         let name = self.name.trim().to_owned();
         let password = std::mem::take(&mut self.password);
         self.launch_sign_in(ctx, async move {
-            if create { protocol::signup(base, name, password).await.map(Outcome::Login) }
-            else { protocol::login(base, name, password).await.map(Outcome::Login) }
+            if create {
+                protocol::signup(base, name, password)
+                    .await
+                    .map(Outcome::Login)
+            } else {
+                protocol::login(base, name, password)
+                    .await
+                    .map(Outcome::Login)
+            }
         });
     }
 
     fn begin_device_sign_in(&mut self, ctx: &egui::Context, passkey: bool) {
-        let Some(server) = &self.connected_server else { return };
-        if (passkey && !server.options.passkeys) || (!passkey && !server.options.quick_connect) { return; }
+        let Some(server) = &self.connected_server else {
+            return;
+        };
+        if (passkey && !server.options.passkeys) || (!passkey && !server.options.quick_connect) {
+            return;
+        }
         let base = server.base.clone();
         self.launch(ctx, async move {
-            protocol::begin_device_sign_in(base, passkey).await.map(Outcome::DeviceSignIn)
+            protocol::begin_device_sign_in(base, passkey)
+                .await
+                .map(Outcome::DeviceSignIn)
         });
     }
 
     fn finish_device_sign_in(&mut self, ctx: &egui::Context) {
         if let Some(request) = self.device_sign_in.clone() {
             self.launch_sign_in(ctx, async move {
-                request.finish().await.map(|session| session.map_or(Outcome::Waiting, Outcome::Login))
+                request
+                    .finish()
+                    .await
+                    .map(|session| session.map_or(Outcome::Waiting, Outcome::Login))
             });
         }
     }
 
     fn cancel_device_sign_in(&mut self, ctx: &egui::Context) {
         if let Some(request) = self.device_sign_in.take() {
-            self.launch(ctx, async move { request.cancel().await.map(|()| Outcome::Data("accountCancel", Value::Null)) });
+            self.launch(ctx, async move {
+                request
+                    .cancel()
+                    .await
+                    .map(|()| Outcome::Data("accountCancel", Value::Null))
+            });
         }
     }
 
@@ -451,11 +865,14 @@ impl Bluefin {
             self.cancel();
             self.model.rows = previous.rows;
             self.model.detail = previous.detail;
+            self.page = previous.page;
+            self.catalog_request = previous.request;
         }
     }
 
     fn browse(&mut self, ctx: &egui::Context, parent: Option<Item>) {
         self.cancel();
+        self.artwork.cancel_pending();
         if parent.is_some() {
             if self.previous_shelves.len() == 16 {
                 self.previous_shelves.remove(0);
@@ -463,11 +880,15 @@ impl Bluefin {
             self.previous_shelves.push(PreviousShelf {
                 rows: std::mem::take(&mut self.model.rows),
                 detail: self.model.detail.take(),
+                page: std::mem::take(&mut self.page),
+                request: self.catalog_request.take(),
             });
         } else {
             self.previous_shelves.clear();
             self.model.detail = None;
             self.model.rows.clear();
+            self.page = Page::default();
+            self.catalog_request = None;
         }
         if self.model.fixture {
             self.model.rows = if parent.is_some() {
@@ -480,6 +901,7 @@ impl Bluefin {
                     end_date: None,
                     channel_name: None,
                     channel_id: None,
+                    ..Default::default()
                 }]
             } else {
                 self.model.fixture_rows()
@@ -521,47 +943,84 @@ impl Bluefin {
             );
             return;
         }
-        let mut query = vec![
-            ("Limit", "100".into()),
-            ("Fields", "Overview".into()),
-            ("Recursive", "true".into()),
-        ];
-        if !self.query.is_empty() {
-            query.push(("SearchTerm", self.query.clone()));
+        let Some(session) = self.model.session.clone() else {
+            return;
+        };
+        if parent.is_none() {
+            match self.model.section {
+                Section::Home => {
+                    self.launch(ctx, async move {
+                        catalog::home(&session).await.map(Outcome::Home)
+                    });
+                    return;
+                }
+                Section::Search => {
+                    self.run_search(ctx, false);
+                    return;
+                }
+                Section::Account => return,
+                Section::Sports => {
+                    self.launch(ctx, async move {
+                        catalog::sports(&session)
+                            .await
+                            .map(|page| Outcome::Rows(page, false))
+                    });
+                    return;
+                }
+                _ => {}
+            }
         }
-        let path = if self.model.section == Section::Guide {
+        let request = if let Some(item) = parent {
+            Request::children(session.user, &item)
+        } else if self.model.section == Section::Guide {
             if !self
                 .model
                 .capabilities
                 .as_ref()
-                .is_some_and(|c| c.viewer.live_tv_access)
+                .is_some_and(|caps| caps.viewer.live_tv_access)
             {
                 self.error = "Live TV is not permitted for this account".into();
                 return;
             }
-            "LiveTv/Programs".to_owned()
-        } else {
-            if let Some(item) = parent {
-                query.push(("ParentId", item.id.to_string()));
-                query.push((
-                    "IncludeItemTypes",
-                    if item.kind == "Series" {
-                        "Episode"
-                    } else {
-                        "Audio"
-                    }
-                    .into(),
-                ));
-            } else {
-                query.push(("IncludeItemTypes", self.model.section.kind().into()));
+            Request {
+                path: "LiveTv/Programs".into(),
+                query: vec![
+                    ("UserId", session.user.to_string()),
+                    ("Fields", "Overview,RunTimeTicks".into()),
+                ],
             }
-            format!("Users/{}/Items", self.model.session.as_ref().unwrap().user)
+        } else if self.model.section == Section::Collections {
+            Request {
+                path: format!("Users/{}/Views", session.user),
+                query: vec![],
+            }
+        } else {
+            Request::items(session.user, self.model.section.kind(), None)
         };
-        self.call(ctx, "rows", "GET", path, query, None);
+        self.catalog_request = Some(request.clone());
+        self.launch(ctx, async move {
+            catalog::page(&session, &request, 0)
+                .await
+                .map(|page| Outcome::Rows(page, false))
+        });
     }
+
     fn apply(&mut self, tag: &str, value: Value) -> Result<(), String> {
         match tag {
-            "accountCancel" => {},
+            "accountCancel" => {}
+            "historyClear" => {
+                let generation = value["generation"]
+                    .as_u64()
+                    .ok_or("Invalid history revision")?;
+                self.home.history_generation = Some(generation);
+                self.home.shelves.retain(|shelf| shelf.reason != "search");
+                self.home.featured = self
+                    .home
+                    .shelves
+                    .iter()
+                    .find_map(|shelf| shelf.items.first())
+                    .cloned();
+            }
             "capabilities" => {
                 let c: Capabilities =
                     serde_json::from_value(value).map_err(|_| "Invalid capabilities")?;
@@ -605,13 +1064,17 @@ impl Bluefin {
         Ok(())
     }
     fn play(&mut self, mut item: Item) {
-        if item.kind == "Program"
+        if matches!(item.kind.as_str(), "Program" | "LiveTvProgram")
             && let Some(channel) = item.channel_id
         {
             item.id = channel;
             item.kind = "TvChannel".into();
         }
-        self.play_selected(item, Selection::default(), None);
+        let mut selection = Selection::default();
+        if let Some(data) = &item.user_data {
+            selection.position = data.playback_position_ticks as f64 / 10_000_000.0;
+        }
+        self.play_selected(item, selection, None);
     }
     fn play_selected(&mut self, item: Item, selection: Selection, queue_index: Option<usize>) {
         if !self.model.fixture
@@ -650,11 +1113,23 @@ impl Bluefin {
     fn poll(&mut self, ctx: &egui::Context) {
         #[cfg(target_arch = "wasm32")]
         if let Some(invite) = &self.mesh_invite {
-            if !invite.current() { self.mesh_invite = None; }
-            else if self.pending.is_none() && mesh_connect::browser::now_ms().unwrap_or(0) >= self.mesh_invite_check {
+            if !invite.current() {
+                self.mesh_invite = None;
+            } else if self.pending.is_none()
+                && mesh_connect::browser::now_ms().unwrap_or(0) >= self.mesh_invite_check
+            {
                 let handle = invite.handle.clone();
-                self.mesh_invite_check = mesh_connect::browser::now_ms().unwrap_or(0).saturating_add(3000);
-                self.call(ctx,"meshInviteStatus","GET",format!("Bluefin/Accounts/Mesh/Invites/{handle}"),vec![],None);
+                self.mesh_invite_check = mesh_connect::browser::now_ms()
+                    .unwrap_or(0)
+                    .saturating_add(3000);
+                self.call(
+                    ctx,
+                    "meshInviteStatus",
+                    "GET",
+                    format!("Bluefin/Accounts/Mesh/Invites/{handle}"),
+                    vec![],
+                    None,
+                );
             }
         }
         while let Ok((epoch, result)) = self.rx.try_recv() {
@@ -668,17 +1143,25 @@ impl Bluefin {
             match result {
                 #[cfg(target_arch = "wasm32")]
                 Ok(Outcome::MeshStep(step)) => {
-                    self.mesh_step = Some(step); self.mesh_code.clear(); self.connected_server = None;
+                    self.mesh_step = Some(step);
+                    self.mesh_code.clear();
+                    self.connected_server = None;
                 }
                 #[cfg(target_arch = "wasm32")]
-                Ok(Outcome::MeshEmpty) => { self.mesh_step = None; self.error = "No saved browser connection.".into(); }
+                Ok(Outcome::MeshEmpty) => {
+                    self.mesh_step = None;
+                    self.error = "No saved browser connection.".into();
+                }
                 Ok(Outcome::Connected(server)) => self.connected_server = Some(server),
                 Ok(Outcome::DeviceSignIn(request)) => self.device_sign_in = Some(request),
                 Ok(Outcome::Waiting) => self.error = "Finish approving the request first.".into(),
                 Ok(Outcome::Login(s)) => {
                     self.device_sign_in = None;
                     #[cfg(target_arch = "wasm32")]
-                    { self.mesh_step = None; self.mesh_code.clear(); }
+                    {
+                        self.mesh_step = None;
+                        self.mesh_code.clear();
+                    }
                     self.model.session = Some(s);
                     self.call(
                         ctx,
@@ -690,23 +1173,71 @@ impl Bluefin {
                     );
                 }
                 #[cfg(target_arch = "wasm32")]
-                Ok(Outcome::Data("meshInvite", value)) => match crate::mesh::IssuedInvite::from_response(value) {
-                    Ok(invite) => {
-                        self.mesh_invite = Some(invite);
-                        self.mesh_invite_check = mesh_connect::browser::now_ms().unwrap_or(0).saturating_add(3000);
+                Ok(Outcome::Data("meshInvite", value)) => {
+                    match crate::mesh::IssuedInvite::from_response(value) {
+                        Ok(invite) => {
+                            self.mesh_invite = Some(invite);
+                            self.mesh_invite_check = mesh_connect::browser::now_ms()
+                                .unwrap_or(0)
+                                .saturating_add(3000);
+                        }
+                        Err(error) => self.error = error,
                     }
-                    Err(error) => self.error = error,
-                },
+                }
                 #[cfg(target_arch = "wasm32")]
                 Ok(Outcome::Data("meshInviteStatus", value)) => {
-                    if value["state"] != "issued" { self.mesh_invite = None; }
-                    self.mesh_invite_check = mesh_connect::browser::now_ms().unwrap_or(0).saturating_add(3000);
+                    if value["state"] != "issued" {
+                        self.mesh_invite = None;
+                    }
+                    self.mesh_invite_check = mesh_connect::browser::now_ms()
+                        .unwrap_or(0)
+                        .saturating_add(3000);
                 }
                 #[cfg(target_arch = "wasm32")]
                 Ok(Outcome::Data("meshCopied", _)) => self.error = "Copied.".into(),
                 #[cfg(target_arch = "wasm32")]
                 Ok(Outcome::Data("meshImage", Value::String(code))) => {
-                    self.mesh_code = code; self.error = "QR image read. Continue to connect.".into();
+                    self.mesh_code = code;
+                    self.error = "QR image read. Continue to connect.".into();
+                }
+                Ok(Outcome::Home(home)) => {
+                    self.model.rows = home
+                        .shelves
+                        .iter()
+                        .flat_map(|shelf| shelf.items.clone())
+                        .collect();
+                    self.error = home.warning.clone();
+                    self.home = home;
+                }
+                Ok(Outcome::Rows(page, append)) => {
+                    if append {
+                        self.page.append(page);
+                    } else {
+                        self.page = page;
+                    }
+                    self.model.rows = self.page.items.clone();
+                }
+                Ok(Outcome::Search(results, facets)) => {
+                    self.model.rows = results
+                        .shelves
+                        .iter()
+                        .flat_map(|shelf| shelf.page.items.clone())
+                        .collect();
+                    self.search_results = results;
+                    if let Some(facets) = facets {
+                        self.facets = Some(facets);
+                    }
+                }
+                Ok(Outcome::SearchMore(index, page)) => {
+                    if let Some(shelf) = self.search_results.shelves.get_mut(index) {
+                        shelf.page.append(page);
+                    }
+                    self.model.rows = self
+                        .search_results
+                        .shelves
+                        .iter()
+                        .flat_map(|shelf| shelf.page.items.clone())
+                        .collect();
                 }
                 Ok(Outcome::Data(tag, v)) => match self.apply(tag, v) {
                     Err(e) => self.error = e,
@@ -744,6 +1275,16 @@ impl Bluefin {
                     self.error = e;
                 }
             }
+        }
+        if self.model.session.is_some() && !self.model.fixture {
+            if self.model.section == Section::Home
+                && let Some(item) = &self.home.featured
+            {
+                self.artwork.request(item.id, true);
+            }
+            #[cfg(target_arch = "wasm32")]
+            self.artwork.request_visible();
+            self.artwork.poll(ctx, self.model.session.as_ref());
         }
     }
     fn playback_ui(&mut self, ui: &mut egui::Ui) {
@@ -911,21 +1452,11 @@ impl eframe::App for Bluefin {
             )
             .show(ctx, |ui| {
                 if !wide {
-                    ui.label(
-                        egui::RichText::new("Bluefin")
-                            .size(24.0)
-                            .strong()
-                            .color(ui.visuals().hyperlink_color),
-                    );
+                    self.brand(ui);
                 }
                 ui.horizontal_wrapped(|ui| {
                     if wide {
-                        ui.label(
-                            egui::RichText::new("Bluefin")
-                                .size(24.0)
-                                .strong()
-                                .color(ui.visuals().hyperlink_color),
-                        );
+                        self.brand(ui);
                     }
                     ui.small(if self.model.fixture {
                         "Original synthetic fixtures"
@@ -1057,21 +1588,29 @@ impl eframe::App for Bluefin {
                 if !wide { self.navigation(ui, true); ui.add_space(12.0); }
                 ui.add_space(12.0);
                 ui.heading(Self::section_title(self.model.section));
-                ui.label(match self.model.section { Section::Movies => "Films in your library", Section::Shows => "Series and episodes", Section::Music => "Albums and tracks", Section::Guide => "Your live channels and program guide", Section::Queue => "Your music, up next", Section::Discovery => "Search your server’s discovery catalog" });
+                ui.label(match self.model.section { Section::Home=>"Picked from your account, progress and preferences",Section::Sports=>"Your sports and local broadcasts",Section::Movies=>"Films in your library",Section::Shows=>"Series and episodes",Section::Music=>"Albums, artists and tracks",Section::Guide=>"Your live channels and program guide",Section::Search=>"Search all media in your account",Section::Collections=>"Your libraries and custom groups",Section::Account=>"Your account and connected library",Section::Queue=>"Your music, up next",Section::Discovery=>"Search your server’s discovery catalog" });
                 ui.add_space(12.0);
-                ui.horizontal(|ui|{let response=ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("Search this library").min_size(egui::vec2(0.0,44.0)).desired_width((ui.available_width()-110.0).max(40.0)));
-if ui.button("Search").clicked()||(response.lost_focus()&&ui.input(|i|i.key_pressed(egui::Key::Enter))){self.browse(ctx,None);}});
+                if matches!(self.model.section,Section::Search|Section::Discovery) {
+                    ui.horizontal(|ui| { let response=ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("Title, artist or keyword").min_size(egui::vec2(0.0,44.0)).desired_width((ui.available_width()-90.0).max(40.0)));
+                        if ui.button("Search").clicked() || (response.lost_focus() && ui.input(|i|i.key_pressed(egui::Key::Enter))) { if self.model.section==Section::Search {self.run_search(ctx,true);}else{self.browse(ctx,None);} }
+                    });
+                    if self.model.section==Section::Search { self.search_controls(ui); }
+                }
                 #[cfg(not(target_arch="wasm32"))]
-                ui.collapsing("Advanced playback settings",|ui|{ui.label("HTTPS by default. Optional direct Iroh requires a verified pinned endpoint and address. Failure does not silently switch routes.");ui.label("Pinned Iroh endpoint ID");ui.text_edit_singleline(&mut self.peer_id);ui.label("Verified numeric address");ui.text_edit_singleline(&mut self.peer_address);
-if ui.button("Stop playback").clicked()&& let Some(s)=&self.playback{s.send(PlaybackCommand::Stop);}});
+                if self.model.section==Section::Account { ui.collapsing("Advanced playback settings",|ui|{ui.label("HTTPS by default. Optional direct Iroh requires a verified pinned endpoint and address. Failure does not silently switch routes.");ui.label("Pinned Iroh endpoint ID");ui.text_edit_singleline(&mut self.peer_id);ui.label("Verified numeric address");ui.text_edit_singleline(&mut self.peer_address);
+if ui.button("Stop playback").clicked()&& let Some(s)=&self.playback{s.send(PlaybackCommand::Stop);}}); }
                 #[cfg(target_arch="wasm32")]
-                ui.collapsing("Advanced playback settings", |ui| { ui.small(if self.model.fixture {"Browser transport: loopback synthetic fixtures"} else {"Browser transport: authenticated HTTPS. This client has no browser Iroh adapter."}); });
+                if self.model.section==Section::Account { ui.collapsing("Connection", |ui| { ui.small(if self.model.fixture {"Original fixture account"} else {"Your account uses its authenticated server connection."}); }); }
                 ui.add_space(16.0);ui.vertical(|ui|{
-                    if self.model.section==Section::Queue{
+                    if self.model.section==Section::Account {
+                        ui.horizontal_wrapped(|ui| { if ui.button("Music queue").clicked() {self.open_section(ctx,Section::Queue);}if ui.button("Discover").clicked(){self.open_section(ctx,Section::Discovery);} });
+                        ui.heading("Home personalization");ui.label("Viewing progress and favorites shape Home on your account's server.");
+                        if let Some(generation)=self.home.history_generation { ui.label("Submitted searches and selected results also help. History stays with this account.");if ui.add_enabled(self.pending.is_none(),egui::Button::new("Clear search history")).clicked(){self.call(ctx,"historyClear","DELETE","Bluefin/Home/Searches".into(),vec![],Some(serde_json::json!({"generation":generation})));} }
+                    }else if self.model.section==Section::Queue{
                         ui.label(format!("Revision {} · {} tracks",self.model.queue.revision,self.model.queue.queue.item_ids.len()));
                         for (index,id) in self.model.queue.queue.item_ids.clone().iter().enumerate(){ui.horizontal_wrapped(|ui|{ui.label(format!("{}  {}",index+1,id));
 if ui.button("Remove").clicked(){self.model.queue.queue.item_ids.remove(index);self.model.queue.queue.cursor=None;self.model.queue_dirty=true;}
-if ui.button("Play").clicked(){self.play_selected(Item{id:*id,name:"Queued track".into(),kind:"Audio".into(),overview:String::new(),start_date:None,end_date:None,channel_name:None,channel_id:None},Selection::default(),Some(index));}});}
+if ui.button("Play").clicked(){self.play_selected(Item{id:*id,name:"Queued track".into(),kind:"Audio".into(),overview:String::new(),start_date:None,end_date:None,channel_name:None,channel_id:None,..Default::default()},Selection::default(),Some(index));}});}
                         if ui.checkbox(&mut self.model.queue.queue.shuffle,"Shuffle").changed(){self.model.queue_dirty=true;}
                         egui::ComboBox::from_label("Repeat").selected_text(format!("{:?}",self.model.queue.queue.repeat)).show_ui(ui,|ui|{for mode in [bluefin_contract::RepeatMode::Off,bluefin_contract::RepeatMode::All,bluefin_contract::RepeatMode::One]{if ui.selectable_value(&mut self.model.queue.queue.repeat,mode,format!("{mode:?}")).changed(){self.model.queue_dirty=true;}}});
                         if ui.add_enabled(self.pending.is_none()&&self.model.capabilities.as_ref().is_some_and(|c|c.music_queue_sync),egui::Button::new("Save queue to account")).clicked(){let update=UpdateMusicQueue{protocol_version:PROTOCOL_VERSION,expected_revision:self.model.queue.revision,queue:self.model.queue.queue.clone()};self.call(ctx,"queue","PUT","Bluefin/Music/Queue".into(),vec![],Some(serde_json::to_value(update).unwrap()));}
@@ -1090,25 +1629,18 @@ if ui.add_enabled(self.pending.is_none()&&self.confirmed&&(!form.requires_select
                                 ui.horizontal_wrapped(|ui| {
                                     if item.playable(){if ui.button("Play").clicked(){self.play(item.clone());}
                                     if item.kind=="Audio"&&ui.button("Add to queue").clicked()&& let Err(e)=self.model.enqueue(&item){self.error=e;}}
-                                    if matches!(item.kind.as_str(),"Series"|"MusicAlbum")&&ui.button("Browse episodes / tracks").clicked(){self.browse(ctx,Some(item.clone()));}
+                                    if item.folder()&&ui.button("Browse collection").clicked(){self.browse(ctx,Some(item.clone()));}
                                     if ui.button("Back").clicked(){self.back_to_shelf();}
                                 });
                             });ui.add_space(16.0);
                         }
-                        let rows = self.model.rows.clone();
-                        let tiled = ui.available_width() >= 520.0 && self.model.section != Section::Guide;
-                        if tiled {
-                            let columns = ((ui.available_width() / 220.0) as usize).clamp(2, 5);
-                            for row in rows.chunks(columns) {
-                                ui.columns(columns, |uis| {
-                                    for (item, column) in row.iter().zip(uis.iter_mut()) { self.catalog_item(column, item, true); }
-                                });
-                                ui.add_space(12.0);
-                            }
-                        } else {
-                            for item in &rows { self.catalog_item(ui, item, false); ui.add_space(8.0); }
-                        }
-                        if self.model.rows.is_empty()&&self.pending.is_none(){ui.label("No items to show. Search to load this view or try a different search.");}
+                        if self.model.section==Section::Home && self.previous_shelves.is_empty() && self.model.detail.is_none() && !self.home.shelves.is_empty() {
+                            if let Some(item)=self.home.featured.clone() {self.featured(ui,&item);ui.add_space(20.0);}
+                            for shelf in self.home.shelves.clone() {ui.heading(&shelf.title);ui.add_space(8.0);self.media_grid(ui,&shelf.items);ui.add_space(20.0);}
+                        } else if self.model.section==Section::Search && self.previous_shelves.is_empty() && self.model.detail.is_none() {
+                            for (index,shelf) in self.search_results.shelves.clone().into_iter().enumerate() {ui.heading(shelf.lane.title());self.media_grid(ui,&shelf.page.items);if !shelf.warning.is_empty(){ui.label(&shelf.warning);}if shelf.page.more() && ui.add_enabled(self.pending.is_none(),egui::Button::new("Load more")).clicked(){self.load_more(ctx,Some(index));}ui.add_space(16.0);}
+                        } else {let rows=self.model.rows.clone();self.media_grid(ui,&rows);if self.page.more() && ui.add_enabled(self.pending.is_none(),egui::Button::new("Load more")).clicked(){self.load_more(ctx,None);} }
+                        if self.model.rows.is_empty()&&self.pending.is_none(){ui.label(if self.model.section==Section::Search && self.query.is_empty(){"Enter a title, artist or keyword, or choose a refinement."}else{"No media to show for this account and view."});}
                     }
                 });
             }
@@ -1181,7 +1713,7 @@ mod layout_tests {
         result
     }
     #[test]
-    fn short_sidebar_keyboard_focus_reveals_and_activates_discover() {
+    fn short_sidebar_keyboard_focus_reveals_and_activates_account() {
         for (width, height) in [(1280.0, 320.0), (760.0, 320.0), (1280.0, 220.0)] {
             let ctx = egui::Context::default();
             let mut app = Bluefin::default();
@@ -1196,7 +1728,7 @@ mod layout_tests {
                 repeat: false,
                 modifiers: egui::Modifiers::NONE,
             };
-            let mut reached_discover = false;
+            let mut reached_account = false;
             for _ in 0..16 {
                 let _ = frame_at(
                     &mut app,
@@ -1225,14 +1757,14 @@ mod layout_tests {
                     .filter(|(_, rect)| response.rect.contains(rect.center()))
                     .map(|(label, _)| label)
                     .collect();
-                if names.iter().any(|name| name == "Discover") {
-                    reached_discover = true;
+                if names.iter().any(|name| name == "Account") {
+                    reached_account = true;
                     break;
                 }
             }
             assert!(
-                reached_discover,
-                "keyboard never revealed Discover at {width}x{height}"
+                reached_account,
+                "keyboard never revealed Account at {width}x{height}"
             );
             let focused = ctx.memory(|m| m.focused()).expect("keyboard focus lost");
             let response = ctx
@@ -1261,13 +1793,13 @@ mod layout_tests {
                 vec![key(egui::Key::Enter, false)],
             );
             assert!(
-                app.model.section == Section::Discovery,
-                "keyboard did not activate Discover"
+                app.model.section == Section::Account,
+                "keyboard did not activate Account"
             );
         }
     }
     #[test]
-    fn short_desktop_sidebar_scroll_exposes_and_activates_discover() {
+    fn short_desktop_sidebar_scroll_exposes_and_activates_account() {
         for (width, height) in [
             (1280.0, 400.0),
             (760.0, 400.0),
@@ -1299,8 +1831,8 @@ mod layout_tests {
             }
             let rect = labels(&output)
                 .into_iter()
-                .find(|(text, _)| text == "Discover")
-                .unwrap_or_else(|| panic!("Discover is unreachable at {width}x{height}"))
+                .find(|(text, _)| text == "Account")
+                .unwrap_or_else(|| panic!("Account is unreachable at {width}x{height}"))
                 .1;
             assert!(
                 rect.top() >= 0.0 && rect.bottom() <= height,
@@ -1322,8 +1854,8 @@ mod layout_tests {
             );
             let _ = frame_at(&mut app, &ctx, width, height, vec![click(false)]);
             assert!(
-                app.model.section == Section::Discovery,
-                "Discover did not activate at {width}x{height}"
+                app.model.section == Section::Account,
+                "Account did not activate at {width}x{height}"
             );
         }
     }
@@ -1349,15 +1881,22 @@ mod layout_tests {
                 }
                 for required in if connected {
                     vec![
-                        "Movies", "Shows", "Music", "Live TV", "Queue", "Discover", "Search",
+                        "Home",
+                        "Sports",
+                        "TV Shows",
+                        "Movies",
+                        "Live TV",
+                        "Music",
+                        "Search",
+                        "Collections",
+                        "Account",
                         "Sign out",
                     ]
                 } else {
                     vec![
-                        "HTTPS server",
-                        "Username",
-                        "Password",
-                        "Sign in",
+                        "Connect to your server",
+                        "Server address",
+                        "Continue",
                         "Explore original fixtures",
                     ]
                 } {
