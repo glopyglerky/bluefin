@@ -9,42 +9,72 @@ import UIKit
 /// Presentation state only. Rust validates the invitation, target, passkey
 /// continuation, and device proof. Every network effect has saved retry data.
 @MainActor final class MeshPairingModel: ObservableObject {
+    // All windows and invitation entry points share the one protected pending
+    // slot. A dismissed view cannot release ownership while its FFI is running.
+    static let shared = MeshPairingModel { text in
+        let preview: MeshInvitePreview = try await RustBridge.call("meshInviteDecode", fields: ["code": text])
+        return preview
+    }
+    private let decodeInvitation: @MainActor (String) async throws -> MeshInvitePreview
+    init(decodeInvitation: @escaping @MainActor (String) async throws -> MeshInvitePreview) {
+        self.decodeInvitation = decodeInvitation
+    }
+
     @Published private(set) var pending: MeshPending?
     @Published private(set) var preview: MeshInvitePreview?
     @Published private(set) var browserURL: URL?
     @Published private(set) var busy = false
-    @Published var problem: String?
+    @Published private(set) var problem: String?
+    @Published private(set) var presentationOwner: UUID?
+    private var presentationAttached = false
     private var work: Task<Void, Never>?
-    private var lifetime = UUID()
     #if !os(tvOS)
     private let browser = MeshPasskeyBrowser()
     #endif
 
-    func restore() {
-        guard !busy else { return }
+    func ownsPresentation(_ owner: UUID) -> Bool {
+        presentationOwner == owner && presentationAttached
+    }
+
+    func claimPresentation(_ owner: UUID) -> Bool {
+        if ownsPresentation(owner) { return true }
+        guard presentationOwner == nil, !busy else { return false }
+        presentationAttached = true
+        presentationOwner = owner
+        return true
+    }
+
+    func reportProblem(_ message: String, owner: UUID) {
+        guard ownsPresentation(owner) else { return }
+        problem = message
+    }
+
+    func restore(owner: UUID) {
+        guard ownsPresentation(owner), !busy else { return }
         do { pending = try MeshPendingVault.load() }
         catch { problem = error.localizedDescription }
     }
 
-    func decode(_ text: String) {
-        start {
-            let value: MeshInvitePreview = try await RustBridge.call("meshInviteDecode", fields: ["code": text])
+    @discardableResult
+    func decode(_ text: String, owner: UUID) -> Task<Void, Never>? {
+        start(owner: owner) {
+            let value = try await self.decodeInvitation(text)
             try Task.checkCancellation()
             self.preview = value
         }
     }
 
-    func decodeImage(_ bytes: Data) {
-        start {
+    func decodeImage(_ bytes: Data, owner: UUID) {
+        start(owner: owner) {
             let value = try await RustBridge.decodeMeshImage(bytes)
             try Task.checkCancellation()
             self.preview = value
         }
     }
 
-    func begin(accountName: String) {
-        guard let preview, pending == nil else { return }
-        start {
+    func begin(accountName: String, owner: UUID) {
+        guard ownsPresentation(owner), let preview, pending == nil else { return }
+        start(owner: owner) {
             let identity: MeshIdentity = try await RustBridge.call("meshIdentityCreate")
             try Task.checkCancellation()
             let name = accountName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -56,8 +86,8 @@ import UIKit
         }
     }
 
-    func resume() {
-        start {
+    func resume(owner: UUID) {
+        start(owner: owner) {
             if self.pending?.discardRequested == true { try await self.discardSavedRequest(); return }
             if self.pending?.begin == nil { try await self.obtainChallenge() }
             else if self.pending?.completion == nil { try await self.prepareBrowser() }
@@ -106,8 +136,8 @@ import UIKit
     }
 
     #if !os(tvOS)
-    func authenticate(store: LibraryStore) {
-        start {
+    func authenticate(store: LibraryStore, owner: UUID) {
+        start(owner: owner) {
             try await self.prepareBrowser()
             guard let url = self.browserURL, let begin = self.pending?.begin else {
                 throw BluefinError.message("Resume the saved connection first.")
@@ -122,8 +152,8 @@ import UIKit
 
     /// This also recovers a browser response lost after successful verification.
     /// The callback is never authority; Finish requires the original device key.
-    func finishAfterApproval(store: LibraryStore) {
-        start { try await self.finish(store: store) }
+    func finishAfterApproval(store: LibraryStore, owner: UUID) {
+        start(owner: owner) { try await self.finish(store: store) }
     }
 
     private func finish(store: LibraryStore) async throws {
@@ -196,8 +226,8 @@ import UIKit
         pending = nil; preview = nil; browserURL = nil
     }
 
-    func discard() {
-        start { try await self.discardSavedRequest() }
+    func discard(owner: UUID) {
+        start(owner: owner) { try await self.discardSavedRequest() }
     }
 
     /// A sent Finish may have committed even when its reply was lost. Preserve
@@ -253,27 +283,38 @@ import UIKit
         Task { await MeshRevocationQueue.shared.retry() }
     }
 
-    private func start(_ operation: @escaping @MainActor () async throws -> Void) {
-        guard !busy else { return }
+    @discardableResult
+    private func start(owner: UUID, _ operation: @escaping @MainActor () async throws -> Void) -> Task<Void, Never>? {
+        guard ownsPresentation(owner), !busy else { return nil }
         busy = true; problem = nil
-        let current = lifetime
         work = Task {
             defer {
-                if lifetime == current { busy = false; work = nil }
+                busy = false; work = nil
+                if !presentationAttached {
+                    preview = nil; browserURL = nil; problem = nil
+                    presentationOwner = nil
+                }
             }
-            do { try await operation() }
+            do { try Task.checkCancellation(); try await operation() }
             catch is CancellationError {}
-            catch { if lifetime == current { problem = error.localizedDescription } }
+            catch { if ownsPresentation(owner) { problem = error.localizedDescription } }
         }
+        return work
     }
 
-    func cancel() {
+    func releasePresentation(_ owner: UUID) {
+        guard ownsPresentation(owner) else { return }
+        presentationAttached = false
         work?.cancel()
+        // Only the presenting window may clear its input or cancel its browser.
+        // Resumable device state stays in the protected pending slot.
+        preview = nil; browserURL = nil; problem = nil
         #if !os(tvOS)
         browser.cancel()
         #endif
-        // Keep the same lifetime until the physical FFI call returns. Starting a
-        // second Begin while the first is still running would race saved state.
+        // Cancellation cannot release an in-flight FFI operation. Its completion
+        // returns the claim; a second window must wait before touching saved state.
+        if !busy { presentationOwner = nil }
     }
 }
 
@@ -334,126 +375,151 @@ struct MeshBrowserLocation: Decodable, Sendable { let url: URL }
 struct MeshPairingView: View {
     @EnvironmentObject private var store: LibraryStore
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var model = MeshPairingModel()
+    @ObservedObject private var model = MeshPairingModel.shared
     @EnvironmentObject private var nearby: MeshNearbyBrowser
     @State private var code = ""
     @State private var accountName = ""
     @State private var importing = false
     @State private var camera = false
     @State private var photos = false
+    @State private var presentationID = UUID()
+    @State private var visible = false
     var initialCode: String? = nil
 
     var body: some View {
         BluefinNavigation {
             Form {
-                if let pending = model.pending {
-                    Section("Saved connection") {
-                        Text("This invitation is reserved for this device. You can resume without using the invitation again.")
-                        if pending.discardRequested == true {
-                            Button("Finish discarding connection") { model.discard() }.disabled(model.busy)
-                            Text("The protected request is retained until its server outcome can be checked.")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        } else if pending.begin == nil {
-                            Button("Resume connection") { model.resume() }.disabled(model.busy)
-                        } else if pending.completion != nil {
-                            Button("Open connected library") { model.finishAfterApproval(store: store) }.disabled(model.busy)
-                        } else if pending.signupHandle != nil {
-                            Button("Check approval") { model.finishAfterApproval(store: store) }.disabled(model.busy)
-                        } else {
-                            if let url = model.browserURL {
-                                MeshPasskeyCode(url: url)
-                                #if !os(tvOS)
-                                Button("Continue with passkey") { model.authenticate(store: store) }.disabled(model.busy)
-                                #endif
-                                Button("I've completed the passkey") { model.finishAfterApproval(store: store) }
-                                    .disabled(model.busy)
-                                Text("The passkey page approves only this device's pending connection.")
-                                    .font(.footnote).foregroundStyle(.secondary)
-                            } else {
-                                Button("Resume passkey") { model.resume() }.disabled(model.busy)
-                            }
-                        }
-                        if pending.discardRequested != true {
-                            Button("Discard saved request", role: .destructive) { model.discard() }.disabled(model.busy)
-                        }
-                        Text("Discarding does not make the old invitation reusable.").font(.footnote).foregroundStyle(.secondary)
+                if !model.ownsPresentation(presentationID) {
+                    Section {
+                        Text("A connection is open in another Bluefin window. Finish or close it to continue here.")
                     }
                 } else {
-                    Section("Connect with an invitation") {
-                        Text("Scan a Bluefin QR code, open an invitation image, or paste the full connection code.")
-                        TextField("Connection code", text: $code).bluefinAddressInput()
-                            .accessibilityIdentifier("meshConnectionCode")
-                        Button("Check code") { model.decode(code) }.disabled(model.busy || code.isEmpty)
-                        #if !os(tvOS)
-                        Button("Paste code") {
-                            if let value = UIPasteboard.general.string { code = value; model.decode(value) }
-                        }.disabled(model.busy)
-                        Button("Open QR image") { importing = true }.disabled(model.busy)
-                        #endif
-                        #if os(iOS) && !targetEnvironment(macCatalyst)
-                        Button("Scan QR code") { camera = true }.disabled(model.busy)
-                        Button("Choose photo or screenshot") { photos = true }.disabled(model.busy)
-                        #endif
-                    }
-                    if !nearby.servers.isEmpty {
-                        Section("Nearby Bluefin installations") {
-                            ForEach(nearby.servers) { server in Label(server.name, systemImage: "network") }
-                            Text("Use an invitation from the installation you want to connect. A nearby name alone does not verify its owner.")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }
-                    }
-                    if let preview = model.preview {
-                        Section("Ready to connect") {
-                            Text(preview.intent == "signup" ? "Request your own account" : "Connect to your existing account")
-                            Text("The invitation is used once. A passkey is required before this device receives access.")
-                            if preview.intent == "signup" {
-                                TextField("Your account name", text: $accountName).bluefinAddressInput()
+                    if let pending = model.pending {
+                        Section("Saved connection") {
+                            Text("This invitation is reserved for this device. You can resume without using the invitation again.")
+                            if pending.discardRequested == true {
+                                Button("Finish discarding connection") { model.discard(owner: presentationID) }.disabled(model.busy)
+                                Text("The protected request is retained until its server outcome can be checked.")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            } else if pending.begin == nil {
+                                Button("Resume connection") { model.resume(owner: presentationID) }.disabled(model.busy)
+                            } else if pending.completion != nil {
+                                Button("Open connected library") { model.finishAfterApproval(store: store, owner: presentationID) }.disabled(model.busy)
+                            } else if pending.signupHandle != nil {
+                                Button("Check approval") { model.finishAfterApproval(store: store, owner: presentationID) }.disabled(model.busy)
+                            } else {
+                                if let url = model.browserURL {
+                                    MeshPasskeyCode(url: url)
+                                    #if !os(tvOS)
+                                    Button("Continue with passkey") { model.authenticate(store: store, owner: presentationID) }.disabled(model.busy)
+                                    #endif
+                                    Button("I've completed the passkey") { model.finishAfterApproval(store: store, owner: presentationID) }
+                                        .disabled(model.busy)
+                                    Text("The passkey page approves only this device's pending connection.")
+                                        .font(.footnote).foregroundStyle(.secondary)
+                                } else {
+                                    Button("Resume passkey") { model.resume(owner: presentationID) }.disabled(model.busy)
+                                }
                             }
-                            Button("Connect securely") { code = ""; model.begin(accountName: accountName) }
-                                .disabled(model.busy || (preview.intent == "signup" && accountName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
-                                .accessibilityIdentifier("meshBegin")
+                            if pending.discardRequested != true {
+                                Button("Discard saved request", role: .destructive) { model.discard(owner: presentationID) }.disabled(model.busy)
+                            }
+                            Text("Discarding does not make the old invitation reusable.").font(.footnote).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Section("Connect with an invitation") {
+                            Text("Scan a Bluefin QR code, open an invitation image, or paste the full connection code.")
+                            TextField("Connection code", text: $code).bluefinAddressInput()
+                                .accessibilityIdentifier("meshConnectionCode")
+                            Button("Check code") { model.decode(code, owner: presentationID) }.disabled(model.busy || code.isEmpty)
+                            #if !os(tvOS)
+                            Button("Paste code") {
+                                if let value = UIPasteboard.general.string { code = value; model.decode(value, owner: presentationID) }
+                            }.disabled(model.busy)
+                            Button("Open QR image") { importing = true }.disabled(model.busy)
+                            #endif
+                            #if os(iOS) && !targetEnvironment(macCatalyst)
+                            Button("Scan QR code") { camera = true }.disabled(model.busy)
+                            Button("Choose photo or screenshot") { photos = true }.disabled(model.busy)
+                            #endif
+                        }
+                        if !nearby.servers.isEmpty {
+                            Section("Nearby Bluefin installations") {
+                                ForEach(nearby.servers) { server in Label(server.name, systemImage: "network") }
+                                Text("Use an invitation from the installation you want to connect. A nearby name alone does not verify its owner.")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
+                        if let preview = model.preview {
+                            Section("Ready to connect") {
+                                Text(preview.intent == "signup" ? "Request your own account" : "Connect to your existing account")
+                                Text("The invitation is used once. A passkey is required before this device receives access.")
+                                if preview.intent == "signup" {
+                                    TextField("Your account name", text: $accountName).bluefinAddressInput()
+                                }
+                                Button("Connect securely") { code = ""; model.begin(accountName: accountName, owner: presentationID) }
+                                    .disabled(model.busy || (preview.intent == "signup" && accountName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                                    .accessibilityIdentifier("meshBegin")
+                            }
                         }
                     }
+                    if model.busy { ProgressView("Connecting securely") }
+                    if let problem = model.problem { Text(problem).foregroundStyle(.secondary).accessibilityIdentifier("meshPairingError") }
                 }
-                if model.busy { ProgressView("Connecting securely") }
-                if let problem = model.problem { Text(problem).foregroundStyle(.secondary).accessibilityIdentifier("meshPairingError") }
             }
             .navigationTitle("Connect Bluefin")
-            .toolbar { ToolbarItem(placement: .primaryAction) { Button("Done") { model.cancel(); dismiss() } } }
+            .toolbar { ToolbarItem(placement: .primaryAction) { Button("Done") { close() } } }
         }
-        .task {
-            model.restore()
-            if model.pending != nil { model.resume() }
-            else if let initialCode { code = initialCode; model.decode(initialCode) }
+        .task { visible = true; claimPresentation() }
+        .onChange(of: model.presentationOwner) { if $0 == nil { claimPresentation() } }
+        .onChange(of: store.signedIn) { if $0 { close() } }
+        .onDisappear {
+            visible = false; code = ""
+            model.releasePresentation(presentationID)
         }
-        .onChange(of: store.signedIn) { if $0 { dismiss() } }
-        .onDisappear { code = ""; model.cancel() }
         #if !os(tvOS)
         .fileImporter(isPresented: $importing, allowedContentTypes: [.png, .jpeg]) { result in
+            guard model.ownsPresentation(presentationID) else { return }
             do {
                 let url = try result.get()
                 let access = url.startAccessingSecurityScopedResource()
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
                 let bytes = try MeshImageInput.read(url)
-                model.decodeImage(bytes)
-            } catch { model.problem = error.localizedDescription }
+                model.decodeImage(bytes, owner: presentationID)
+            } catch { model.reportProblem(error.localizedDescription, owner: presentationID) }
         }
         #endif
         #if os(iOS) && !targetEnvironment(macCatalyst)
         .sheet(isPresented: $camera) {
-            MeshCameraScanner { value in camera = false; code = value; model.decode(value) }
-                failure: { message in camera = false; model.problem = message }
+            MeshCameraScanner { value in camera = false; code = value; model.decode(value, owner: presentationID) }
+                failure: { message in camera = false; model.reportProblem(message, owner: presentationID) }
         }
         .sheet(isPresented: $photos) {
             MeshPhotoPicker { result in
                 photos = false
                 switch result {
-                case .success(let bytes): model.decodeImage(bytes)
-                case .failure(let error): if !(error is CancellationError) { model.problem = error.localizedDescription }
+                case .success(let bytes): model.decodeImage(bytes, owner: presentationID)
+                case .failure(let error): if !(error is CancellationError) { model.reportProblem(error.localizedDescription, owner: presentationID) }
                 }
             }
         }
         #endif
+    }
+
+    private func claimPresentation() {
+        guard visible, model.claimPresentation(presentationID) else { return }
+        model.restore(owner: presentationID)
+        if model.pending != nil { model.resume(owner: presentationID) }
+        else if let initialCode {
+            code = initialCode
+            model.decode(initialCode, owner: presentationID)
+        }
+    }
+
+    private func close() {
+        visible = false; code = ""
+        model.releasePresentation(presentationID)
+        dismiss()
     }
 }
 
