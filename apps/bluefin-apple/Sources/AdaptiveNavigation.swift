@@ -140,10 +140,10 @@ struct TVDetailAction: View {
     var body: some View {
         Label(title, systemImage: symbol)
             .font(.callout.weight(prominent ? .bold : .medium))
-            .foregroundStyle(focused ? Color.black : Color.white)
+            .foregroundStyle(focused ? BluefinStyle.onPrimary : BluefinStyle.text)
             .padding(.horizontal, 24).padding(.vertical, 14)
-            .background(focused ? Color.white : Color.black.opacity(0.65), in: Capsule())
-            .overlay { Capsule().strokeBorder(.white.opacity(focused ? 0 : 0.35), lineWidth: 1) }
+            .background(focused ? BluefinStyle.primaryFill : BluefinStyle.secondaryBackground.opacity(0.95), in: Capsule())
+            .overlay { Capsule().strokeBorder(BluefinStyle.controlBorder.opacity(focused ? 0 : 1), lineWidth: 1) }
     }
 }
 
@@ -349,9 +349,7 @@ struct TVWelcomeView: View {
 
     private var wordmark: some View {
         HStack(spacing: 16) {
-            Image(systemName: "water.waves")
-                .font(.system(size: 38, weight: .medium)).foregroundStyle(BluefinStyle.accent)
-                .accessibilityHidden(true)
+            BluefinMark().frame(width: 38, height: 38)
             Text("Bluefin").font(.system(size: 56, weight: .bold, design: .rounded))
         }.accessibilityAddTraits(.isHeader)
     }
@@ -538,10 +536,10 @@ private struct AccountActionLabel: View {
         #if os(tvOS)
         Text(title)
             .font(.callout.weight(primary ? .semibold : .medium))
-            .foregroundStyle(focused && enabled ? Color.black : Color.white.opacity(enabled ? 1 : 0.55))
+            .foregroundStyle(focused && enabled ? BluefinStyle.onPrimary : BluefinStyle.text.opacity(enabled ? 1 : 0.55))
             .padding(.horizontal, 24).padding(.vertical, 16)
             .frame(maxWidth: primary ? .infinity : nil)
-            .background(focused && enabled ? Color.white : Color.white.opacity(primary && enabled ? 0.20 : 0.09),
+            .background(focused && enabled ? BluefinStyle.primaryFill : (primary && enabled ? BluefinStyle.hover : BluefinStyle.secondaryBackground),
                         in: Capsule())
         #else
         Text(title).frame(maxWidth: primary ? .infinity : nil)
@@ -554,7 +552,7 @@ private extension View {
         #if os(tvOS)
         buttonStyle(.plain)
         #else
-        if primary { buttonStyle(.borderedProminent) }
+        if primary { buttonStyle(.borderedProminent).tint(BluefinStyle.primaryFill).foregroundStyle(BluefinStyle.onPrimary) }
         else { buttonStyle(.bordered) }
         #endif
     }
@@ -724,7 +722,7 @@ struct PasskeySignInView: View {
                     #if os(tvOS)
                     Text("Scan with your phone, then check the code.").foregroundStyle(.secondary)
                     #else
-                    Link("Open on this device", destination: request.url).buttonStyle(.borderedProminent)
+                    Link("Open on this device", destination: request.url).buttonStyle(.borderedProminent).tint(BluefinStyle.primaryFill).foregroundStyle(BluefinStyle.onPrimary)
                     Text("Or scan with another device.").foregroundStyle(.secondary)
                     #endif
                     if let qr {
@@ -883,7 +881,7 @@ private struct TVFeaturedItem: View {
                     if !item.isContainer {
                         Button { Task { await store.play(item) } } label: {
                             Label(item.resumeTicks > 0 ? "Resume" : "Play", systemImage: "play.fill")
-                        }.buttonStyle(.borderedProminent).disabled(store.startingPlayback)
+                        }.buttonStyle(.borderedProminent).tint(BluefinStyle.primaryFill).foregroundStyle(BluefinStyle.onPrimary).disabled(store.startingPlayback)
                     }
                     MediaNavigationLink(destination: .detail(item)) {
                         Text(item.Type == "Series" ? "Episodes" : "Details")

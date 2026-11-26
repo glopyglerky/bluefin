@@ -1,16 +1,32 @@
 // Derived from the repository vector artwork in tools/DrawIcon.swift.
 import AppKit
 
-func image(width: Int, height: Int, foreground: Int, background: Bool) -> Data {
+func image(width: Int, height: Int, foreground: Int, background: Bool, dark: Bool = true) -> Data {
     let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
         bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
         bitmapInfo: background ? CGImageAlphaInfo.noneSkipLast.rawValue : CGImageAlphaInfo.premultipliedLast.rawValue)!
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
     if background {
-        let gradient = NSGradient(colors: [NSColor(srgbRed: 0.02, green: 0.15, blue: 0.25, alpha: 1),
-            NSColor(srgbRed: 0.015, green: 0.035, blue: 0.08, alpha: 1)])!
-        gradient.draw(in: NSRect(x: 0, y: 0, width: width, height: height), angle: -65)
+        let paper = dark
+            ? NSColor(srgbRed: 6.0 / 255, green: 23.0 / 255, blue: 39.0 / 255, alpha: 1)
+            : NSColor(srgbRed: 163.0 / 255, green: 172.0 / 255, blue: 177.0 / 255, alpha: 1)
+        paper.setFill()
+        NSRect(x: 0, y: 0, width: width, height: height).fill()
+        // Fine static engraving stays in the background. Small icons remain clean.
+        if min(width, height) > 64 {
+            let lines = NSBezierPath()
+            let spacing = max(4.0, Double(min(width, height)) / 64)
+            for y in stride(from: 0.0, through: Double(height), by: spacing) {
+                lines.move(to: NSPoint(x: 0, y: y))
+                lines.curve(to: NSPoint(x: Double(width), y: y + 2),
+                            controlPoint1: NSPoint(x: Double(width) / 3, y: y - 2),
+                            controlPoint2: NSPoint(x: Double(width) * 2 / 3, y: y - 2))
+            }
+            lines.lineWidth = max(0.35, Double(min(width, height)) / 2048)
+            (dark ? NSColor.white : NSColor.black).withAlphaComponent(0.035).setStroke()
+            lines.stroke()
+        }
     } else {
         NSColor.clear.setFill()
         NSRect(x: 0, y: 0, width: width, height: height).fill(using: .copy)
@@ -27,14 +43,16 @@ func image(width: Int, height: Int, foreground: Int, background: Bool) -> Data {
         fin.curve(to: NSPoint(x: 620, y: 785), controlPoint1: NSPoint(x: 388, y: 490), controlPoint2: NSPoint(x: 410, y: 680))
         fin.curve(to: NSPoint(x: 790, y: 420), controlPoint1: NSPoint(x: 580, y: 625), controlPoint2: NSPoint(x: 670, y: 470))
         fin.curve(to: NSPoint(x: 225, y: 420), controlPoint1: NSPoint(x: 560, y: 470), controlPoint2: NSPoint(x: 420, y: 337))
-        NSColor(srgbRed: 0.1, green: 0.84, blue: 0.93, alpha: 1).setFill(); fin.fill()
+        (dark
+            ? NSColor(srgbRed: 204.0 / 255, green: 208.0 / 255, blue: 211.0 / 255, alpha: 1)
+            : NSColor(srgbRed: 6.0 / 255, green: 23.0 / 255, blue: 39.0 / 255, alpha: 1)).setFill(); fin.fill()
         }
         if foreground == 2 || foreground == 3 {
         for baseline in [300.0, 240.0] {
             let wave = NSBezierPath(); wave.move(to: NSPoint(x: 235, y: baseline))
             wave.curve(to: NSPoint(x: 790, y: baseline + 12), controlPoint1: NSPoint(x: 430, y: baseline - 65), controlPoint2: NSPoint(x: 575, y: baseline + 80))
             wave.lineWidth = 20; wave.lineCapStyle = .round
-            NSColor(srgbRed: 0.37, green: 0.85, blue: 0.94, alpha: 0.7).setStroke(); wave.stroke()
+            NSColor(srgbRed: 130.0 / 255, green: 137.0 / 255, blue: 165.0 / 255, alpha: 1).setStroke(); wave.stroke()
         }
     }
         }

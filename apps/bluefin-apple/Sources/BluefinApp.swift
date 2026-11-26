@@ -10,10 +10,11 @@ import CoreSpotlight
         let initialStore = LibraryStore()
         _store = StateObject(wrappedValue: initialStore)
         NativeIntegrations.attach(to: initialStore)
+        BluefinStyle.configureChrome()
     }
     var body: some Scene {
         WindowGroup {
-            RootView().environmentObject(store).tint(BluefinStyle.accent).preferredColorScheme(appearance == 1 ? .light : appearance == 2 ? .dark : nil)
+            RootView().environmentObject(store).foregroundStyle(BluefinStyle.text).tint(BluefinStyle.accent).preferredColorScheme(appearance == 1 ? .light : appearance == 2 ? .dark : nil)
                 #if targetEnvironment(macCatalyst)
                 .frame(minWidth: 680, minHeight: 480)
                 #endif
@@ -113,7 +114,7 @@ struct QuickConnectView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 24) {
-                Image(systemName: "key.viewfinder").font(.system(size: 50, weight: .light)).foregroundColor(.cyan).accessibilityHidden(true)
+                Image(systemName: "key.viewfinder").font(.system(size: 50, weight: .light)).foregroundColor(BluefinStyle.accent).accessibilityHidden(true)
                 Text("Quick Connect").font(.title2.bold())
                 Text("Enter this code in another client signed in to your server.").multilineTextAlignment(.center).foregroundStyle(.secondary)
                 if let code { Text(code).font(.system(size: 42, weight: .semibold, design: .monospaced)).tracking(6).accessibilityLabel("Quick Connect code, \(code.map(String.init).joined(separator: ", "))").accessibilityIdentifier("quickConnectCode") }
@@ -347,7 +348,7 @@ struct FeaturedItem: View {
             HStack(spacing: 16) {
                 if !item.isContainer {
                     Button { Task { await store.play(item) } } label: { Label(item.resumeTicks > 0 ? "Resume" : "Play", systemImage: "play.fill").font(.body.weight(.semibold)).padding(.horizontal, 20).padding(.vertical, 6) }
-                        .buttonStyle(.borderedProminent).disabled(store.startingPlayback)
+                        .buttonStyle(.borderedProminent).tint(BluefinStyle.primaryFill).foregroundStyle(BluefinStyle.onPrimary).disabled(store.startingPlayback)
                 }
                 MediaNavigationLink(destination: .detail(item)) { Label("Details", systemImage: "info.circle") }.buttonStyle(.bordered)
                 if store.startingPlayback { ProgressView() }
@@ -389,7 +390,7 @@ struct Poster: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             Artwork(item: item).aspectRatio(item.Type == "MusicAlbum" ? 1 : 2 / 3, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(alignment: .bottom) { if item.progress > 0 { ProgressView(value: item.progress).tint(.cyan).padding(8).accessibilityHidden(true) } }
+                .overlay(alignment: .bottom) { if item.progress > 0 { ProgressView(value: item.progress).tint(BluefinStyle.accent).padding(8).accessibilityHidden(true) } }
                 #if os(tvOS)
                 .overlay {
                     if focused {
@@ -571,7 +572,7 @@ struct DetailView: View {
                 Text(current.title).font(.largeTitle.bold()).accessibilityAddTraits(.isHeader)
                 if !current.subtitle.isEmpty { Text(current.subtitle).foregroundStyle(.secondary) }
                 if current.isContainer {
-                    MediaNavigationLink(destination: .collection(title: current.title, parent: current, types: nil)) { Label("Browse \(current.Type == "Series" ? "episodes" : "collection")", systemImage: "square.grid.2x2") }.buttonStyle(.borderedProminent)
+                    MediaNavigationLink(destination: .collection(title: current.title, parent: current, types: nil)) { Label("Browse \(current.Type == "Series" ? "episodes" : "collection")", systemImage: "square.grid.2x2") }.buttonStyle(.borderedProminent).tint(BluefinStyle.primaryFill).foregroundStyle(BluefinStyle.onPrimary)
                 } else { playActions }
                 if let overview {
                     Text(overview).font(.body).lineSpacing(5).fixedSize(horizontal: false, vertical: true)
@@ -637,7 +638,7 @@ struct DetailView: View {
             #else
             Button { playDetail() } label: {
                 Label(resumeTicks > 0 ? "Resume" : "Play", systemImage: "play.fill")
-            }.buttonStyle(.borderedProminent).disabled(store.startingPlayback)
+            }.buttonStyle(.borderedProminent).tint(BluefinStyle.primaryFill).foregroundStyle(BluefinStyle.onPrimary).disabled(store.startingPlayback)
             if resumeTicks > 0 {
                 Button("Start over") { playDetail(fromBeginning: true) }.disabled(store.startingPlayback)
             }

@@ -360,7 +360,7 @@ struct MusicPlayer: View {
                 #if os(iOS)
                 Slider(value: Binding(get: { min(duration, playback.positionSeconds) }, set: { playback.seek(seconds: $0) }), in: 0...duration).accessibilityLabel("Playback position")
                 #else
-                ProgressView(value: min(duration, playback.positionSeconds), total: duration).tint(.cyan)
+                ProgressView(value: min(duration, playback.positionSeconds), total: duration).tint(BluefinStyle.accent)
                 HStack {
                     Button("Back 15 seconds") { playback.seek(seconds: max(0, playback.positionSeconds - 15)) }
                     Button("Forward 15 seconds") { playback.seek(seconds: min(duration, playback.positionSeconds + 15)) }

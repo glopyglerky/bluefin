@@ -20,8 +20,8 @@ pub struct QrTheme {
 }
 impl QrTheme {
     pub fn bluefin() -> Self {
-        Self { foreground:[8,36,64], background:[255,255,255],
-            accent:[0,144,168], module_pixels:6, quiet_zone_modules:4,
+        Self { foreground:[6,23,39], background:[255,255,255],
+            accent:[130,137,165], module_pixels:6, quiet_zone_modules:4,
             bluefin_branding:true }
     }
     fn validate(&self) -> Result<()> {

@@ -91,7 +91,7 @@ struct LiveChannelView: View {
                 Artwork(item: channel).aspectRatio(16 / 9, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 14))
                 Text(channel.title).font(.largeTitle.bold())
                 Button { Task { await store.play(channel) } } label: { Label("Watch live", systemImage: "play.fill") }
-                    .buttonStyle(.borderedProminent).disabled(store.startingPlayback)
+                    .buttonStyle(.borderedProminent).tint(BluefinStyle.primaryFill).foregroundStyle(BluefinStyle.onPrimary).disabled(store.startingPlayback)
             }
             Section("Schedule") {
                 ForEach(programmes) { programme in

@@ -1,5 +1,5 @@
 import React, {useEffect, useRef, useState} from 'react';
-import {AppState, BackHandler, Pressable, Image, ScrollView, Text, TextInput, View} from 'react-native';
+import {AppState, BackHandler, Pressable, Image, ScrollView, Text, TextInput, useColorScheme, View} from 'react-native';
 import {VideoPlayer, KeplerVideoSurfaceView} from '@amazon-devices/react-native-w3cmedia';
 import {useComponentInstance} from '@amazon-devices/react-native-kepler';
 import {Session} from './session.mjs';
@@ -18,7 +18,11 @@ async function bounded<T>(operation: Promise<T>): Promise<T> {
   finally { if (timer) clearTimeout(timer); }
 }
 
+const moonlitLight = {background:'#A3ACB1',panel:'#CCD0D3',hover:'#BDC5C9',text:'#061727',muted:'#2B4050',accent:'#333B5A',line:'#465966'};
+const moonlitDark = {background:'#061727',panel:'#102435',hover:'#182D3D',text:'#CCD0D3',muted:'#A3ACB1',accent:'#ADB5D1',line:'#637889'};
+
 export function App({deviceId}: Props) {
+  const palette = useColorScheme() === 'light' ? moonlitLight : moonlitDark;
   const component = useComponentInstance();
   const session = useRef<Session | null>(null), video = useRef<VideoPlayer | null>(null);
   const adaptive = useRef<AdaptivePlayer | null>(null), epoch = useRef(0), busy = useRef(false);
@@ -154,20 +158,20 @@ export function App({deviceId}: Props) {
   function control(label: string, action: () => Promise<unknown>, first = false) {
     return <Pressable key={label} accessible accessibilityRole="button" accessibilityLabel={label} hasTVPreferredFocus={first}
       onFocus={() => setFocused(label)} onPress={() => run(action)}
-      style={{padding:16,margin:6,borderWidth:3,borderColor:focused === label ? '#65e2d7' : '#35444e'}}>
-      <Text style={{color:'white',fontSize:22}}>{label}</Text></Pressable>;
+      style={{padding:16,margin:6,borderWidth:3,borderColor:focused === label ? palette.accent : palette.line,backgroundColor:focused === label ? palette.hover : palette.panel}}>
+      <Text style={{color:palette.text,fontSize:22}}>{label}</Text></Pressable>;
   }
   function seek(delta: number) { const p = video.current; if (p && Number.isFinite(p.duration)) p.currentTime = Math.max(0,Math.min(p.duration,p.currentTime+delta)); return Promise.resolve(); }
   const renderedPlayer = video.current;
-  return <View style={{flex:1,backgroundColor:'#0a171f',padding:36}}>
-    <Text style={{color:'#65e2d7',fontSize:36}}>BLUEFIN TV · Vega candidate</Text>
-    <Text accessibilityLiveRegion="polite" style={{color:'white',fontSize:22}}>{status}</Text>
+  return <View style={{flex:1,backgroundColor:palette.background,padding:36}}>
+    <Text style={{color:palette.accent,fontSize:36}}>BLUEFIN TV</Text>
+    <Text accessibilityLiveRegion="polite" style={{color:palette.text,fontSize:22}}>{status}</Text>
     {!signed ? <View>
       {!connected ? <>
-        <TextInput accessibilityLabel="HTTPS server URL" value={base} onChangeText={setBase} autoCapitalize="none" style={{color:'white',padding:16}} />
+        <TextInput accessibilityLabel="HTTPS server URL" value={base} onChangeText={setBase} autoCapitalize="none" selectionColor={palette.accent} placeholderTextColor={palette.muted} style={{color:palette.text,backgroundColor:palette.panel,padding:16,borderWidth:1,borderColor:palette.line}} />
         {control('Continue',connectServer,true)}
       </> : <>
-        <Text style={{color:'white',fontSize:26}}>{connected.name}</Text>
+        <Text style={{color:palette.text,fontSize:26}}>{connected.name}</Text>
         {!mode ? <>
           {control('Sign in',async () => {setMode('password');},true)}
           {connected.options.passkeys && control('Sign in with a passkey',() => beginDevice(true))}
@@ -175,14 +179,14 @@ export function App({deviceId}: Props) {
           {connected.options.allowSignups && control('Create account',async () => {setMode('create');})}
           {control('Change server',async () => {setConnected(null); setUsername('');})}
         </> : request ? <>
-          <Text style={{color:'white',fontSize:32}}>{request.code ?? request.Code}</Text>
+          <Text style={{color:palette.text,fontSize:32}}>{request.code ?? request.Code}</Text>
           {request.qr_url && <Image source={{uri:request.qr_url}} style={{width:208,height:208}} accessibilityLabel="Passkey QR code" />}
           {control('Finish sign-in',finishDevice)}
           {control('Cancel',cancelAccount)}
         </> : <>
-          <TextInput accessibilityLabel="Username" value={username} onChangeText={setUsername} autoCapitalize="none" style={{color:'white',padding:16}} />
-          <TextInput accessibilityLabel="Password" value={password} onChangeText={setPassword} secureTextEntry style={{color:'white',padding:16}} />
-          {mode === 'create' && <Text style={{color:'white'}}>Use at least 15 characters. Your administrator can grant library access.</Text>}
+          <TextInput accessibilityLabel="Username" value={username} onChangeText={setUsername} autoCapitalize="none" selectionColor={palette.accent} placeholderTextColor={palette.muted} style={{color:palette.text,backgroundColor:palette.panel,padding:16,borderWidth:1,borderColor:palette.line}} />
+          <TextInput accessibilityLabel="Password" value={password} onChangeText={setPassword} secureTextEntry selectionColor={palette.accent} placeholderTextColor={palette.muted} style={{color:palette.text,backgroundColor:palette.panel,padding:16,borderWidth:1,borderColor:palette.line}} />
+          {mode === 'create' && <Text style={{color:palette.text}}>Use at least 15 characters. Your administrator can grant library access.</Text>}
           {control(mode === 'create' ? 'Create account' : 'Sign in',signIn)}
           {control('Back to sign-in options',async () => {setMode('');setPassword('');})}
         </>}
@@ -190,15 +194,15 @@ export function App({deviceId}: Props) {
     </View> : <ScrollView>
       {control('Library',() => list(),true)}{control('Music',() => list('Audio,MusicAlbum'))}
       {control('On now',async () => {const own=epoch.current,r = await session.current!.guide();if(own !== epoch.current || !active.current)return;setGuide((r.Items || []).slice(0,200).map((p: any) => `${p.ChannelName || 'Channel'} · ${p.Name || 'Untitled'}`));setStatus('Guide only. Live sources require separate server admission.');})}
-      {guide.map((entry,index) => <Text key={index} style={{color:'white'}}>{entry}</Text>)}
+      {guide.map((entry,index) => <Text key={index} style={{color:palette.text}}>{entry}</Text>)}
       {control('Load account queue',async () => {const own=epoch.current,r = await session.current!.loadQueue();const songs: Item[]=[];for(const id of r.queue.itemIds) {if(own !== epoch.current || !active.current)return;songs.push(await session.current!.item(id.replace(/-/g,'')));}if(own === epoch.current && active.current){queueRevision.current=r.revision;setQueue(songs);}})}
       {control('Save account queue',async () => {if(queueRevision.current === null) throw Error('Load queue first');const r=await session.current!.saveQueue(queue.map(i => i.Id.replace(/-/g,'')),queueRevision.current);queueRevision.current=r.revision;setStatus('Account queue saved.');})}
       {control('Clear TV queue',async () => {setQueue([]);})}
       {queue.map((song,index) => control(`Queue ${index+1}: ${song.Name}`,() => play(song)))}
-      <TextInput accessibilityLabel="Search library" value={term} onChangeText={setTerm} maxLength={128} style={{color:'white',padding:16}} />
+      <TextInput accessibilityLabel="Search library" value={term} onChangeText={setTerm} maxLength={128} selectionColor={palette.accent} placeholderTextColor={palette.muted} style={{color:palette.text,backgroundColor:palette.panel,padding:16,borderWidth:1,borderColor:palette.line}} />
       {control('Search',() => list('Movie,Series,Episode,Audio,MusicAlbum',term))}
       {control('Sign out',async () => { await stop(); await session.current!.logout(); setSigned(false); setConnected(null); setMode(''); setItems([]); setSelected(null);setQueue([]);setGuide([]);queueRevision.current=null; })}
-      {selected ? <View><Text style={{color:'white',fontSize:28}}>{selected.Name}</Text><Text style={{color:'white'}}>{selected.Overview}</Text>
+      {selected ? <View><Text style={{color:palette.text,fontSize:28}}>{selected.Name}</Text><Text style={{color:palette.text}}>{selected.Overview}</Text>
         {control(selected.IsFolder ? 'Browse' : 'Play',async () => { if (selected.IsFolder) { const r = await session.current!.children(selected.Id.replace(/-/g,'')); setItems(r.Items || []); setSelected(null); } else await play(selected); })}
         {(selected.MediaStreams || []).filter(t => t.Type === 'Audio' || t.Type === 'Subtitle').slice(0,32).map(t => control(`Source ${t.Type}: ${t.DisplayTitle || t.Index}`,() => play(selected,Math.round((video.current?.currentTime || 0)*10000000),t.Type === 'Audio' ? {audio:t.Index} : {subtitle:t.Index})))}
         {control('Back to library',async () => {setSelected(null);})}</View> : items.slice(0,40).map(item => control(item.Name,async () => {const own=epoch.current,detail=await session.current!.item(item.Id.replace(/-/g,''));if(own === epoch.current && active.current)setSelected(detail);}))}

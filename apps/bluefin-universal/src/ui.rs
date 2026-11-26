@@ -6,6 +6,8 @@ use crate::{
 };
 use bluefin_contract::{Capabilities, MusicQueue, PROTOCOL_VERSION, UpdateMusicQueue};
 use eframe::egui;
+#[path = "theme.rs"]
+mod theme;
 use futures_util::future::{AbortHandle, Abortable};
 use serde_json::Value;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -142,39 +144,9 @@ fn web_hosted_server() -> String {
 }
 
 pub fn configure(ctx: &egui::Context) {
-    ctx.set_visuals(egui::Visuals::dark());
-    let mut style = (*ctx.style()).clone();
-    style.wrap_mode = Some(egui::TextWrapMode::Wrap);
-    style.visuals.panel_fill = egui::Color32::from_rgb(15, 19, 27);
-    style.visuals.window_fill = egui::Color32::from_rgb(23, 29, 40);
-    style.visuals.override_text_color = Some(egui::Color32::from_rgb(233, 239, 248));
-    style.visuals.selection.bg_fill = egui::Color32::from_rgb(26, 91, 158);
-    style.visuals.selection.stroke =
-        egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(116, 192, 255));
-    style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(32, 41, 56);
-    style.visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(26, 34, 47);
-    style.visuals.widgets.hovered.bg_stroke =
-        egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(116, 192, 255));
-    style.visuals.widgets.active.bg_stroke =
-        egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(149, 211, 255));
-    style.spacing.interact_size.y = 44.0;
-    style.spacing.text_edit_width = 320.0;
-    style.spacing.item_spacing = egui::vec2(12.0, 10.0);
-    style.spacing.button_padding = egui::vec2(12.0, 8.0);
-    style
-        .text_styles
-        .insert(egui::TextStyle::Body, egui::FontId::proportional(16.0));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Button, egui::FontId::proportional(17.0));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Heading, egui::FontId::proportional(30.0));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Small, egui::FontId::proportional(13.0));
-    ctx.set_style(style);
+    theme::configure(ctx);
 }
+
 impl Bluefin {
     fn section_title(section: Section) -> &'static str {
         if section == Section::Guide {
@@ -218,7 +190,7 @@ impl Bluefin {
     }
     fn catalog_item(&mut self, ui: &mut egui::Ui, item: &Item, tile: bool) {
         egui::Frame::new()
-            .fill(egui::Color32::from_rgb(23, 30, 42))
+            .fill(ui.visuals().window_fill)
             .corner_radius(12)
             .inner_margin(14)
             .show(ui, |ui| {
@@ -228,13 +200,13 @@ impl Bluefin {
                         egui::Sense::hover(),
                     );
                     ui.painter()
-                        .rect_filled(rect, 8.0, egui::Color32::from_rgb(28, 44, 64));
+                        .rect_filled(rect, 8.0, ui.visuals().faint_bg_color);
                     ui.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
                         "No artwork",
                         egui::FontId::proportional(14.0),
-                        egui::Color32::from_rgb(171, 193, 218),
+                        ui.visuals().weak_text_color(),
                     );
                     ui.add_space(6.0);
                 }
@@ -934,7 +906,7 @@ impl eframe::App for Bluefin {
         egui::TopBottomPanel::top("toolbar")
             .frame(
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(19, 25, 35))
+                    .fill(ctx.style().visuals.window_fill)
                     .inner_margin(16),
             )
             .show(ctx, |ui| {
@@ -943,7 +915,7 @@ impl eframe::App for Bluefin {
                         egui::RichText::new("Bluefin")
                             .size(24.0)
                             .strong()
-                            .color(egui::Color32::from_rgb(105, 184, 255)),
+                            .color(ui.visuals().hyperlink_color),
                     );
                 }
                 ui.horizontal_wrapped(|ui| {
@@ -952,7 +924,7 @@ impl eframe::App for Bluefin {
                             egui::RichText::new("Bluefin")
                                 .size(24.0)
                                 .strong()
-                                .color(egui::Color32::from_rgb(105, 184, 255)),
+                                .color(ui.visuals().hyperlink_color),
                         );
                     }
                     ui.small(if self.model.fixture {
@@ -980,7 +952,7 @@ impl eframe::App for Bluefin {
                 .resizable(false)
                 .frame(
                     egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(19, 25, 35))
+                        .fill(ctx.style().visuals.window_fill)
                         .inner_margin(16),
                 )
                 .show(ctx, |ui| {
@@ -1026,9 +998,9 @@ impl eframe::App for Bluefin {
                 ui.horizontal(|ui| {
                 ui.add_space(((ui.available_width() - card_width) * 0.5).max(0.0));
                 ui.vertical(|ui| { ui.set_width(card_width);
-                egui::Frame::new().fill(egui::Color32::from_rgb(23, 30, 42)).corner_radius(18).inner_margin(24).show(ui, |ui| {
+                egui::Frame::new().fill(ui.visuals().window_fill).corner_radius(18).inner_margin(24).show(ui, |ui| {
                 ui.set_width((card_width - 48.0).max(80.0));
-                ui.label(egui::RichText::new("WELCOME TO BLUEFIN").small().color(egui::Color32::from_rgb(105, 184, 255)));
+                ui.label(egui::RichText::new("WELCOME TO BLUEFIN").small().color(ui.visuals().hyperlink_color));
                 ui.add_space(12.0);
                 let ready = self.pending.is_none() && self.auth_drains.load(Ordering::Acquire) == 0
                     && self.retired.iter().all(|service| service.snapshot().finished);
@@ -1044,7 +1016,7 @@ impl eframe::App for Bluefin {
                         ui.add(egui::TextEdit::singleline(&mut self.mesh_code).password(true).desired_width(f32::INFINITY));
                         ui.label("Username for a signup invitation");
                         ui.add(egui::TextEdit::singleline(&mut self.mesh_name).desired_width(f32::INFINITY));
-                        if ui.add_enabled(ready && !self.mesh_code.is_empty(), egui::Button::new("Connect")).clicked() { self.begin_mesh(ctx); }
+                        if ui.add_enabled(ready && !self.mesh_code.is_empty(), theme::primary_button(ui, "Connect")).clicked() { self.begin_mesh(ctx); }
                     }
                     if ui.add_enabled(ready, egui::Button::new("Resume saved connection")).clicked() { self.resume_mesh(ctx); }
                     ui.separator();
@@ -1054,7 +1026,7 @@ impl eframe::App for Bluefin {
                     ui.monospace(&request.code);
                     if let Some(page) = &request.page { ui.hyperlink_to("Open passkey page", page.as_str()); }
                     else { ui.label("Enter this code in a client signed in to your server."); }
-                    if ui.add_enabled(ready, egui::Button::new("Finish sign-in")).clicked() { self.finish_device_sign_in(ctx); }
+                    if ui.add_enabled(ready, theme::primary_button(ui, "Finish sign-in")).clicked() { self.finish_device_sign_in(ctx); }
                     if ui.add_enabled(ready, egui::Button::new("Cancel")).clicked() { self.cancel_device_sign_in(ctx); }
                 } else if let Some(server) = &self.connected_server {
                     ui.heading(&server.name);
@@ -1064,7 +1036,7 @@ impl eframe::App for Bluefin {
                     ui.label("Password");
                     ui.add(egui::TextEdit::singleline(&mut self.password).password(true).desired_width(f32::INFINITY));
                     let credentials = ready && !self.name.trim().is_empty();
-                    if ui.add_enabled(credentials, egui::Button::new("Sign in")).clicked() { self.submit_account(ctx, false); }
+                    if ui.add_enabled(credentials, theme::primary_button(ui, "Sign in")).clicked() { self.submit_account(ctx, false); }
                     if options.passkeys && ui.add_enabled(ready, egui::Button::new("Sign in with a passkey")).clicked() { self.begin_device_sign_in(ctx, true); }
                     if options.quick_connect && ui.add_enabled(ready, egui::Button::new("Quick Connect")).clicked() { self.begin_device_sign_in(ctx, false); }
                     if options.allow_signups && ui.add_enabled(credentials && self.password.chars().count() >= 15, egui::Button::new("Create account")).clicked() { self.submit_account(ctx, true); }
@@ -1073,7 +1045,7 @@ impl eframe::App for Bluefin {
                     ui.heading("Connect to your server");
                     ui.label("Server address");
                     ui.add(egui::TextEdit::singleline(&mut self.server).hint_text("https://media.example.com").desired_width(f32::INFINITY));
-                    if ui.add_enabled(ready && !self.server.trim().is_empty(), egui::Button::new("Continue")).clicked() { self.connect_server(ctx); }
+                    if ui.add_enabled(ready && !self.server.trim().is_empty(), theme::primary_button(ui, "Continue")).clicked() { self.connect_server(ctx); }
                 }
                 if ui.add_enabled(self.device_sign_in.is_none()&&self.auth_drains.load(Ordering::Acquire)==0&&self.retired.iter().all(|s|s.snapshot().finished),egui::Button::new("Explore original fixtures")).clicked(){
                     self.reset();self.model.fixture=true;
@@ -1113,7 +1085,7 @@ if ui.add_enabled(self.pending.is_none()&&self.confirmed&&(!form.requires_select
                         if !self.previous_shelves.is_empty() && self.model.detail.is_none()
                             && ui.button("Back").clicked() { self.back_to_shelf(); }
                         if let Some(item)=self.model.detail.clone(){
-                            egui::Frame::new().fill(egui::Color32::from_rgb(25,39,57)).corner_radius(14).inner_margin(20).show(ui, |ui| {
+                            egui::Frame::new().fill(ui.visuals().faint_bg_color).corner_radius(14).inner_margin(20).show(ui, |ui| {
                                 ui.small("SELECTED ITEM");ui.heading(&item.name);ui.label(&item.overview);ui.add_space(8.0);
                                 ui.horizontal_wrapped(|ui| {
                                     if item.playable(){if ui.button("Play").clicked(){self.play(item.clone());}
@@ -1141,7 +1113,7 @@ if ui.add_enabled(self.pending.is_none()&&self.confirmed&&(!form.requires_select
                 });
             }
             for service in &self.retired { let status=service.snapshot(); ui.label(&status.message); }
-            if !self.error.is_empty(){ui.colored_label(egui::Color32::LIGHT_RED,&self.error);}
+            if !self.error.is_empty(){ui.colored_label(ui.visuals().error_fg_color,&self.error);}
             });
         });
     }

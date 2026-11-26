@@ -1,6 +1,6 @@
 ' Original native SceneGraph adapter. Roku cannot execute the Rust/WASM policy.
 sub init()
-    m.top.backgroundColor = "0x071C29FF"
+    m.top.backgroundColor = "0x061727FF"
     m.list = m.top.findNode("list")
     m.guide = m.top.findNode("guide")
     m.guidePending = false

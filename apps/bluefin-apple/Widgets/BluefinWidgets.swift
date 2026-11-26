@@ -27,7 +27,19 @@ private struct QuickAccessProvider: TimelineProvider {
 
 private struct QuickAccessView: View {
     @Environment(\.widgetFamily) private var family
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.widgetRenderingMode) private var renderingMode
     let entry: QuickAccessEntry
+
+    private func color(_ light: UInt32, _ dark: UInt32) -> Color {
+        let hex = scheme == .dark ? dark : light
+        return Color(red: Double((hex >> 16) & 255) / 255,
+                     green: Double((hex >> 8) & 255) / 255,
+                     blue: Double(hex & 255) / 255)
+    }
+    private var background: Color { color(0xA3ACB1, 0x061727) }
+    private var text: Color { color(0x061727, 0xCCD0D3) }
+    private var accent: Color { color(0x333B5A, 0xADB5D1) }
     private var statusText: String {
         switch entry.status {
         case .signedOut: "Sign in on your iPhone"
@@ -68,7 +80,9 @@ private struct QuickAccessView: View {
             }
         }
         .widgetURL(WidgetRoute.library.url)
-        .containerBackground(.background, for: .widget)
+        .foregroundStyle(renderingMode == .fullColor ? text : Color.primary)
+        .tint(accent)
+        .containerBackground(renderingMode == .fullColor ? background : Color.clear, for: .widget)
     }
     private func routeLink(_ route: WidgetRoute) -> some View {
         Link(destination: route.url) {

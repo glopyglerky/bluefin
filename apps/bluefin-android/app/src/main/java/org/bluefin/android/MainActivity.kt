@@ -60,17 +60,19 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val television = (getSystemService(UI_MODE_SERVICE) as UiModeManager).currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF59D9F2), background = Color(0xFF0E1218), surface = Color(0xFF1C2028))) {
-                Surface(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) { Bluefin(television) }
+            MaterialTheme(colorScheme = bluefinColorScheme()) {
+                Surface(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing), color = MaterialTheme.colorScheme.background) { Bluefin(television) }
             }
         }
     }
 }
 @Composable private fun Action(label: String, enabled: Boolean = true, modifier: Modifier = Modifier, click: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
-    Button(onClick = click, enabled = enabled, modifier = modifier
+    Button(onClick = click, enabled = enabled,
+        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary, contentColor = MaterialTheme.colorScheme.onSecondary),
+        modifier = modifier
         .onFocusChanged { focused = it.isFocused }
-        .border(if (focused) 3.dp else 0.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(24.dp))) { Text(label) }
+        .border(if (focused) 3.dp else 0.dp, if (focused) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(24.dp))) { Text(label) }
 }
 @Composable fun Bluefin(television: Boolean, model: LibraryModel = viewModel()) {
     var accountScreen by remember { mutableStateOf(false) }
@@ -169,7 +171,7 @@ class MainActivity : ComponentActivity() {
 @Composable private fun LibraryTile(item: LibraryItem, model: LibraryModel, click: () -> Unit) {
     var focus by remember { mutableStateOf(false) }
     Card(onClick = click, modifier = Modifier.fillMaxWidth().onFocusChanged { focus = it.hasFocus }
-        .border(if (focus) 3.dp else 0.dp, if (focus) Color.White else Color.Transparent, RoundedCornerShape(12.dp))) {
+        .border(if (focus) 3.dp else 0.dp, if (focus) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(12.dp))) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             val aspect = when (item.type) {
                 "Movie", "Series", "Season" -> 2f / 3f
@@ -177,7 +179,7 @@ class MainActivity : ComponentActivity() {
                 else -> 16f / 9f
             }
             Box(Modifier.fillMaxWidth().aspectRatio(aspect).clip(RoundedCornerShape(12.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF123746), Color(0xFF285D67), Color(0xFF111827))))) {
+                .background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.background)))) {
                 ItemArtwork(item, model, Modifier.fillMaxSize())
             }
             Text(item.name, style = MaterialTheme.typography.titleMedium, maxLines = 2)

@@ -1,14 +1,33 @@
 :root {
     color-scheme: light dark;
     font-family: system-ui, sans-serif;
-    background: Canvas;
-    color: CanvasText;
+    --bg:#a3acb1;
+    --secondary:#ccd0d3;
+    --hover:#bdc5c9;
+    --text:#061727;
+    --muted:#2b4050;
+    --accent:#333b5a;
+    --brand:#8289a5;
+    --line:#8a989f;
+    --control-line:#465966;
+    --sheet:#ccd0d3;
+    --primary:#061727;
+    --on-primary:#ccd0d3;
+    --danger:#842f3f;
+    --tint:rgba(130,137,165,.14);
+    --grain:rgba(6,23,39,.018);
+    background: var(--bg);
+    color: var(--text);
+}
+@media (prefers-color-scheme: dark) {
+    :root { --bg:#061727;--secondary:#102435;--hover:#182d3d;--text:#ccd0d3;--muted:#a3acb1;--accent:#adb5d1;--brand:#8289a5;--line:#2d4354;--control-line:#637889;--sheet:#102435;--primary:#8289a5;--on-primary:#061727;--danger:#f2a4ad;--tint:rgba(130,137,165,.13);--grain:rgba(204,208,211,.018) }
 }
 body {
     min-height: 100vh;
     margin: 0;
     display: grid;
     place-items: center;
+    background: repeating-linear-gradient(115deg, transparent 0 5px, var(--grain) 5px 6px);
 }
 main {
     box-sizing: border-box;
@@ -28,13 +47,15 @@ input, button {
     width: 100%;
     font: inherit;
     padding: .8rem 1rem;
-    border: 1px solid GrayText;
+    border: 1px solid var(--control-line);
+    background: var(--secondary);
+    color: var(--text);
     border-radius: .65rem;
 }
 button {
-    background: #075d8c;
+    background: var(--primary);
     border-color: transparent;
-    color: white;
+    color: var(--on-primary);
     font-weight: 600;
     cursor: pointer;
 }
@@ -43,3 +64,12 @@ summary { cursor: pointer; }
 [hidden] { display: none !important; }
 .switch { grid-template-columns: auto 1fr; align-items: center; }
 .switch input { width: 1.3rem; height: 1.3rem; margin: 0; }
+
+a { color: var(--accent); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+@media (forced-colors: active) {
+    :root, body { background: Canvas; color: CanvasText; }
+    input, button { background: ButtonFace; color: ButtonText; border-color: ButtonText; }
+    :focus-visible { outline-color: Highlight; }
+    a { color: LinkText; }
+}
