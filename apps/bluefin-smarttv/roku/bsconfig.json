@@ -1,1 +1,1 @@
-{"rootDir":".","files":["source/**/*","components/**/*","manifest"],"createPackage":true,"copyToStaging":true,"deploy":false,"sourceMap":false}
+{"rootDir":".","files":["source/**/*","components/**/*","images/**/*","manifest"],"createPackage":true,"copyToStaging":true,"deploy":false,"sourceMap":false}

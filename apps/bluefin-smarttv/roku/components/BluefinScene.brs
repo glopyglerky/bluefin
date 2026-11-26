@@ -2,6 +2,16 @@
 sub init()
     m.top.backgroundColor = "0x061727FF"
     m.list = m.top.findNode("list")
+    m.artPreview = m.top.findNode("artPreview")
+    m.artPoster = m.top.findNode("artPoster")
+    m.artTitle = m.top.findNode("artTitle")
+    m.artProgress = m.top.findNode("artProgress")
+    m.artDebounce = m.top.findNode("artDebounce")
+    m.artDebounce.ObserveField("fire", "loadFocusedArtwork")
+    m.list.ObserveField("itemFocused", "focusArtwork")
+    m.artScope = ""
+    m.artItemId = ""
+    m.pendingArtwork = invalid
     m.categories = m.top.findNode("categories")
     m.utilities = m.top.findNode("utilities")
     m.categories.ObserveField("itemSelected", "categorySelected")
@@ -45,6 +55,9 @@ sub init()
     m.actions = []
     m.history = []
     m.playbackScreen = invalid
+    m.appearance = CreateObject("roRegistrySection", "bluefin-ui").Read("appearance")
+    if m.appearance <> "light" then m.appearance = "dark"
+    applyAppearance()
     menu()
 end sub
 sub rows(title as String, labels as Object, actions as Object)
@@ -77,6 +90,7 @@ sub rows(title as String, labels as Object, actions as Object)
     m.actions = actions
     m.list.content = root
     m.list.jumpToItem = 0
+    prepareArtwork()
     m.list.SetFocus(true)
 end sub
 function screen() as Object
@@ -99,6 +113,7 @@ sub restoreScreen(previous as Object)
         m.actions = previous.actions
         m.list.content = previous.content
         if previous.index >= 0 then m.list.jumpToItem = previous.index
+        prepareArtwork()
         m.list.SetFocus(true)
     end if
 end sub
@@ -234,7 +249,16 @@ sub activate(action as Object)
         loadLibrary("/Users/" + m.userId + "/Views?Limit=100", 0)
     else if action.kind = "account"
         rememberScreen()
-        rows("Account", ["Music queue", "Sign out", "Back"], [{kind:"queue"}, {kind:"signout"}, {kind:"back"}])
+        rows("Account", ["Music queue", "Appearance", "Sign out", "Back"], [{kind:"queue"}, {kind:"appearance"}, {kind:"signout"}, {kind:"back"}])
+    else if action.kind = "appearance"
+        rememberScreen()
+        rows("Appearance", ["Dark", "Light", "Back"], [{kind:"setAppearance",value:"dark"},{kind:"setAppearance",value:"light"},{kind:"back"}])
+    else if action.kind = "setAppearance"
+        m.appearance = action.value
+        section = CreateObject("roRegistrySection", "bluefin-ui")
+        section.Write("appearance", m.appearance)
+        section.Flush()
+        applyAppearance()
     else if action.kind = "searchTerm"
         keyboard("Search all media", "search", false)
     else if action.kind = "searchScope"
@@ -598,6 +622,7 @@ sub response()
         m.accountGeneration = m.accountGeneration + 1
         m.userId = data.User.Id
         m.token = data.AccessToken
+        m.artScope = CreateObject("roDeviceInfo").GetRandomUUID()
         api("capabilities", "/Bluefin/TV/v1", "GET", invalid)
     else if m.requestKind = "capabilities"
         m.canLease = data.version = 1 and data.mediaLease = true
@@ -725,6 +750,7 @@ sub requestGuide(data as Dynamic)
 end sub
 
 sub showGuide(data as Dynamic)
+    clearArtwork()
     m.guidePending = false
     root = CreateObject("roSGNode", "ContentNode")
     schedules = {}
@@ -840,6 +866,7 @@ sub beginPlay(item as Object, selection as Dynamic)
     api("lease", "/Bluefin/TV/v1/leases", "POST", {version:1, itemId:item.Id.Replace("-", "").LCase(), playback:options})
 end sub
 sub showNativeVideo()
+    clearArtwork()
     m.list.visible = false
     m.title.visible = false
     m.status.visible = false
@@ -1265,4 +1292,104 @@ sub acceptSports(data as Dynamic)
         actions.Push({kind:"waitAccount"})
     end if
     rows("Sports",labels,actions)
+end sub
+
+' A single native Poster bounds texture memory and retires its authenticated
+' HTTP agent whenever the account/view stops showing media. Never use token URLs.
+sub clearArtwork()
+    m.artDebounce.control = "stop"
+    m.pendingArtwork = invalid
+    m.artItemId = ""
+    m.artPoster.uri = ""
+    m.artPoster.SetHttpAgent(CreateObject("roHttpAgent"))
+    m.artPreview.visible = false
+end sub
+sub prepareArtwork()
+    clearArtwork()
+    if m.token = "" then return
+    for each action in m.actions
+        if action.item <> invalid and (action.kind = "detail" or action.kind = "play")
+            m.list.itemSize = [550,64]
+            m.artPreview.visible = true
+            focusArtwork()
+            return
+        end if
+    end for
+    m.list.itemSize = [880,64]
+end sub
+sub focusArtwork()
+    if not m.artPreview.visible or m.token = "" then return
+    index = m.list.itemFocused
+    candidate = invalid
+    if index >= 0 and index < m.actions.Count()
+        action = m.actions[index]
+        if action.item <> invalid then candidate = action.item
+    end if
+    if candidate = invalid
+        for each action in m.actions
+            if action.item <> invalid and (action.kind = "detail" or action.kind = "play")
+                candidate = action.item
+                exit for
+            end if
+        end for
+    end if
+    if candidate = invalid or candidate.Id = invalid then return
+    m.pendingArtwork = candidate
+    m.artDebounce.control = "stop"
+    m.artDebounce.control = "start"
+end sub
+sub loadFocusedArtwork()
+    item = m.pendingArtwork
+    m.pendingArtwork = invalid
+    if item = invalid or m.token = "" or not m.artPreview.visible then return
+    itemId = item.Id.Replace("-", "").LCase()
+    valid = CreateObject("roRegex", "^[a-f0-9]{32}$", "")
+    if not valid.IsMatch(itemId) or itemId = m.artItemId then return
+    m.artItemId = itemId
+    m.artPoster.uri = ""
+    m.artTitle.text = ""
+    if item.Name <> invalid then m.artTitle.text = Left(item.Name,256)
+    progress = 0.0
+    if item.UserData <> invalid
+        if item.UserData.PlayedPercentage <> invalid
+            progress = item.UserData.PlayedPercentage / 100.0
+        else if item.UserData.PlaybackPositionTicks <> invalid and item.RunTimeTicks <> invalid and item.RunTimeTicks > 0
+            progress = item.UserData.PlaybackPositionTicks / item.RunTimeTicks
+        end if
+    end if
+    if progress < 0 then progress = 0
+    if progress > 1 then progress = 1
+    m.artProgress.width = 280 * progress
+    agent = CreateObject("roHttpAgent")
+    agent.SetCertificatesFile("common:/certs/ca-bundle.crt")
+    agent.AddHeader("Authorization", authorization())
+    m.artPoster.SetHttpAgent(agent)
+    ' A random view nonce isolates native image caching across account changes.
+    transfer = CreateObject("roUrlTransfer")
+    m.artPoster.uri = m.server + "/Items/" + itemId + "/Images/Primary?maxWidth=280&maxHeight=420&quality=85&format=jpg&bluefinView=" + transfer.Escape(m.artScope)
+end sub
+
+sub applyAppearance()
+    textColor = "0xCCD0D3FF"
+    secondaryColor = "0xA3ACB1FF"
+    focusColor = "0xADB5D1FF"
+    focusedText = "0x061727FF"
+    background = "0x061727FF"
+    if m.appearance = "light"
+        textColor = "0x061727FF"
+        secondaryColor = "0x2B4050FF"
+        focusColor = "0x061727FF"
+        focusedText = "0xCCD0D3FF"
+        background = "0xA3ACB1FF"
+    end if
+    m.top.backgroundColor = background
+    m.title.color = textColor
+    m.status.color = secondaryColor
+    m.top.findNode("brand").color = textColor
+    for each list in [m.list, m.categories, m.utilities]
+        list.color = textColor
+        list.focusedColor = focusedText
+        list.focusBitmapBlendColor = focusColor
+        list.focusFootprintBlendColor = focusColor
+    end for
 end sub
