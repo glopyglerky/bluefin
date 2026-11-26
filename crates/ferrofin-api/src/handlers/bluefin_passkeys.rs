@@ -83,6 +83,8 @@ impl Service {
         })
     }
 
+    pub(crate) fn origin(&self) -> &str { &self.origin }
+
     async fn credentials(&self, user: Uuid) -> Result<Vec<Passkey>, ApiError> {
         let credentials: Vec<String> = sqlx::query_scalar(
             "SELECT Credential FROM BluefinPasskeys WHERE UserId = ? ORDER BY CredentialId LIMIT 12"

@@ -24,6 +24,10 @@ use tokio::{
 pub type Failure = StatusCode;
 pub const ABSOLUTE_SECONDS: u64 = 7200;
 pub const IDLE_SECONDS: u64 = 90;
+pub const WEB_COOKIE_SECONDS: u64 = 300;
+const WEB_ROOT: &str = "/Bluefin/Web/v1";
+const TV_ROOT: &str = "/Bluefin/TV/v1";
+const COOKIE_NAME: &str = "__Secure-BluefinPlayback";
 const OP_TIMEOUT: Duration = Duration::from_secs(15);
 const RECHECK: Duration = Duration::from_secs(3);
 const MAX_LEASES: usize = 32;
@@ -56,6 +60,13 @@ pub trait PlaybackBackend: Send + Sync + 'static {
         uri: &str,
         method: Method,
     ) -> Result<Response, Failure>;
+    /// Browser controls require the exact parent account credential again.
+    /// Cookie media authority never authorizes control or renewal.
+    async fn authorize_owner(
+        &self, _session: &Self::Session, _transport: &HttpRequest<()>,
+    ) -> Result<(), Failure> {
+        Err(StatusCode::UNAUTHORIZED)
+    }
     /// Idempotently cancel this exact server-selected session's encodings/resources.
     async fn release(&self, session: &Self::Session);
 }
@@ -75,6 +86,9 @@ struct Lease<S> {
     item: String,
     play_session_id: String,
     born: Instant,
+    root: &'static str,
+    browser_secret: Option<String>,
+    browser_expires: Mutex<Option<Instant>>,
     last: Mutex<Instant>,
     resources: Mutex<Book>,
     dispatch: tokio::sync::RwLock<()>,
@@ -102,6 +116,7 @@ impl Book {
 }
 struct Engine<B: PlaybackBackend> {
     backend: Arc<B>,
+    browser_origin: Option<String>,
     leases: Mutex<HashMap<String, Arc<Lease<B::Session>>>>,
     connections: Arc<Semaphore>,
     admissions: Arc<Semaphore>,
@@ -146,6 +161,12 @@ fn protected(mut response: Response) -> Response {
 async fn controls(response: Response) -> Response {
     protected(response)
 }
+async fn web_controls(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        "cross-origin-resource-policy", header::HeaderValue::from_static("same-origin"),
+    );
+    protected(response)
+}
 fn fail(code: Failure) -> Response {
     protected(code.into_response())
 }
@@ -162,6 +183,7 @@ impl<S> Lease<S> {
         self.born.elapsed().as_secs() >= ABSOLUTE_SECONDS
             || self.last.lock().unwrap().elapsed().as_secs() >= IDLE_SECONDS
             || *self.cancelled.borrow()
+            || self.browser_expires.lock().unwrap().is_some_and(|expiry| Instant::now() >= expiry)
     }
 }
 impl<B: PlaybackBackend> Engine<B> {
@@ -189,8 +211,26 @@ impl<B: PlaybackBackend> Engine<B> {
 /// Merge this router before the existing IP/auth/CORS layers. Reaper is weakly
 /// owned and exits after the router/store is dropped. No cross-instance globals.
 pub fn routes<S: Clone + Send + Sync + 'static, B: PlaybackBackend>(backend: B) -> Router<S> {
+    build_routes(backend, None)
+}
+/// Cookie media is separate from URL capabilities and only runs at the
+/// operator's configured HTTPS origin. It does not accept mesh sessions.
+pub fn web_routes<S: Clone + Send + Sync + 'static, B: PlaybackBackend>(
+    backend: B, origin: &str,
+) -> Result<Router<S>, Failure> {
+    let url = url::Url::parse(origin).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if url.scheme() != "https" || url.domain().is_none() || url.origin().ascii_serialization() != origin
+        || !url.username().is_empty() || url.password().is_some() || url.query().is_some()
+        || url.fragment().is_some() || url.path() != "/" {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(build_routes(backend, Some(origin.to_owned())))
+}
+fn build_routes<S: Clone + Send + Sync + 'static, B: PlaybackBackend>(
+    backend: B, browser_origin: Option<String>,
+) -> Router<S> {
     let engine = Arc::new(Engine {
-        backend: Arc::new(backend),
+        backend: Arc::new(backend), browser_origin,
         leases: Mutex::new(HashMap::new()),
         connections: Arc::new(Semaphore::new(64)),
         admissions: Arc::new(Semaphore::new(4)),
@@ -213,20 +253,121 @@ pub fn routes<S: Clone + Send + Sync + 'static, B: PlaybackBackend>(backend: B) 
             }
         }
     });
-    Router::new()
-        .route("/Bluefin/TV/v1", get(|| async { protected(Json(serde_json::json!({"version":VERSION,"mediaLease":true,"absoluteSeconds":ABSOLUTE_SECONDS,"idleSeconds":IDLE_SECONDS})).into_response()) }))
-        .route("/Bluefin/TV/v1/leases", post(create::<B>).layer(DefaultBodyLimit::max(4096)))
-        .route("/Bluefin/TV/v1/leases/{grant}", delete(release::<B>))
-        .route("/Bluefin/TV/v1/media/{grant}/{resource}", get(media::<B>).head(media::<B>))
-        .layer(Extension(engine))
+    let router = if engine.browser_origin.is_some() {
+        Router::new()
+            .route("/Bluefin/Web/v1", get(|| async { protected(Json(serde_json::json!({
+                "version":VERSION,"cookieMediaLease":true,"expiresInSeconds":WEB_COOKIE_SECONDS,
+                "maxSessionSeconds":ABSOLUTE_SECONDS,"idleSeconds":IDLE_SECONDS
+            })).into_response()) }))
+            .route("/Bluefin/Web/v1/leases", post(create::<B>).layer(DefaultBodyLimit::max(4096)))
+            .route("/Bluefin/Web/v1/leases/{grant}", post(renew::<B>).delete(release::<B>))
+            .route("/Bluefin/Web/v1/media/{grant}/{resource}", get(media::<B>).head(media::<B>))
+            .layer(axum::middleware::map_response(web_controls))
+    } else {
+        Router::new()
+            .route("/Bluefin/TV/v1", get(|| async { protected(Json(serde_json::json!({"version":VERSION,"mediaLease":true,"absoluteSeconds":ABSOLUTE_SECONDS,"idleSeconds":IDLE_SECONDS})).into_response()) }))
+            .route("/Bluefin/TV/v1/leases", post(create::<B>).layer(DefaultBodyLimit::max(4096)))
+            .route("/Bluefin/TV/v1/leases/{grant}", delete(release::<B>))
+            .route("/Bluefin/TV/v1/media/{grant}/{resource}", get(media::<B>).head(media::<B>))
+    };
+    router.layer(Extension(engine))
         .layer(axum::middleware::map_response(controls))
 }
+fn canonical_grant(grant: &str) -> bool {
+    grant.len() == 64 && grant.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+fn browser_origin(req: &Request, origin: &str, required: bool) -> bool {
+    let origins: Vec<_> = req.headers().get_all(header::ORIGIN).iter().collect();
+    let origin_valid = match origins.as_slice() {
+        [] => !required,
+        [value] => value.to_str().ok() == Some(origin),
+        _ => false,
+    };
+    origin_valid && req.headers().get("sec-fetch-site")
+        .is_none_or(|value| value.as_bytes() == b"same-origin")
+}
+fn browser_control(req: &Request, origin: &str) -> bool {
+    browser_origin(req, origin, true)
+        && req.headers().get_all(header::AUTHORIZATION).iter().count() == 1
+}
+fn browser_media<S>(req: &Request, origin: &str, lease: &Lease<S>) -> bool {
+    use subtle::ConstantTimeEq;
+    if !browser_origin(req, origin, false) { return false; }
+    let Some(secret) = lease.browser_secret.as_ref() else { return false; };
+    let mut found = None;
+    let mut bytes = 0usize;
+    for header in req.headers().get_all(header::COOKIE).iter() {
+        bytes += header.as_bytes().len();
+        if bytes > 8192 { return false; }
+        let Ok(header) = header.to_str() else { return false; };
+        for part in header.split(';') {
+            let Some((name, value)) = part.trim().split_once('=') else { continue; };
+            if name == COOKIE_NAME {
+                if found.is_some() { return false; }
+                found = Some(value);
+            }
+        }
+    }
+    found.is_some_and(|value| value.len() == 64
+        && bool::from(value.as_bytes().ct_eq(secret.as_bytes())))
+}
+fn set_cookie(response: &mut Response, grant: &str, secret: &str, seconds: u64) {
+    let value = format!("{COOKIE_NAME}={secret}; Path={WEB_ROOT}/media/{grant}/; HttpOnly; Secure; SameSite=Strict; Max-Age={seconds}");
+    // All interpolated values are server-generated bounded ASCII.
+    response.headers_mut().insert(header::SET_COOKIE, header::HeaderValue::from_str(&value).unwrap());
+}
+fn lease_response<S>(grant: &str, lease: &Lease<S>, status: StatusCode, seconds: u64) -> Response {
+    let media_url = format!("{}/media/{grant}/0", lease.root);
+    let release_url = format!("{}/leases/{grant}", lease.root);
+    let mut response = if lease.browser_secret.is_some() {
+        (status, Json(serde_json::json!({
+            "version":VERSION, "mediaUrl":media_url, "releaseUrl":release_url, "renewUrl":release_url,
+            "playSessionId":lease.play_session_id, "expiresInSeconds":seconds, "idleSeconds":IDLE_SECONDS,
+        }))).into_response()
+    } else {
+        (status, Json(LeaseResponse {
+            version:VERSION, media_url, release_url, play_session_id:lease.play_session_id.clone(),
+            expires_in_seconds:seconds, idle_seconds:IDLE_SECONDS,
+        })).into_response()
+    };
+    if let Some(secret) = &lease.browser_secret { set_cookie(&mut response, grant, secret, seconds); }
+    protected(response)
+}
+async fn renew<B: PlaybackBackend>(
+    Extension(engine): Extension<Arc<Engine<B>>>,
+    Path(grant): Path<String>,
+    req: Request,
+) -> Response {
+    if req.uri().query().is_some() { return fail(StatusCode::BAD_REQUEST); }
+    let Some(origin) = &engine.browser_origin else { return fail(StatusCode::NOT_FOUND); };
+    if !browser_control(&req, origin) { return fail(StatusCode::FORBIDDEN); }
+    let lease = match engine.get(&grant) { Ok(value) => value, Err(error) => return fail(error) };
+    match timeout(OP_TIMEOUT, engine.backend.authorize_owner(&lease.session, &transport(&req))).await {
+        Ok(Ok(())) => (),
+        Ok(Err(error)) => return fail(error),
+        Err(_) => return fail(StatusCode::GATEWAY_TIMEOUT),
+    }
+    if lease.expired() { return fail(StatusCode::NOT_FOUND); }
+    let seconds = WEB_COOKIE_SECONDS.min(ABSOLUTE_SECONDS.saturating_sub(lease.born.elapsed().as_secs()));
+    if seconds == 0 { return fail(StatusCode::NOT_FOUND); }
+    *lease.browser_expires.lock().unwrap() = Some(Instant::now() + Duration::from_secs(seconds));
+    *lease.last.lock().unwrap() = Instant::now();
+    lease_response(&grant, &lease, StatusCode::OK, seconds)
+}
+
 async fn create<B: PlaybackBackend>(
     Extension(engine): Extension<Arc<Engine<B>>>,
     req: Request,
 ) -> Response {
     if req.uri().query().is_some() {
         return fail(StatusCode::BAD_REQUEST);
+    }
+    if let Some(origin) = &engine.browser_origin {
+        if !browser_control(&req, origin) || req.headers().get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()).and_then(|v| v.split(';').next())
+            .is_none_or(|v| v.trim() != "application/json") {
+            return fail(StatusCode::FORBIDDEN);
+        }
     }
     let context = transport(&req);
     let Ok(_permit) = engine.admissions.clone().try_acquire_owned() else {
@@ -289,14 +430,8 @@ async fn create<B: PlaybackBackend>(
             StatusCode::BAD_GATEWAY
         });
     }
-    let response = LeaseResponse {
-        version: VERSION,
-        media_url: format!("/Bluefin/TV/v1/media/{grant}/0"),
-        release_url: format!("/Bluefin/TV/v1/leases/{grant}"),
-        play_session_id: admitted.play_session_id.clone(),
-        expires_in_seconds: ABSOLUTE_SECONDS,
-        idle_seconds: IDLE_SECONDS,
-    };
+    let browser = engine.browser_origin.is_some();
+    let root = if browser { WEB_ROOT } else { TV_ROOT };
     let lease = Arc::new(Lease {
         session: admitted.session,
         viewer: admitted.viewer,
@@ -304,6 +439,9 @@ async fn create<B: PlaybackBackend>(
         item: admitted.item_id,
         play_session_id: admitted.play_session_id,
         born: Instant::now(),
+        root,
+        browser_secret: browser.then(|| format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())),
+        browser_expires: Mutex::new(browser.then(|| Instant::now() + Duration::from_secs(WEB_COOKIE_SECONDS))),
         last: Mutex::new(Instant::now()),
         resources: Mutex::new(book),
         dispatch: tokio::sync::RwLock::new(()),
@@ -328,7 +466,7 @@ async fn create<B: PlaybackBackend>(
         let _ = timeout(OP_TIMEOUT, engine.backend.release(&lease.session)).await;
         return fail(StatusCode::TOO_MANY_REQUESTS);
     }
-    protected((StatusCode::CREATED, Json(response)).into_response())
+    lease_response(&grant, &lease, StatusCode::CREATED, if browser { WEB_COOKIE_SECONDS } else { ABSOLUTE_SECONDS })
 }
 async fn release<B: PlaybackBackend>(
     Extension(engine): Extension<Arc<Engine<B>>>,
@@ -338,9 +476,24 @@ async fn release<B: PlaybackBackend>(
     if req.uri().query().is_some() {
         return fail(StatusCode::BAD_REQUEST);
     }
-    // The opaque grant can only destroy its own stream. No account/user selector.
+    if let Some(origin) = &engine.browser_origin {
+        if !browser_control(&req, origin) { return fail(StatusCode::FORBIDDEN); }
+        if let Ok(lease) = engine.get(&grant) {
+            match timeout(OP_TIMEOUT, engine.backend.authorize_owner(&lease.session, &transport(&req))).await {
+                Ok(Ok(())) => (),
+                Ok(Err(error)) => return fail(error),
+                Err(_) => return fail(StatusCode::GATEWAY_TIMEOUT),
+            }
+        }
+    }
+    // TV keeps its existing capability-only release. Browser handles are public
+    // and never authorize releasing another parent session.
     engine.retire(&grant).await;
-    protected(StatusCode::NO_CONTENT.into_response())
+    let mut response = protected(StatusCode::NO_CONTENT.into_response());
+    if engine.browser_origin.is_some() && canonical_grant(&grant) {
+        set_cookie(&mut response, &grant, "", 0);
+    }
+    response
 }
 async fn media<B: PlaybackBackend>(
     Extension(engine): Extension<Arc<Engine<B>>>,
@@ -354,6 +507,9 @@ async fn media<B: PlaybackBackend>(
         Ok(l) => l,
         Err(e) => return fail(e),
     };
+    if let Some(origin) = &engine.browser_origin {
+        if !browser_media(&req, origin, &lease) { return fail(StatusCode::UNAUTHORIZED); }
+    }
     let Ok(global) = engine.connections.clone().try_acquire_owned() else {
         return fail(StatusCode::TOO_MANY_REQUESTS);
     };
@@ -658,7 +814,7 @@ fn rewrite_manifest<S>(
     let mut rewrite = |reference: &str| -> Result<String, Failure> {
         let uri = child_uri(reference, parent, &lease.item, &lease.play_session_id)?;
         let n = book.add(uri)?;
-        Ok(format!("/Bluefin/TV/v1/media/{grant}/{n}"))
+        Ok(format!("{}/media/{grant}/{n}", lease.root))
     };
     for line in text.lines() {
         if line.len() > 8192 {

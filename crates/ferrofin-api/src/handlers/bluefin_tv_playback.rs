@@ -609,6 +609,23 @@ impl PlaybackBackend for Backend {
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     }
+    async fn authorize_owner(
+        &self, session: &PlaybackContext, transport: &Request<()>,
+    ) -> Result<(), Failure> {
+        if transport.headers().get_all(header::AUTHORIZATION).iter().count() != 1 {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        let header = transport.headers().get(header::AUTHORIZATION).ok_or(StatusCode::UNAUTHORIZED)?;
+        let caller = self.identity(header, transport).await?;
+        let owner = self.identity(&session.authorization, transport).await?;
+        if caller.user_id() != session.viewer
+            || caller.device_id.as_deref() != Some(&session.device)
+            || caller.token.as_ref().map(ferrofin_model::secret::Secret::expose)
+                != owner.token.as_ref().map(ferrofin_model::secret::Secret::expose) {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        self.reauthorize(session, transport).await
+    }
     async fn release(&self, session: &PlaybackContext) {
         let _ = session.jobs.stop().await;
     }
@@ -685,7 +702,16 @@ pub fn register(
     state: AppState,
     pins: Arc<dyn LocalSourcePins>,
 ) -> Router<AppState> {
-    router.merge(bluefin_tv_playback::server::routes(Backend { state, pins }))
+    let origin = state.passkeys.as_ref().map(|service| service.origin().to_owned());
+    let router = router.merge(bluefin_tv_playback::server::routes(Backend {
+        state: state.clone(), pins: pins.clone(),
+    }));
+    if let Some(origin) = origin {
+        if let Ok(web) = bluefin_tv_playback::server::web_routes(Backend { state, pins }, &origin) {
+            return router.merge(web);
+        }
+    }
+    router
 }
 #[cfg(test)]
 mod tests {

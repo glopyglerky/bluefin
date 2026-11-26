@@ -7,7 +7,7 @@ use axum::{
 };
 use bluefin_tv_playback::{
     LeaseRequest,
-    server::{Admission, Failure, PlaybackBackend, routes},
+    server::{Admission, Failure, PlaybackBackend, routes, web_routes},
 };
 use serde_json::{Value, json};
 use std::sync::{
@@ -122,6 +122,13 @@ impl PlaybackBackend for Backend {
             );
         }
         Ok(response)
+    }
+    async fn authorize_owner(&self, session: &(), t: &Request<()>) -> Result<(), Failure> {
+        if t.headers().get(header::AUTHORIZATION).and_then(|h| h.to_str().ok())
+            != Some("MediaBrowser Token=fixture") {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        self.reauthorize(session, t).await
     }
     async fn release(&self, _: &()) {
         self.stops.fetch_add(1, Ordering::SeqCst);
@@ -592,4 +599,140 @@ async fn stalled_readers_release_slots_without_waiting_for_lease_expiry() {
         StatusCode::OK
     );
     drop(responses);
+}
+
+const WEB_ORIGIN: &str = "https://bluefin.example";
+fn web_req(method: &str, path: &str, body: Body, owner: bool, cookie: Option<&str>) -> Request<Body> {
+    let mut request = req(method, path, body);
+    request.headers_mut().insert(header::ORIGIN, header::HeaderValue::from_static(WEB_ORIGIN));
+    request.headers_mut().insert(header::CONTENT_TYPE, header::HeaderValue::from_static("application/json"));
+    if owner {
+        request.headers_mut().insert(header::AUTHORIZATION, header::HeaderValue::from_static("MediaBrowser Token=fixture"));
+    }
+    if let Some(cookie) = cookie {
+        request.headers_mut().insert(header::COOKIE, header::HeaderValue::from_str(cookie).unwrap());
+    }
+    request
+}
+fn web_create_body() -> Body {
+    Body::from(json!({"version":1,"itemId":ITEM,"playback":{"kind":"video","maxBitrate":8000000}}).to_string())
+}
+async fn create_web(app: &axum::Router) -> (Value, String) {
+    let response = app.clone().oneshot(web_req("POST", "/Bluefin/Web/v1/leases", web_create_body(), true, None)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let cookie = response.headers()[header::SET_COOKIE].to_str().unwrap().to_owned();
+    assert!(cookie.contains("; HttpOnly; Secure; SameSite=Strict; Max-Age=300"));
+    assert!(!cookie.contains("Domain="));
+    let pair = cookie.split(';').next().unwrap().to_owned();
+    let secret = pair.split_once('=').unwrap().1;
+    assert_eq!(secret.len(), 64);
+    let text = String::from_utf8(to_bytes(response.into_body(), 4096).await.unwrap().to_vec()).unwrap();
+    assert!(!text.contains(secret));
+    assert!(!text.contains("fixture"));
+    let lease: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(lease["releaseUrl"], lease["renewUrl"]);
+    assert_eq!(lease["expiresInSeconds"], 300);
+    let media = lease["mediaUrl"].as_str().unwrap();
+    assert!(media.starts_with("/Bluefin/Web/v1/media/") && media.ends_with("/0"));
+    assert!(cookie.contains(&format!("Path={}/;", media.trim_end_matches("/0"))));
+    (lease, pair)
+}
+#[tokio::test]
+async fn web_cookie_requires_origin_parent_auth_and_independent_media_secret() {
+    assert!(web_routes::<(), _>(Backend::new(), "http://bluefin.example").is_err());
+    let app: axum::Router = web_routes(Backend::new(), WEB_ORIGIN).unwrap();
+    for owner in [true, false] {
+        let mut request = web_req("POST", "/Bluefin/Web/v1/leases", web_create_body(), owner, None);
+        if owner {
+            request.headers_mut().insert(header::ORIGIN, header::HeaderValue::from_static("https://other.example"));
+        }
+        assert_eq!(app.clone().oneshot(request).await.unwrap().status(), StatusCode::FORBIDDEN);
+    }
+    let (lease, cookie) = create_web(&app).await;
+    let path = lease["mediaUrl"].as_str().unwrap();
+    for owner in [true, false] {
+        assert_eq!(app.clone().oneshot(web_req("GET", path, Body::empty(), owner, None)).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    }
+    let response = app.clone().oneshot(web_req("GET", path, Body::empty(), false, Some(&cookie))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cross-origin-resource-policy"], "same-origin");
+    assert_eq!(to_bytes(response.into_body(), 32).await.unwrap().as_ref(), b"0123456789");
+    for method in ["GET", "HEAD"] {
+        let mut request = web_req(method, path, Body::empty(), false, Some(&cookie));
+        request.headers_mut().insert(header::RANGE, header::HeaderValue::from_static("bytes=2-4"));
+        assert_eq!(app.clone().oneshot(request).await.unwrap().status(), StatusCode::PARTIAL_CONTENT);
+    }
+    for (name, value) in [(header::ORIGIN.as_str(), "https://sub.bluefin.example"), ("sec-fetch-site", "same-site")] {
+        let mut request = web_req("GET", path, Body::empty(), false, Some(&cookie));
+        request.headers_mut().insert(axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(), header::HeaderValue::from_str(value).unwrap());
+        assert_eq!(app.clone().oneshot(request).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    }
+    let duplicate = format!("{cookie}; {cookie}");
+    assert_eq!(app.clone().oneshot(web_req("GET", path, Body::empty(), false, Some(&duplicate))).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    let (other, other_cookie) = create_web(&app).await;
+    assert_eq!(app.clone().oneshot(web_req("GET", path, Body::empty(), false, Some(&other_cookie))).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(app.clone().oneshot(web_req("GET", other["mediaUrl"].as_str().unwrap(), Body::empty(), false, Some(&cookie))).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(app.clone().oneshot(web_req("GET", &format!("{path}?itemId={ITEM}"), Body::empty(), false, Some(&cookie))).await.unwrap().status(), StatusCode::BAD_REQUEST);
+}
+#[tokio::test]
+async fn web_cookie_release_and_renew_require_exact_parent_and_logout_is_current() {
+    let backend = Backend::new();
+    let denied = backend.denied.clone();
+    let stops = backend.stops.clone();
+    let app: axum::Router = web_routes(backend, WEB_ORIGIN).unwrap();
+    let (lease, cookie) = create_web(&app).await;
+    let control = lease["releaseUrl"].as_str().unwrap();
+    for method in ["POST", "DELETE"] {
+        assert_eq!(app.clone().oneshot(web_req(method, control, Body::empty(), false, Some(&cookie))).await.unwrap().status(), StatusCode::FORBIDDEN);
+        let mut wrong = web_req(method, control, Body::empty(), true, None);
+        wrong.headers_mut().insert(header::AUTHORIZATION, header::HeaderValue::from_static("MediaBrowser Token=another-parent"));
+        assert_eq!(app.clone().oneshot(wrong).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(stops.load(Ordering::SeqCst), 0);
+    let renewed = app.clone().oneshot(web_req("POST", control, Body::empty(), true, None)).await.unwrap();
+    assert_eq!(renewed.status(), StatusCode::OK);
+    assert!(renewed.headers()[header::SET_COOKIE].to_str().unwrap().contains("Max-Age=300"));
+    for _ in 0..2 {
+        let response = app.clone().oneshot(web_req("DELETE", control, Body::empty(), true, None)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(response.headers()[header::SET_COOKIE].to_str().unwrap().contains("Max-Age=0"));
+    }
+    assert_eq!(stops.load(Ordering::SeqCst), 1);
+    let (lease, cookie) = create_web(&app).await;
+    denied.store(1, Ordering::SeqCst);
+    assert_eq!(app.clone().oneshot(web_req("GET", lease["mediaUrl"].as_str().unwrap(), Body::empty(), false, Some(&cookie))).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(stops.load(Ordering::SeqCst), 2);
+}
+#[tokio::test(start_paused = true)]
+async fn web_cookie_expires_while_regular_media_reads_keep_idle_window_alive() {
+    let app: axum::Router = web_routes(Backend::new(), WEB_ORIGIN).unwrap();
+    let (lease, cookie) = create_web(&app).await;
+    let path = lease["mediaUrl"].as_str().unwrap();
+    for _ in 0..4 {
+        tokio::time::advance(std::time::Duration::from_secs(60)).await;
+        let response = app.clone().oneshot(web_req("GET", path, Body::empty(), false, Some(&cookie))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(to_bytes(response.into_body(), 32).await.unwrap().len(), 10);
+    }
+    tokio::time::advance(std::time::Duration::from_secs(61)).await;
+    assert_eq!(app.oneshot(web_req("GET", path, Body::empty(), false, Some(&cookie))).await.unwrap().status(), StatusCode::NOT_FOUND);
+}
+#[tokio::test]
+async fn web_hls_children_keep_cookie_scope_and_recheck_parent() {
+    let mut backend = Backend::new();
+    backend.manifest = Some("#EXTM3U\n#EXT-X-MAP:URI=\"hls1/main/-1.mp4\"\n#EXTINF:6,\nhls1/main/0.ts\n".into());
+    let denied = backend.denied.clone();
+    let app: axum::Router = web_routes(backend, WEB_ORIGIN).unwrap();
+    let (lease, cookie) = create_web(&app).await;
+    let path = lease["mediaUrl"].as_str().unwrap();
+    let response = app.clone().oneshot(web_req("GET", path, Body::empty(), false, Some(&cookie))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let manifest = String::from_utf8(to_bytes(response.into_body(), 8192).await.unwrap().to_vec()).unwrap();
+    assert!(!manifest.contains("fixture") && !manifest.contains(cookie.split_once('=').unwrap().1));
+    let child = manifest.lines().find(|line| !line.starts_with('#')).unwrap();
+    assert!(child.starts_with(path.trim_end_matches("/0")));
+    assert_eq!(app.clone().oneshot(web_req("GET", child, Body::empty(), false, None)).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(app.clone().oneshot(web_req("HEAD", child, Body::empty(), false, Some(&cookie))).await.unwrap().status(), StatusCode::OK);
+    denied.store(4, Ordering::SeqCst);
+    assert_eq!(app.oneshot(web_req("GET", child, Body::empty(), false, Some(&cookie))).await.unwrap().status(), StatusCode::FORBIDDEN);
 }

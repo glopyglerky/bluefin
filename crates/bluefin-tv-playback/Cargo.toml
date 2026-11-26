@@ -10,7 +10,7 @@ crate-type = ["rlib", "cdylib"]
 
 [features]
 default = ["server"]
-server = ["dep:axum", "dep:async-trait", "dep:tokio", "dep:futures-util", "dep:tower", "dep:uuid", "dep:url"]
+server = ["dep:axum", "dep:async-trait", "dep:tokio", "dep:futures-util", "dep:tower", "dep:uuid", "dep:url", "dep:subtle"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -22,6 +22,7 @@ futures-util = { version = "0.3", optional = true }
 tower = { version = "0.5", features = ["util"], optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 url = { version = "2", optional = true }
+subtle = { version = "2.6", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util", "rt-multi-thread"] }
