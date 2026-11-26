@@ -593,6 +593,11 @@ pub fn call(v: &Value) -> Result<Value> {
     ) {
         return offline::call(v, op);
     }
+    if op == "meshLocalSignOut" {
+        offline::logout(v)?;
+        mesh_proxy::stop_all()?;
+        return Ok(Value::Null);
+    }
     if op == "logout" {
         offline::logout(v)?;
     }
