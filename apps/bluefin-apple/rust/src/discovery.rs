@@ -1,5 +1,6 @@
 //! Generic Bluefin discovery protocol. No provider adapter or configuration.
 use super::*;
+use bluefin_contract::search::SearchScope;
 use bluefin_contract::discovery::{ActionForm, ActionReceipt, DiscoveryPage, SubmitAction};
 
 pub(super) fn call(api: &Api<'_>, operation: &str) -> Result<Value> {
@@ -14,9 +15,14 @@ pub(super) fn call(api: &Api<'_>, operation: &str) -> Result<Value> {
             {
                 return Err(err("Invalid discovery search"));
             }
+            let mut params = vec![("query", query.into()), ("page", page.to_string())];
+            if let Some(scope) = api.v.get("scope").filter(|x| !x.is_null()) {
+                let scope: SearchScope = serde_json::from_value(scope.clone())
+                    .map_err(|_| err("Invalid search category"))?;
+                if scope != SearchScope::All { params.push(("scope", scope.wire().into())); }
+            }
             let page: DiscoveryPage = serde_json::from_value(api.get(
-                &["Bluefin", "Discovery", "Search"],
-                vec![("query", query.into()), ("page", page.to_string())],
+                &["Bluefin", "Discovery", "Search"], params,
             )?)
             .map_err(|_| err("Invalid discovery response"))?;
             if page.results.len() > 100

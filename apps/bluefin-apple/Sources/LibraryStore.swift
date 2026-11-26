@@ -10,6 +10,15 @@ import CryptoKit
     @Published var home = HomePage(resume: [], latest: [], nextUp: [])
     @Published private(set) var initialHomeLoaded = false
     @Published private(set) var homeFromCatalog = false
+    @Published private(set) var searchHistoryGeneration: Int64?
+    @Published private(set) var homeHistoryProblem: String?
+    @Published private(set) var clearingHomeHistory = false
+    var searchHistoryAvailable: Bool { searchHistoryGeneration != nil && !preview && session != nil }
+    private var homeRevision = UUID()
+    private var recommendationRequest: UUID?
+    private var lastHomeSearch: (key: String, date: Date)?
+    private var artworkPrefetch: Task<Void, Never>?
+    private enum HomeLoadPart { case items(ItemPage), recommendations(HomeRecommendationsPage) }
     @Published var libraries: [MediaItem] = []
     @Published var loading = false
     @Published private(set) var libraryProblem: String?
@@ -91,6 +100,7 @@ import CryptoKit
         home = .init(resume: [], latest: [], nextUp: [])
         #endif
         accountGeneration = UUID()
+        resetHomePersonalization()
         initialHomeLoaded = false
         session = newSession
         preview = false
@@ -126,6 +136,7 @@ import CryptoKit
         TopShelfSnapshot.clear()
         #endif
         accountGeneration = UUID()
+        resetHomePersonalization()
         initialHomeLoaded = false
         session = candidate
         preview = false
@@ -148,6 +159,7 @@ import CryptoKit
 
     func explore() {
         accountGeneration = UUID()
+        resetHomePersonalization()
         preview = true
         error = nil
         libraryProblem = nil
@@ -160,24 +172,30 @@ import CryptoKit
         guard let session, !preview else { return }
         let generation = accountGeneration
         let request = UUID()
+        let revision = homeRevision
         refreshID = request
+        recommendationRequest = request
         loading = true
         libraryProblem = nil
         defer { if refreshID == request { loading = false } }
 
         func current() -> Bool {
-            accountGeneration == generation && refreshID == request && !Task.isCancelled
+            accountGeneration == generation && homeRevision == revision && refreshID == request && !Task.isCancelled
         }
 
-        let sections = ["homeResume", "homeLatest", "homeNextUp", "libraries"]
+        let sections = ["homeResume", "homeLatest", "homeNextUp", "libraries", "homeRecommendations"]
         var problems: [String] = []
         var homeFailed = false
-        await withTaskGroup(of: (String, Result<ItemPage, Error>).self) { group in
+        await withTaskGroup(of: (String, Result<HomeLoadPart, Error>).self) { group in
             for section in sections {
                 group.addTask {
                     do {
+                        if section == "homeRecommendations" {
+                            let page: HomeRecommendationsPage = try await RustBridge.call(section, session: session)
+                            return (section, .success(.recommendations(page)))
+                        }
                         let page: ItemPage = try await RustBridge.call(section, session: session)
-                        return (section, .success(page))
+                        return (section, .success(.items(page)))
                     } catch {
                         return (section, .failure(error))
                     }
@@ -186,22 +204,32 @@ import CryptoKit
             for await (section, result) in group {
                 guard current() else { group.cancelAll(); return }
                 switch result {
-                case .success(let page):
+                case .success(.recommendations(let page)):
+                    if recommendationRequest == request { applyHomeRecommendations(page) }
+                case .success(.items(let page)):
                     switch section {
                     case "homeResume": home.resume = page.Items
                     case "homeLatest": home.latest = page.Items; homeFromCatalog = false
                     case "homeNextUp": home.nextUp = page.Items
                     default: libraries = page.Items
                     }
-                    if section != "libraries" { initialHomeLoaded = true }
+                    if section != "libraries" { initialHomeLoaded = true; home.boundRecommendations() }
+                    prefetchHomeArtwork()
                 case .failure(let error):
                     if error is CancellationError { continue }
-                    if section != "libraries" { homeFailed = true }
+                    if section == "homeRecommendations", recommendationRequest != request { continue }
+                    if section != "libraries" && section != "homeRecommendations" { homeFailed = true }
+                    if section == "homeRecommendations" {
+                        // Do not keep potentially revoked results after an authorization or network failure.
+                        home.recommendations = []
+                        searchHistoryGeneration = nil
+                    }
                     let title: String
                     switch section {
                     case "homeResume": title = "Continue Watching"
                     case "homeLatest": title = "Recently Added"
                     case "homeNextUp": title = "Up Next"
+                    case "homeRecommendations": title = "Recommendations"
                     default: title = "Collections"
                     }
                     problems.append("\(title) couldn't refresh. " + error.localizedDescription)
@@ -216,6 +244,98 @@ import CryptoKit
         if current() {
             libraryProblem = problems.isEmpty ? nil : problems.joined(separator: "\n")
             initialHomeLoaded = true
+        }
+    }
+
+    private func resetHomePersonalization() {
+        searchHistoryGeneration = nil; homeHistoryProblem = nil; clearingHomeHistory = false
+        homeRevision = UUID(); recommendationRequest = nil; lastHomeSearch = nil
+        home = .init(resume: [], latest: [], nextUp: [])
+        artworkPrefetch?.cancel(); artworkPrefetch = nil
+    }
+
+    private func applyHomeRecommendations(_ page: HomeRecommendationsPage) {
+        home.recommendations = page.recommendations
+        home.boundRecommendations()
+        searchHistoryGeneration = page.searchHistorySupported ? page.searchHistoryGeneration : nil
+        prefetchHomeArtwork()
+    }
+
+    private func prefetchHomeArtwork() {
+        guard let session, !preview else { return }
+        let items = Array((home.resume + home.recommendations.flatMap(\.items) + home.nextUp + home.latest).prefix(24))
+        artworkPrefetch?.cancel()
+        artworkPrefetch = Task { await Artwork.prefetch(items: items, session: session) }
+    }
+
+    func refreshHomeRecommendations() async {
+        guard let session, !preview else { return }
+        let generation = accountGeneration; let revision = homeRevision
+        let request = UUID(); recommendationRequest = request
+        do {
+            let page: HomeRecommendationsPage = try await RustBridge.call("homeRecommendations", session: session)
+            try Task.checkCancellation()
+            guard accountGeneration == generation, homeRevision == revision, recommendationRequest == request else { return }
+            applyHomeRecommendations(page)
+        } catch is CancellationError {} catch {
+            guard accountGeneration == generation, homeRevision == revision, recommendationRequest == request else { return }
+            home.recommendations = []; searchHistoryGeneration = nil
+            homeHistoryProblem = "Home recommendations could not refresh. " + error.localizedDescription
+        }
+    }
+
+    /// Only called by committed search and result-selection actions, never typeahead.
+    /// A retry keeps its event ID, timestamp, owner, and clear-history generation.
+    func recordHomeSearch(query: String, selectedItem: MediaItem? = nil) async {
+        guard let session, !preview, !clearingHomeHistory, let historyGeneration = searchHistoryGeneration else { return }
+        let normalized = query.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard normalized.count >= 2, normalized.count <= 128,
+              !normalized.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return }
+        let key = normalized.lowercased() + "|" + (selectedItem?.Id ?? "")
+        if let lastHomeSearch, lastHomeSearch.key == key, Date().timeIntervalSince(lastHomeSearch.date) < 5 { return }
+        lastHomeSearch = (key, Date())
+        let generation = accountGeneration; let revision = homeRevision
+        var event: [String: Any] = ["eventId": UUID().uuidString, "query": normalized,
+            "generation": historyGeneration, "occurredAtUnixMs": Int64(Date().timeIntervalSince1970 * 1_000)]
+        if let selectedItem { event["selectedItemId"] = selectedItem.Id }
+        for attempt in 0..<2 {
+            guard accountGeneration == generation, homeRevision == revision, !Task.isCancelled else { return }
+            do {
+                let response: HomeHistoryState = try await RustBridge.call("homeSearchRecord", session: session, fields: ["event": event])
+                guard accountGeneration == generation, homeRevision == revision, !Task.isCancelled else { return }
+                searchHistoryGeneration = response.generation; homeHistoryProblem = nil
+                await refreshHomeRecommendations()
+                return
+            } catch is CancellationError { return } catch {
+                guard accountGeneration == generation, homeRevision == revision, !Task.isCancelled else { return }
+                // Retry only an uncertain network delivery. Never reissue a stale event
+                // with the new generation after another device clears this history.
+                if attempt == 0 && error.localizedDescription.contains("request failed or timed out") { continue }
+                homeHistoryProblem = "This search could not update Home. " + error.localizedDescription
+                if error.localizedDescription.contains("409") { await refreshHomeRecommendations() }
+                return
+            }
+        }
+    }
+
+    func clearHomeSearchHistory() async {
+        guard let session, !preview, !clearingHomeHistory, let historyGeneration = searchHistoryGeneration else { return }
+        let generation = accountGeneration
+        homeRevision = UUID()
+        let revision = homeRevision
+        clearingHomeHistory = true; homeHistoryProblem = nil
+        defer { if accountGeneration == generation, homeRevision == revision { clearingHomeHistory = false } }
+        do {
+            let state: HomeHistoryState = try await RustBridge.call("homeSearchClear", session: session, fields: ["generation": historyGeneration])
+            try Task.checkCancellation()
+            guard accountGeneration == generation, homeRevision == revision else { return }
+            searchHistoryGeneration = state.generation
+            lastHomeSearch = nil
+            home.recommendations.removeAll { $0.reason == "search" }
+            await refreshHomeRecommendations()
+        } catch is CancellationError {} catch {
+            guard accountGeneration == generation, homeRevision == revision else { return }
+            homeHistoryProblem = "Search history could not be cleared. " + error.localizedDescription
         }
     }
 
@@ -616,6 +736,10 @@ import CryptoKit
         home.resume = update(home.resume)
         home.latest = update(home.latest)
         home.nextUp = update(home.nextUp)
+        home.recommendations = home.recommendations.map { shelf in
+            var shelf = shelf; shelf.items = update(shelf.items); return shelf
+        }
+        await refreshHomeRecommendations()
     }
 
     /// One native audio owner at a time. The local catalog remains independent
@@ -660,6 +784,7 @@ import CryptoKit
 
         // Stop local work before any Keychain or network operation can fail.
         accountGeneration = UUID()
+        resetHomePersonalization()
         initialHomeLoaded = false
         let generation = accountGeneration
         let pending = pendingPreparation

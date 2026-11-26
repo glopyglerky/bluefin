@@ -369,9 +369,22 @@ private struct WatchBrowseRequest { let key: WatchBrowseKey; let generation: UUI
     }
 }
 
+private enum WatchAppearance {
+    static let background = Color(red: 6.0 / 255, green: 23.0 / 255, blue: 39.0 / 255)
+    static let text = Color(red: 204.0 / 255, green: 208.0 / 255, blue: 211.0 / 255)
+    static let accent = Color(red: 173.0 / 255, green: 181.0 / 255, blue: 209.0 / 255)
+}
+
 @main struct BluefinWatchApp: App {
     @StateObject private var store = WatchStore()
-    var body: some Scene { WindowGroup { WatchRoot().environmentObject(store) } }
+    var body: some Scene {
+        WindowGroup {
+            WatchRoot().environmentObject(store)
+                .tint(WatchAppearance.accent)
+                .foregroundStyle(WatchAppearance.text)
+                .containerBackground(WatchAppearance.background, for: .navigation)
+        }
+    }
 }
 struct WatchRoot: View {
     @EnvironmentObject private var store: WatchStore
@@ -491,7 +504,9 @@ struct WatchRoot: View {
                 NavigationLink("Software licenses", destination: SoftwareLicensesView())
                 if store.busy { ProgressView() }
                 if let problem = store.problem { Text(problem).font(.footnote) }
-            }.navigationTitle("Bluefin")
+            }.scrollContentBackground(.hidden)
+                .background(WatchAppearance.background)
+                .navigationTitle("Bluefin")
         }
     }
 }
@@ -509,7 +524,9 @@ struct WatchTrackList: View {
             }
             if store.hasMore { Button("Load more") { Task { await store.load(section, search: search, more: true) } }.disabled(store.busy) }
             if !store.busy && store.tracks.isEmpty { Text("No music found") }
-        }.navigationTitle(section).searchable(text: $search)
+        }.scrollContentBackground(.hidden)
+            .background(WatchAppearance.background)
+            .navigationTitle(section).searchable(text: $search)
         .task(id: search) {
             store.beginBrowse(section, search: search)
             do { try await Task.sleep(nanoseconds: 350_000_000); try Task.checkCancellation(); await store.load(section, search: search) } catch {}

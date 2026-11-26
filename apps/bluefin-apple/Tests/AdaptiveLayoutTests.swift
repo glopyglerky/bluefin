@@ -7,6 +7,60 @@ import SwiftUI
 #endif
 
 @MainActor final class AdaptiveLayoutTests: XCTestCase {
+
+    func testCategoryRoutesPreserveWidgetMusicAndVideoFilters() {
+        XCTAssertEqual(BluefinCategory.allCases.map(\.title),
+                       ["Home", "Sports", "TV Shows", "Movies", "Live TV", "Music"])
+        XCTAssertEqual(Set(BluefinCategory.allCases.map(\.rawValue)).count, 6)
+        XCTAssertEqual(BluefinCategory.movies.videoItemType, "Movie")
+        XCTAssertEqual(BluefinCategory.shows.videoItemType, "Series")
+        XCTAssertNil(BluefinCategory.home.videoItemType)
+        #if os(iOS)
+        XCTAssertEqual(BluefinCategory(rawValue: WidgetRoute.music.tab), .music)
+        XCTAssertEqual(BluefinCategory(rawValue: WidgetRoute.liveTV.tab), .liveTV)
+        XCTAssertNil(BluefinCategory(rawValue: WidgetRoute.search.tab),
+                     "Search stays a utility, not a media category")
+        #endif
+    }
+
+    #if os(iOS)
+    func testHomeAndSixCategoriesFitBothAppearances() async throws {
+        guard #available(iOS 16, *) else { throw XCTSkip("Hosting size measurement requires iOS 16") }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let oldWindow = scene.windows.first(where: \.isKeyWindow)
+        for scheme in [ColorScheme.light, .dark] {
+            for size in [CGSize(width: 320, height: 680), CGSize(width: 390, height: 844),
+                         CGSize(width: 1024, height: 768)] {
+                let store = LibraryStore()
+                store.explore()
+                let host = UIHostingController(rootView: LibraryTabs()
+                    .environmentObject(store).preferredColorScheme(scheme))
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(origin: .zero, size: size)
+                window.rootViewController = host
+                window.makeKeyAndVisible()
+                host.view.frame = window.bounds
+                host.view.setNeedsLayout()
+                host.view.layoutIfNeeded()
+                await Task.yield()
+                let fitting = host.sizeThatFits(in: size)
+                XCTAssertLessThanOrEqual(fitting.width, size.width + 0.5)
+                let format = UIGraphicsImageRendererFormat()
+                format.scale = 1
+                let captured = UIGraphicsImageRenderer(size: size, format: format).image { context in
+                    host.view.layer.render(in: context.cgContext)
+                }
+                let attachment = XCTAttachment(image: captured)
+                attachment.name = "Bluefin Home \(scheme == .light ? "light" : "dark") \(Int(size.width))x\(Int(size.height))"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                window.isHidden = true
+                oldWindow?.makeKey()
+            }
+        }
+    }
+    #endif
+
     func testGuideArtworkUsesOnlyTheProgramsAdvertisedPrimaryImage() throws {
         let payload = """
         {"Id":"programme","ChannelId":"channel","ImageTags":{"Primary":"version"}}

@@ -4813,33 +4813,29 @@ fn years_and_ratings_statement(filter: &InternalItemsQuery) -> QueryBuilder<Sqli
     qb
 }
 
-/// The statement [`FerrofinItemRepository::distinct_item_values`] runs: one
-/// `MIN("Value")` per `CleanValue` of `value_type`, over the items `filter`
-/// matches, ordered by that value.
+/// Distinct values over matching items, preserving display spelling per value row.
 ///
-/// `CROSS JOIN` pins the join order to iv → ivm → bi: the values of the type,
-/// their map rows by the map's primary key, the item by its own. Left to
-/// itself the planner — with no `sqlite_stat1` to tell it the user-scope
-/// `TopParentId IN (…)` matches every item there is — pairs every value with
-/// every item under the user's libraries and probes the map for each pair:
-/// 38 genres × 21k items ≈ 800k probes, 820 ms for the genre facet of
-/// `/Items/Filters` on the bench library; pinned, it is one probe per map row
-/// of the type. `item_values_statement_walks_values_then_map_then_items` pins it.
+/// Eligibility belongs to each ItemValueId before MIN(Value) collapses its
+/// CleanValue group: a hidden spelling cannot supply the displayed name.
+/// EXISTS stops at the first visible mapped item instead of evaluating every
+/// item's policy for a widely shared tag. Keep ivm -> bi pinned inside it so a
+/// library scope cannot turn a point lookup into a library-wide scan.
 fn item_values_statement(
     filter: &InternalItemsQuery,
     value_type: ItemValueType,
 ) -> QueryBuilder<Sqlite> {
-    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
-        r#"SELECT MIN(iv."Value") FROM "ItemValues" AS iv
-           CROSS JOIN "ItemValuesMap" ivm ON ivm."ItemValueId" = iv."ItemValueId"
-           CROSS JOIN "BaseItems" AS bi ON bi."Id" = ivm."ItemId"
-           WHERE iv."Type" = "#,
-    );
+    let mut qb: QueryBuilder<Sqlite> =
+        QueryBuilder::new(r#"SELECT MIN(iv."Value") FROM "ItemValues" AS iv WHERE iv."Type" = "#);
     qb.push_bind(i64::from(i32::from(value_type)));
-    qb.push(r#" AND bi."Id" <> "#);
+    qb.push(
+        r#" AND EXISTS (
+           SELECT 1 FROM "ItemValuesMap" ivm
+           CROSS JOIN "BaseItems" AS bi ON bi."Id" = ivm."ItemId"
+           WHERE ivm."ItemValueId" = iv."ItemValueId" AND bi."Id" <> "#,
+    );
     qb.push_bind(PLACEHOLDER_ID);
     append_predicates(&mut qb, filter);
-    qb.push(r#" GROUP BY iv."CleanValue" ORDER BY MIN(iv."Value")"#);
+    qb.push(r#") GROUP BY iv."CleanValue" ORDER BY MIN(iv."Value")"#);
     qb
 }
 
@@ -9973,9 +9969,80 @@ mod tests {
         }
     }
 
+    /// A display spelling is eligible only through its own visible mapping,
+    /// before CleanValue grouping. A hidden earlier mapping must neither leak
+    /// its spelling nor suppress a later visible mapping of a shared value.
+    #[rstest::rstest]
+    #[case(ItemValueType::Tags)]
+    #[case(ItemValueType::Genre)]
+    #[tokio::test]
+    async fn item_value_facets_keep_only_visible_spellings(#[case] value_type: ItemValueType) {
+        let db = test_db().await;
+        let repository = repo(&db);
+        let library_a = Uuid::from_u128(0xAF01);
+        let library_b = Uuid::from_u128(0xAF02);
+        let other_library = Uuid::from_u128(0xAF10);
+        let blocked = Uuid::from_u128(0xAF11);
+        let untagged = Uuid::from_u128(0xAF12);
+        let visible = Uuid::from_u128(0xAF20);
+        for (id, library) in [
+            (other_library, library_b),
+            (blocked, library_a),
+            (untagged, library_a),
+            (visible, library_a),
+        ] {
+            seed_top_parented_item(&db, id, BaseItemKind::Movie, "Fixture", library).await;
+        }
+        for id in [other_library, blocked, visible] {
+            seed_item_value(&db, id, ItemValueType::Tags, "safe").await;
+        }
+        seed_item_value(&db, blocked, ItemValueType::Tags, "blocked").await;
+        for (item, value) in [
+            (other_library, "SCI-FI"),
+            (visible, "Sci-Fi"),
+            (other_library, "shared"),
+            (visible, "shared"),
+            (blocked, "BlockedOnly"),
+            (untagged, "UntaggedOnly"),
+        ] {
+            seed_item_value(&db, item, value_type, value).await;
+        }
+        for (library, spelling) in [(library_a, "Sci-Fi"), (library_b, "SCI-FI")] {
+            let filter = InternalItemsQuery {
+                include_item_types: vec![BaseItemKind::Movie],
+                top_parent_ids: vec![library],
+                include_inherited_tags: vec!["safe".to_owned()],
+                exclude_inherited_tags: vec!["blocked".to_owned()],
+                ..InternalItemsQuery::default()
+            };
+            let actual = repository
+                .distinct_item_values(&filter, value_type)
+                .await
+                .expect("scoped facets");
+            let mut expected = vec![spelling.to_owned(), "shared".to_owned()];
+            if value_type == ItemValueType::Tags {
+                expected.push("safe".to_owned());
+            }
+            expected.sort();
+            assert_eq!(actual, expected);
+        }
+        let denied = InternalItemsQuery {
+            top_parent_ids: vec![library_a],
+            include_inherited_tags: vec!["no matching grant".to_owned()],
+            ..InternalItemsQuery::default()
+        };
+        assert!(
+            repository
+                .distinct_item_values(&denied, value_type)
+                .await
+                .expect("denied facets")
+                .is_empty()
+        );
+    }
+
     /// Plan pin for the tag facet (`/Items/Filters2`; the legacy facet set's
-    /// genres and tags run the same statement): the `CROSS JOIN` order holds,
-    /// the type's values first, then their map rows, then each item by a point
+    /// genres and tags run the same statement): the value seek and inner
+    /// `CROSS JOIN` order hold, followed by each mapped item through a point
     /// probe on its `Id` (the primary key, or under a user scope
     /// `IX_BaseItems_Type_TopParentId_Id` ending in `Id=?`).
     #[tokio::test]
@@ -16302,3 +16369,43 @@ mod folder_sort_key_tests;
 #[cfg(test)]
 #[path = "item_repository/folder_sql_order_tests.rs"]
 mod folder_sql_order_tests;
+
+#[cfg(test)]
+mod home_favorite_or_liked_tests {
+    use super::*;
+    use crate::test_support::{seed_library_over, seed_named_item, seed_user_data, seed_user_with_defaults, test_db};
+
+    #[tokio::test]
+    async fn home_liked_baselines_include_rating_only_and_are_scoped_to_the_viewer() {
+        let db = test_db().await;
+        let a = Uuid::new_v4(); let b = Uuid::new_v4();
+        let user_a = Arc::new(seed_user_with_defaults(&db, a).await);
+        let user_b = Arc::new(crate::test_support::seed_named_user(&db, b, "other-home-user").await);
+        crate::test_support::grant_default_permissions(&db, b).await;
+        let liked = Uuid::new_v4(); let favorite = Uuid::new_v4(); let low = Uuid::new_v4();
+        for (id, name) in [(liked, "Liked"), (favorite, "Favorite"), (low, "Below threshold")] {
+            seed_named_item(&db, id, BaseItemKind::Movie, name).await;
+            seed_user_data(&db, a, id, false, None).await;
+        }
+        let library = seed_library_over(&db, &[liked, favorite, low]).await;
+        sqlx::query(r#"UPDATE "UserData" SET "Rating" = 6.5, "Likes" = 0 WHERE "UserId" = ? AND "ItemId" = ?"#)
+            .bind(guid_to_db(a)).bind(guid_to_db(liked)).execute(db.writer()).await.unwrap();
+        sqlx::query(r#"UPDATE "UserData" SET "IsFavorite" = 1 WHERE "UserId" = ? AND "ItemId" = ?"#)
+            .bind(guid_to_db(a)).bind(guid_to_db(favorite)).execute(db.writer()).await.unwrap();
+        sqlx::query(r#"UPDATE "UserData" SET "Rating" = 6.4, "Likes" = 1 WHERE "UserId" = ? AND "ItemId" = ?"#)
+            .bind(guid_to_db(a)).bind(guid_to_db(low)).execute(db.writer()).await.unwrap();
+        let repo = FerrofinItemRepository::new(db.clone(), Arc::new(crate::item_type_lookup::ItemTypeLookup::new()));
+        let query = |user, wanted| InternalItemsQuery {
+            parent_id: library, recursive: true, user: Some(user), is_favorite_or_liked: Some(wanted),
+            include_item_types: vec![BaseItemKind::Movie], ..Default::default()
+        };
+        let as_ids = |rows: Vec<BaseItemEntity>| rows.into_iter().map(|row| Uuid::parse_str(&row.id).unwrap())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(as_ids(repo.get_item_list(&query(user_a.clone(), true)).await.unwrap()),
+            std::collections::HashSet::from([liked, favorite]));
+        assert_eq!(as_ids(repo.get_item_list(&query(user_a, false)).await.unwrap()),
+            std::collections::HashSet::from([low]));
+        assert!(repo.get_item_list(&query(user_b, true)).await.unwrap().is_empty(),
+            "one account's ratings must never seed another account's Home");
+    }
+}

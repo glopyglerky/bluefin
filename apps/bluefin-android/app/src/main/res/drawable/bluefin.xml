@@ -1,1 +1,11 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="48dp" android:height="48dp" android:viewportWidth="48" android:viewportHeight="48"><path android:fillColor="#0E1218" android:pathData="M0,0h48v48h-48z"/><path android:fillColor="#59D9F2" android:pathData="M8,24L30,10L25,22L40,24L25,27L30,38z"/></vector>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp" android:viewportWidth="48" android:viewportHeight="48">
+    <path android:fillColor="@color/bluefin_icon_background" android:pathData="M0,0h48v48h-48z" />
+    <group android:scaleX="0.046875" android:scaleY="0.046875">
+        <path android:fillColor="@color/bluefin_icon_foreground"
+            android:pathData="M225,604C388,534 410,344 620,239C580,399 670,554 790,604C560,554 420,687 225,604" />
+        <path android:fillColor="#00000000" android:strokeColor="@color/bluefin_icon_waves"
+            android:strokeWidth="20" android:strokeLineCap="round"
+            android:pathData="M235,724C430,789 575,644 790,712M235,784C430,849 575,704 790,772" />
+    </group>
+</vector>

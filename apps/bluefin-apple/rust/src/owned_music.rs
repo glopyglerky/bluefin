@@ -198,11 +198,12 @@ fn import(v: &Value, root: &Dir, media: &Dir, disk: &mut DiskLibrary) -> Result<
     output.sync_all().map_err(|_| err("The imported audio could not be saved."))?;
     media.sync()?;
     track.id = format!("{:x}", hash.finalize());
-    // Recovery may publish this file and must then be able to commit its catalog
-    // record. Reject conflicts before retaining a completed pending import. An
-    // error here leaves only the uncommitted part, which ordinary recovery removes.
-    let mut proposed = disk.catalog.clone();
-    let imported = proposed.import_track(track.clone()).map_err(|e| e.to_string())?;
+    // Validate catalog admission before making the completed import recoverable.
+    // For example, equal ID3 bytes under .mp3 and .aac names have the same hash
+    // but conflicting formats. A rejected import must leave only an incomplete
+    // staging record, which recovery can remove without blocking the library.
+    let mut admitted = disk.catalog.clone();
+    let imported = admitted.import_track(track.clone()).map_err(|e| e.to_string())?;
     let id = track.id.clone();
     disk.pending_import = Some(PendingImport { part, track: Some(track) });
     save(root, disk)?;
@@ -340,6 +341,29 @@ mod tests {
         assert_eq!(std::fs::read_dir(media).unwrap().count(), 1);
         assert_eq!(std::fs::read(original).unwrap(), bytes);
         assert_eq!(std::fs::read(conflicting).unwrap(), bytes);
+        assert_eq!(call(&fixture.import(), "ownedLibraryImport").unwrap()["imported"], true);
+    }
+
+    #[test]
+    fn conflicting_duplicate_format_never_traps_catalog_recovery() {
+        let fixture = Fixture::new();
+        let bytes = b"ID3same-local-audio-container";
+        std::fs::write(fixture.0.join("song.mp3"), bytes).unwrap();
+        std::fs::write(fixture.0.join("song.aac"), bytes).unwrap();
+        let mut request = fixture.import();
+        request["sourcePath"] = json!(fixture.0.join("song.mp3").to_str().unwrap());
+        let original = call(&request, "ownedLibraryImport").unwrap();
+        request = fixture.import();
+        request["sourcePath"] = json!(fixture.0.join("song.aac").to_str().unwrap());
+        assert!(call(&request, "ownedLibraryImport").is_err());
+        let catalog = call(&fixture.input(), "ownedLibraryList").unwrap();
+        assert_eq!(catalog, original["catalog"]);
+        assert_eq!(std::fs::read_dir(fixture.0.join("library/media")).unwrap().count(), 1);
+        request = fixture.input();
+        request["itemId"] = original["itemId"].clone();
+        assert!(call(&request, "ownedLibraryPlay").unwrap()["url"].as_str().unwrap().ends_with(".mp3"));
+        // A subsequent ordinary import still succeeds after recovery discarded
+        // only the rejected operation's exact staging file.
         assert_eq!(call(&fixture.import(), "ownedLibraryImport").unwrap()["imported"], true);
     }
 

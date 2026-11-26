@@ -7,7 +7,7 @@ enum RustBridge {
     static func call<T: Decodable & Sendable>(_ operation: String, session: AccountSession? = nil, fields: [String: Any] = [:], as type: T.Type = T.self) async throws -> T {
         let cleanup = ["releasePlayback", "stopPlaybackProxy", "downloadCancel", "cancelKaraokePreparation", "meshCloseResources", "meshLocalSignOut", "meshRevoke"].contains(operation)
         let permit: UUID?
-        if cleanup { permit = nil } else { permit = try await CoreAdmission.shared.acquire() }
+        if cleanup { permit = nil } else { permit = try await CoreAdmission.shared.acquire(artwork: operation == "meshImage") }
         defer { if let permit { Task { await CoreAdmission.shared.release(permit) } } }
         if !cleanup { try Task.checkCancellation() }
         var request = fields

@@ -93,11 +93,11 @@ struct KaraokeLyricsView: View {
             }.padding(20).frame(maxWidth: 760).frame(maxWidth: .infinity)
             }.frame(maxHeight: dynamicTypeSize.isAccessibilitySize ? 340 : 280).background(.ultraThinMaterial)
         }
-        .background(LinearGradient(colors: [.indigo.opacity(0.3), .black], startPoint: .topLeading, endPoint: .bottomTrailing))
+        .background(BluefinBackground())
         .preferredColorScheme(.dark)
         .onDisappear { playback.stopKaraokeMicrophones() }
     }
-    private func tint(_ voice: KaraokeLine.Voice) -> Color { voice == .partner ? .mint : voice == .backing ? .orange : .cyan }
+    private func tint(_ voice: KaraokeLine.Voice) -> Color { voice == .partner ? .mint : voice == .backing ? .orange : BluefinStyle.accent }
     private func voiceLabel(_ voice: KaraokeLine.Voice) -> String {
         switch voice { case .lead: return "Voice 1"; case .partner: return "Voice 2"; case .together: return "Together"; case .backing: return "Backing vocals" }
     }

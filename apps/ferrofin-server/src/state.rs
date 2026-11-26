@@ -2961,7 +2961,8 @@ pub async fn build_app_state(
     // there (mirrors the C# `ILibraryManager` virtual-folder methods).
     let state = state
         .with_virtual_folders(Arc::clone(&virtual_folders))
-        .with_bluefin_passkeys(db.clone(), config.published_url.as_deref());
+        .with_bluefin_passkeys(db.clone(), config.published_url.as_deref())
+        .with_bluefin_home(db.clone());
 
     // Image serving runs through the real `image`-crate processor so
     // `maxWidth`/`format`/… requests resize/convert instead of serving the original.

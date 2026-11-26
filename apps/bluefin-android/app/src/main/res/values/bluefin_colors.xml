@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bluefin_icon_background">#A3ACB1</color>
+    <color name="bluefin_icon_foreground">#061727</color>
+    <color name="bluefin_icon_waves">#8289A5</color>
+</resources>

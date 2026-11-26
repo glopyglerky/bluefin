@@ -867,7 +867,7 @@ struct PlaybackScreen: View {
                 VStack(spacing: 20) {
                     Text("Playback interrupted").font(.title2.bold())
                     Text(failure).multilineTextAlignment(.center)
-                    Button("Close player") { dismiss() }.buttonStyle(.borderedProminent)
+                    Button("Close player") { dismiss() }.buttonStyle(.borderedProminent).tint(BluefinStyle.primaryFill).foregroundStyle(BluefinStyle.onPrimary)
                 }.padding(32).background(.regularMaterial).cornerRadius(20).padding()
             }
         }

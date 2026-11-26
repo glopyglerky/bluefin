@@ -660,6 +660,7 @@ async fn run(
                         end_date: None,
                         channel_name: None,
                         channel_id: None,
+                        ..Default::default()
                     };
                     queued = Some((item, Selection::default(), Some(q)));
                 }

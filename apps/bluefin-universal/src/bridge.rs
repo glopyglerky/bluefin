@@ -465,6 +465,7 @@ mod tests {
                 end_date: None,
                 channel_name: None,
                 channel_id: None,
+                        ..Default::default()
             },
             url: session.base.join("Audio/1/stream.wav").unwrap(),
             prefix: "/Audio/1/".into(),

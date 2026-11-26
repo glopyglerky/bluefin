@@ -99,7 +99,7 @@ private fun AssetManager.legalText(path: String) = open("legal/$path").bufferedR
 @Composable private fun NoticeButton(title: String, click: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     OutlinedButton(onClick = click, modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }
-        .border(if (focused) 3.dp else 0.dp, if (focused) Color.White else Color.Transparent)) { Text(title) }
+        .border(if (focused) 3.dp else 0.dp, if (focused) MaterialTheme.colorScheme.primary else Color.Transparent)) { Text(title) }
 }
 
 @Composable internal fun LegalNotices(done: () -> Unit) {

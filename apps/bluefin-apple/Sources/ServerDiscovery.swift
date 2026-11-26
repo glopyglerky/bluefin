@@ -16,6 +16,7 @@ struct ServerActionReceipt: Decodable { let status: String; let message: String 
 /// Server-enabled generic results. Provider settings and processing stay on the server.
 struct ServerDiscoverySection: View {
     let query: String
+    var scope = UnifiedSearchScope.all
     @EnvironmentObject private var store: LibraryStore
     @State private var items: [ServerDiscoveryItem] = []
     @State private var enabled = false
@@ -24,16 +25,17 @@ struct ServerDiscoverySection: View {
     @State private var busy = false
     @State private var failure: String?
     @State private var generation = UUID()
-    private var account: String { TrailersAccount.identity(store.session) }
+    private var account: String { TrailersAccount.identity(store.session) + "|" + store.accountContext.uuidString }
+    private var heading: String { scope == .music ? "Music catalog" : "Discover" }
     var body: some View {
         Group {
             if enabled {
-                Section("Discover") {
+                Section(heading) {
                     ForEach(items) { item in
                         NavigationLink(destination: ServerDiscoveryDetail(item: item)) {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(item.title).font(.headline)
-                                Text([item.year, item.kind == "series" ? "Series" : "Movie"].compactMap { $0 }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary)
+                                Text([item.year, item.kind == "series" ? "TV show" : item.kind.capitalized].compactMap { $0 }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -44,7 +46,7 @@ struct ServerDiscoverySection: View {
                     Text("Catalog results do not establish playback access. Your server controls available actions.").font(.footnote).foregroundStyle(.secondary)
                 }
             }
-        }.task(id: query + "|" + account) { await load(more: false) }
+        }.task(id: query + "|" + scope.rawValue + "|" + account) { await load(more: false) }
     }
     @MainActor private func load(more: Bool) async {
         guard let session = store.session, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { items = []; enabled = false; return }
@@ -55,16 +57,16 @@ struct ServerDiscoverySection: View {
             if !more {
                 try await Task.sleep(nanoseconds: 250_000_000); try Task.checkCancellation()
                 let capabilities: BluefinCapabilities = try await RustBridge.call("bluefinCapabilities", session: session)
-                guard generation == request, identity == account else { return }
+                guard !Task.isCancelled, generation == request, identity == account else { return }
                 guard capabilities.protocolVersion == 1, capabilities.discovery?.search == true else { enabled = false; return }
                 enabled = true
             }
-            let response: ServerDiscoveryPage = try await RustBridge.call("serverDiscoverySearch", session: session, fields: ["query": query, "page": more ? page + 1 : 1])
-            try Task.checkCancellation(); guard generation == request, identity == account else { return }
+            let response: ServerDiscoveryPage = try await RustBridge.call("serverDiscoverySearch", session: session, fields: ["query": query, "scope": scope.rawValue, "page": more ? page + 1 : 1])
+            try Task.checkCancellation(); guard !Task.isCancelled, generation == request, identity == account else { return }
             let existing = Set(items.map(\.id)); items += response.results.filter { !existing.contains($0.id) }
             page = response.page; totalPages = response.totalPages
         } catch is CancellationError {} catch {
-            guard generation == request, identity == account else { return }
+            guard !Task.isCancelled, generation == request, identity == account else { return }
             if error.localizedDescription.contains("404") { enabled = false; items = [] }
             else if enabled { failure = error.localizedDescription }
         }

@@ -44,7 +44,7 @@ export function createAdaptive(video: VideoPlayer, onError: () => void) {
       Promise.resolve().then(async () => {
         if (disposed) throw Error('Stopped');
         const url = grantResource(root,context.url);
-        const options = {signal:controller.signal,credentials:'omit' as const,redirect:'error',headers:{}};
+        const options = {signal:controller.signal,credentials:'omit' as const,redirect:'error' as const,headers:{}};
         const response = await fetch(url,options);
         if (!response.ok || response.redirected) throw Error('Media denied');
         if (response.url && response.url !== url) throw Error('Redirect denied');

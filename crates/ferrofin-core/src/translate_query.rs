@@ -2226,7 +2226,14 @@ fn append_user_data_predicates(qb: &mut QueryBuilder<Sqlite>, filter: &InternalI
         push_user_data_exists(qb, &uid, r#"ud."IsFavorite" = 1"#, want);
     }
     if let Some(want) = filter.is_favorite_or_liked {
-        push_user_data_exists(qb, &uid, r#"ud."IsFavorite" = 1"#, want);
+        // Likes is derived from the numeric rating, just as the folder path
+        // does. A nullable persisted Likes column is not the source property.
+        push_user_data_exists(
+            qb,
+            &uid,
+            r#"(ud."IsFavorite" = 1 OR ud."Rating" >= 6.5)"#,
+            want,
+        );
     }
     if let Some(want) = filter.is_liked {
         // `UserItemData.MinLikeValue` is 6.5 on the 0-10 rating scale, not 7 — a

@@ -30,7 +30,7 @@ struct MusicLyricsView: View {
                                 Button(preparing == nil ? "Sing" : "Cancel preparation") {
                                     if let preparing { preparing.cancel() }
                                     else { startSinging() }
-                                }.buttonStyle(.borderedProminent)
+                                }.buttonStyle(.borderedProminent).tint(BluefinStyle.primaryFill).foregroundStyle(BluefinStyle.onPrimary)
                                     .disabled(store.session == nil && preparing == nil)
                                 if store.preview { Text("Connect a music library to use Sing.").font(.callout).foregroundStyle(.secondary) }
                                 if let preparationStatus { ProgressView(preparationStatus) }

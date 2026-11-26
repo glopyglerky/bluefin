@@ -10,10 +10,16 @@ const state={phase:'connect',base:hostedBase(),server:null,options:{},session:nu
   tab:'Home',route:{kind:'home'},rows:[],shelves:[],back:[],sheet:launched?'invite':null,
   code:launched,meshName:'',remember:false,pairing:null,pairingView:0,device:null,invitation:null,inviteTimer:null,
   busy:false,error:'',notice:'',epoch:0,capabilities:null,capability:null,player:null,expanded:false,
+  featured:null,homeHistory:null,facets:null,search:null,
   queue:[],unshuffledQueue:[],queueIndex:0,shuffle:false,repeat:'off',query:'',local:false,localQuery:'',localSnapshot:null,images:new Map(),imageEpoch:0};
 let modalWasOpen=false,focusReturn=null,pageRetired=false,authTask=false,playbackGeneration=0,leaseRenew=null,progressTimer=null,meshPoll=null,hlsPromise,meshRetirement=null;
 let meshBeginStarted=false;
-let localLibrary=null;
+let localLibrary=null,routeController=null;
+const categories=[['Home','home'],['Sports','sports'],['TV Shows','shows'],['Movies','movies'],['Live TV','live'],['Music','music']];
+const searchScopes=[['all','All Media',null],['tvShows','TV Shows','Series,Season,Episode'],['movies','Movies','Movie'],['music','Music','Audio,MusicAlbum,MusicArtist,MusicVideo,Playlist'],['liveTv','Live TV','TvChannel,LiveTvProgram']];
+function aborted(){return Object.assign(Error('The library view changed.'),{name:'AbortError'});}
+function notFound(error){return error?.status===404||/\bHTTP 404\b/.test(String(error?.message||''));}
+
 function isLocalItem(item){return item?.LocalSource===true&&globalThis.BluefinLocalMusic?.isLocalId(item.Id)===true;}
 function localItem(record){return {Id:record.id,Name:record.title,Type:'Audio',LocalSource:true,Source:record.source,
  Artists:['On this device'],Album:record.format.toUpperCase(),RunTimeTicks:record.durationSeconds?Math.floor(record.durationSeconds*10000000):0};}
@@ -147,11 +153,14 @@ function toggleShuffle(){
  syncLocalQueue();render();
 }
 
-const artworkPending=new Set(),artworkMissing=new Set(),requestControllers=new Set();let artworkActive=0;
+const artworkPending=new Map(),artworkMissing=new Set(),imageControllers=new Set(),requestControllers=new Set();let artworkActive=0,artworkScrollTimer;
 function assertLive(epoch=state.epoch,session){if(pageRetired||epoch!==state.epoch||(session!==undefined&&session!==state.session))throw Error('This page or account changed. Resume the current connection.');}
-function clearPrivateView(){state.rows=[];state.shelves=[];state.back=[];state.query='';state.route={kind:'home'};state.queue=[];state.unshuffledQueue=[];state.queueIndex=0;state.shuffle=false;state.local=false;state.localQuery='';state.localSnapshot=null;state.repeat='off';state.capabilities=null;state.capability=null;state.code='';state.meshName='';state.pairing=null;state.device=null;state.invitation=null;}
+function clearSearchFacets(){state.facets?.controller?.abort();state.facets=null;}
+function clearPrivateView(){routeController?.abort();routeController=null;state.featured=null;state.homeHistory=null;clearSearchFacets();state.search=null;state.rows=[];state.shelves=[];state.back=[];state.query='';state.route={kind:'home'};state.queue=[];state.unshuffledQueue=[];state.queueIndex=0;state.shuffle=false;state.local=false;state.localQuery='';state.localSnapshot=null;state.repeat='off';state.capabilities=null;state.capability=null;state.code='';state.meshName='';state.pairing=null;state.device=null;state.invitation=null;}
 const paths={
  waves:'M3 6c3-3 6 3 9 0s6 3 9 0M3 12c3-3 6 3 9 0s6 3 9 0M3 18c3-3 6 3 9 0s6 3 9 0',
+ sports:'M4 4h16v16H4zM4 12h16M12 4v16M9 12a3 3 0 1 0 6 0 3 3 0 1 0-6 0',
+ shows:'M3 6h18v14H3zM8 2l4 4 4-4',movies:'M3 4h18v16H3zM7 4v16M17 4v16M3 9h4m-4 6h4M17 9h4m-4 6h4',
  home:'M3 10 12 3l9 7M5 9v12h5v-7h4v7h5V9',
  library:'M4 7h14v14H4zM7 3h14v14',
  music:'M9 18V5l11-2v13M9 9l11-2M9 18c0 3-6 4-6 1s6-4 6-1M20 16c0 3-6 4-6 1s6-4 6-1',
@@ -167,7 +176,7 @@ const paths={
  qr:'M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM15 15h3v3h3v3h-6z',info:'M12 11v6M12 7h.01M21 12a9 9 0 1 1-18 0 9 9 0 1 1 18 0'
 };
 function node(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;}
-function icon(name){const e=document.createElementNS('http://www.w3.org/2000/svg','svg');e.setAttribute('viewBox','0 0 24 24');e.setAttribute('aria-hidden','true');const p=document.createElementNS(e.namespaceURI,'path');p.setAttribute('d',paths[name]||paths.music);e.append(p);return e;}
+function icon(name){const e=document.createElementNS('http://www.w3.org/2000/svg','svg');e.setAttribute('viewBox',name==='waves'?'200 210 610 640':'0 0 24 24');e.setAttribute('aria-hidden','true');const p=document.createElementNS(e.namespaceURI,'path');p.setAttribute('d',name==='waves'?"M225 604C388 534 410 344 620 239C580 399 670 554 790 604C560 554 420 687 225 604Z":paths[name]||paths.music);e.append(p);if(name==='waves'){e.setAttribute('class','brand-mark');p.setAttribute('class','brand-fin');const w=document.createElementNS(e.namespaceURI,'path');w.setAttribute('class','brand-waves');w.setAttribute('d',"M235 724C430 789 575 644 790 712M235 784C430 849 575 704 790 772");e.append(w);}return e;}
 function button(label,action,cls='',symbol){const b=node('button',undefined,cls);b.type='button';b.dataset.focusKey=(symbol||'')+'|'+label;if(symbol)b.append(icon(symbol));if(label)b.append(node('span',label));b.addEventListener('click',action);return b;}
 function action(label,task,cls='',symbol){const b=button(label,()=>perform(task),cls,symbol);b.disabled=state.busy;return b;}
 function field(label,type,value='',name=''){const wrap=node('div'),id='bf-'+name,lab=node('label',label),input=node('input');lab.htmlFor=id;input.id=id;input.name=name;input.type=type;input.value=value;input.autocomplete=type==='password'?'current-password':'off';wrap.append(lab,input);return [wrap,input];}
@@ -181,9 +190,10 @@ const deviceId=(()=>{try{return crypto.randomUUID();}catch(_){return Array.from(
 function authorization(token=''){if(typeof token!=='string'||token.length>4096||/["\\\x00-\x1f\x7f]/.test(token)||token.startsWith('bluefin-mesh-'))throw Error('Invalid HTTPS account credential.');return 'MediaBrowser Client="Bluefin Web", Device="Browser", DeviceId="'+deviceId+'", Version="1.0"'+(token?', Token="'+token+'"':'');}
 function endpoint(path,query=[],base=state.base){if(typeof path!=='string'||path.startsWith('/')||path.includes('..')||/[\\#%\x00-\x20]/.test(path))throw Error('Invalid API route.');const u=new URL(path,base);if(u.origin!==location.origin)throw Error('The HTTPS account must stay on this origin.');for(const [key,value]of query)u.searchParams.set(key,String(value));return u;}
 async function readJson(response,limit=4*1024*1024){if(!response.body)return null;const reader=response.body.getReader(),chunks=[];let size=0;try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>limit)throw Error('The server response exceeded the browser limit.');chunks.push(value);}}catch(e){await reader.cancel().catch(()=>{});throw e;}if(!size)return null;const bytes=new Uint8Array(size);let at=0;for(const part of chunks){bytes.set(part,at);at+=part.length;}return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}
-async function http(path,method='GET',body,query=[],session=state.session,keepalive=false,captureReply=false,base=state.base){
- if(!keepalive)assertLive();
+async function http(path,method='GET',body,query=[],session=state.session,keepalive=false,captureReply=false,base=state.base,signal){
+ if(!keepalive)assertLive();if(signal?.aborted)throw aborted();
  const url=endpoint(path,query,base),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),18000);
+ const cancel=()=>controller.abort();signal?.addEventListener('abort',cancel,{once:true});
  if(!keepalive)requestControllers.add(controller);
  const headers={Authorization:authorization(session?.token||'')};if(body!==undefined)headers['Content-Type']='application/json';
  try{
@@ -193,21 +203,21 @@ async function http(path,method='GET',body,query=[],session=state.session,keepal
   const value=await readJson(response);
   if(!keepalive&&!captureReply)assertLive();
   return value;
- }catch(e){if(e.name==='AbortError')throw Error('The server did not respond in time or the page was closed.');throw e;}
- finally{requestControllers.delete(controller);clearTimeout(timer);}
+ }catch(e){if(e.name==='AbortError'&&!signal?.aborted)throw Error('The server did not respond in time or the page was closed.');throw e;}
+ finally{signal?.removeEventListener('abort',cancel);requestControllers.delete(controller);clearTimeout(timer);}
 }
 async function retireLateAccount(session,base){
  await http('Sessions/Logout','POST',undefined,[],session,true,true,base).catch(()=>{});
 }
-async function api(path,method='GET',body,query=[]){
- const epoch=state.epoch,session=state.session,mode=state.mode,base=state.base;assertLive(epoch,session);
+async function api(path,method='GET',body,query=[],signal){
+ const epoch=state.epoch,session=state.session,mode=state.mode,base=state.base;assertLive(epoch,session);if(signal?.aborted)throw aborted();
  let value;
  if(mode==='mesh'){
   if(!session?.handle)throw Error('Resume the encrypted device connection.');
   const engine=await runtime().engine();assertLive(epoch,session);
   value=JSON.parse(await engine.webMeshRequest(session.handle,method,path,JSON.stringify(query),body===undefined?undefined:JSON.stringify(body)));
- }else value=await http(path,method,body,query,session,false,false,base);
- assertLive(epoch,session);return value;
+ }else value=await http(path,method,body,query,session,false,false,base,signal);
+ assertLive(epoch,session);if(signal?.aborted)throw aborted();return value;
 }
 function items(value){const list=Array.isArray(value)?value:value?.Items;if(!Array.isArray(list)||list.length>200)throw Error('The server returned an invalid library list.');return list.filter(item=>uuid(item.Id)).map(item=>({...item,Name:String(item.Name||'Untitled').slice(0,4096),Overview:String(item.Overview||'').slice(0,65536)}));}
 function subtitle(item){return [item.AlbumArtist||item.Artists?.join(', ')||item.ProductionYear,item.Album].filter(Boolean).join(' · ');}
@@ -228,7 +238,7 @@ async function connect(raw){
 function account(value){const token=value?.AccessToken,user=value?.User?.Id;if(!uuid(user)||!token)throw Error('The server returned an invalid account.');authorization(token);return {token,user:id(user),name:String(value.User.Name||'Your account')};}
 async function accept(value,mode='https',epoch=state.epoch){
  assertLive(epoch);state.epoch++;const accepted=state.epoch;
- state.session=value;state.mode=mode;state.phase='library';state.sheet=null;state.capability=null;state.meshName='';state.device=null;
+ state.featured=null;state.homeHistory=null;clearSearchFacets();state.search=null;state.session=value;state.mode=mode;state.phase='library';state.sheet=null;state.capability=null;state.meshName='';state.device=null;
  state.pairing=null;state.invitation=null;state.code='';state.tab='Home';state.back=[];state.route={kind:'home'};
  const capabilities=await api('Bluefin/Capabilities').catch(()=>null);assertLive(accepted,value);
  state.capabilities=capabilities;await loadRoute();assertLive(accepted,value);
@@ -310,17 +320,19 @@ function closeSheet(){if(state.sheet==='invite')state.pairingView++;state.capabi
 
 function canReloadBeforeMeshBegin(){return !meshBeginStarted&&!state.pairing&&!state.session;}
 function showCapability(error,retry,beforeBegin=false,mediaOnly=false) {
+  if(pageRetired)return;
   state.capability={reason:String(error.message||error),retry,beforeBegin,mediaOnly};
   state.error='';
 }
 async function meshEngine(retry,beforeBegin=false,mediaOnly=false,view=state.pairingView) {
-  const epoch=state.epoch;
-  try {return await runtime().engine();}
+  const epoch=state.epoch;assertLive(epoch);let engine;
+  try {engine=await runtime().engine();}
   catch(error) {
     if(!pageRetired&&epoch===state.epoch&&view===state.pairingView&&error.bluefinBrowserCapability)
       showCapability(error,retry,beforeBegin,mediaOnly);
     throw error;
   }
+  assertLive(epoch);return engine;
 }
 function validInvitation(code=state.code) {
   return typeof code==='string'&&/^MC1-[A-Z0-9-]+$/i.test(code)&&code.length<=2048;
@@ -402,60 +414,289 @@ function capabilitySheet() {
   });
   return dialog;
 }
-async function loadRoute(){const epoch=state.epoch,session=state.session,route=state.route,user=session?.user;assertLive(epoch,session);if(route.kind==='local_music'||route.kind==='local_search'){state.rows=route.kind==='local_search'?localOwner().search(state.localQuery).map(localItem):localItems();state.shelves=[];return;}if(!user)return;const current=()=>{assertLive(epoch,session);if(route!==state.route)throw Error('The library view changed.');};state.rows=[];state.shelves=[];state.error='';
- if(route.kind==='home'){const requests=[
- ['Continue watching','Users/'+user+'/Items/Resume',[['Limit',12],['Fields','Overview']]],
- ['Up next','Shows/NextUp',[['UserId',user],['Limit',12],['Fields','Overview']]],
- ['Recently added','Users/'+user+'/Items/Latest',[['Limit',18],['Fields','Overview']]]];
- const results=await Promise.allSettled(requests.map(async([title,path,q])=>({title,items:items(await api(path,'GET',undefined,q))})));
- current();state.shelves=results.filter(r=>r.status==='fulfilled').map(r=>r.value).filter(s=>s.items.length);
- if(!state.shelves.length&&results.every(r=>r.status==='rejected'))throw Error('Your library could not refresh. Open Library or try again.');
- }else if(route.kind==='library'){const rows=items(await api('Users/'+user+'/Views'));current();state.rows=rows;}
- else if(route.kind==='music'){const q=[['Limit',12],['Recursive',true],['IncludeItemTypes','MusicAlbum'],['Fields','Overview,PrimaryImageAspectRatio'],['SortBy','DateCreated'],['SortOrder','Descending']];
- const recent=items(await api('Users/'+user+'/Items','GET',undefined,q));current();state.shelves=[{title:'Recently added',items:recent}];
- const favorites=await api('Users/'+user+'/Items','GET',undefined,[...q,['IsFavorite',true]]).then(items).catch(()=>[]);current();if(favorites.length)state.shelves.push({title:'Favorite albums',items:favorites});
- }else if(route.kind==='live'){const rows=items(await api('LiveTv/Channels','GET',undefined,[['UserId',user],['Limit',100]]));current();state.rows=rows;}
- else if(route.kind==='search'){if(!state.query.trim())return;const rows=items(await api('Users/'+user+'/Items','GET',undefined,[['Limit',100],['Recursive',true],['SearchTerm',state.query],['Fields','Overview,PrimaryImageAspectRatio']]));current();state.rows=rows;}
- else if(route.kind==='collection'){const q=[['Limit',100],['StartIndex',route.start||0],['Recursive',true],['Fields','Overview,PrimaryImageAspectRatio'],['SortBy',route.type==='Audio'&&route.parent?'ParentIndexNumber,IndexNumber,SortName':'SortName']];if(route.type)q.push(['IncludeItemTypes',route.type]);if(route.parent)q.push(['ParentId',route.parent]);const value=await api('Users/'+user+'/Items','GET',undefined,q);current();state.rows=items(value);route.total=Number(value.TotalRecordCount)||state.rows.length;}
- else if(route.kind==='detail'){const value=await api('Users/'+user+'/Items/'+id(route.item.Id));current();if(!uuid(value.Id))throw Error('The item is no longer available.');route.item=value;}
+async function readInvitationImage(file) {
+  const epoch=state.epoch,view=state.pairingView;
+  const current=()=>{assertLive(epoch);if(view!==state.pairingView||state.sheet!=='invite')throw Error('The connection screen was closed.');};
+  current();if(file.size<=0||file.size>8*1024*1024)throw Error('Choose a PNG or JPEG smaller than 8 MiB.');
+  const engine=await meshEngine(()=>readInvitationImage(file),!state.pairing&&!state.session,false,view);current();
+  const bytes=new Uint8Array(await file.arrayBuffer());current();
+  const code=engine.webMeshImage(bytes);current();state.code=code;
+  state.notice='Invitation read. Continue to connect.';
 }
-async function navigate(tab){state.tab=tab;state.route={kind:!state.session&&state.local?(tab==='Search'?'local_search':tab==='Live TV'?'local_connect':'local_music'):({Home:'home',Library:'library',Music:'music',Search:'search','Live TV':'live'})[tab]};state.back=[];await loadRoute();}
-async function openCollection(title,type,parent){state.back.push({...state.route});state.route={kind:'collection',title,type,parent,start:0};await loadRoute();}
-async function openItem(item){if(item.Type==='TvChannel'&&state.mode!=='mesh'){state.back.push({...state.route});state.route={kind:'detail',item};return;}if(isLocalItem(item)){const queue=localItems();return playLocal(item,queue,queue.findIndex(track=>track.Id===item.Id));}if(item.Type==='Audio')return play(item,[item],0);if(['MusicAlbum','MusicArtist','Playlist','Series','Season','CollectionFolder','Folder','BoxSet'].includes(item.Type)||item.IsFolder){return openCollection(item.Name,item.Type==='Series'||item.Type==='Season'?'Episode':(item.Type==='MusicArtist'?'MusicAlbum':['MusicAlbum','Playlist'].includes(item.Type)?'Audio':null),id(item.Id));}state.back.push({...state.route});state.route={kind:'detail',item};await loadRoute();}
+
+function hasSearchFacets(filters){return !!(filters.studioID||filters.tag||filters.collectionID);}
+function cleanSearchFilters(value={}) {
+ const scope=searchScopes.some(([key])=>key===value.scope)?value.scope:'all';
+ return {scope,studioID:uuid(value.studioID)?id(value.studioID):'',tag:typeof value.tag==='string'?value.tag.slice(0,512):'',
+  collectionID:uuid(value.collectionID)?id(value.collectionID):''};
+}
+function searchLanes(filters){
+ if(hasSearchFacets(filters))return ['library'];
+ if(filters.scope==='liveTv')return ['programmes','channels'];
+ const lanes=['library'];if(['all','music'].includes(filters.scope))lanes.push('artists');
+ if(filters.scope==='all')lanes.push('programmes','channels');return lanes;
+}
+function searchCall(lane,route,start=0){
+ const filters=cleanSearchFilters(route.filters),query=[['UserId',state.session.user],['Limit',60],['StartIndex',start]];
+ if(route.query)query.push(['SearchTerm',route.query]);
+ let path;
+ if(lane==='library'){
+  path='Users/'+state.session.user+'/Items';query.push(['Recursive',true],['Fields','Overview,PrimaryImageAspectRatio']);
+  const type=searchScopes.find(([key])=>key===filters.scope)?.[2];if(type)query.push(['IncludeItemTypes',type]);
+  if(filters.studioID)query.push(['StudioIds',filters.studioID]);if(filters.tag)query.push(['Tags',filters.tag]);
+  if(filters.collectionID)query.push(['ParentId',filters.collectionID]);
+ }else if(lane==='artists'){path='Artists';query.push(['Recursive',true]);}
+ else if(lane==='programmes'){path='LiveTv/Programs';query.push(['MinEndDate',route.liveAfter]);}
+ else path='LiveTv/Channels';
+ return {path,query};
+}
+function appendSearchPage(page,value){
+ const entries=items(value),seen=new Set(page.items.map(item=>id(item.Id)));
+ for(const item of entries)if(!seen.has(id(item.Id))){seen.add(id(item.Id));page.items.push(item);}
+ page.next+=(Array.isArray(value)?value:value.Items).length;
+ page.total=entries.length?Math.max(page.next,Number(value.TotalRecordCount)||page.next):page.next;
+}
+async function loadSearch(route,get,current){
+ const search=state.search={route,pages:[],problems:[]};
+ if(!route.query&&route.filters.scope==='all'&&!hasSearchFacets(route.filters))return;
+ const names={library:'Your library',artists:'Artists',programmes:'On now and upcoming',channels:'Channels'};
+ search.pages=searchLanes(route.filters).map(lane=>({lane,title:names[lane],items:[],next:0,total:0,loading:true}));
+ await Promise.all(search.pages.map(async page=>{
+  try{const call=searchCall(page.lane,route),value=await get(call.path,call.query);current();appendSearchPage(page,value);}
+  catch(error){current();if(error.name!=='AbortError')search.problems.push(page.title+': '+String(error.message||error));}
+  finally{page.loading=false;}
+ }));
+ current();state.rows=search.pages.flatMap(page=>page.items);
+}
+async function startSearch(query,filters={},record=false){
+ const previous=state.route,route={kind:'search',title:'Search',query:String(query).trim().slice(0,256),
+  filters:cleanSearchFilters(filters),refine:previous.kind==='search'&&previous.refine,liveAfter:new Date().toISOString()};
+ state.query=route.query;state.route=route;state.error='';
+ const search=loadRoute();render();
+ if(route.refine&&(!state.facets||state.facets.loading))loadSearchFacets().catch(()=>{});
+ if(record)recordHomeSearch(route.query).catch(()=>{});
+ try{await search;}catch(error){if(route===state.route&&error.name!=='AbortError')state.error=String(error.message||error);}
+ finally{if(route===state.route)render();}
+}
+async function openSearch(){
+ if(!state.session&&state.local)return navigate('Search');
+ if(state.route.kind!=='search')state.back.push({...state.route});
+ await startSearch(state.query,{scope:'all'});
+}
+async function loadMoreSearch(lane){
+ const search=state.search,route=state.route,page=search?.pages.find(value=>value.lane===lane),controller=routeController;
+ const epoch=state.epoch,session=state.session;
+ if(!page||page.loading||page.next>=page.total||search.route!==route)return;
+ page.loading=true;render();
+ try{
+  const call=searchCall(lane,route,page.next),value=await api(call.path,'GET',undefined,call.query,controller?.signal);
+  assertLive(epoch,session);if(route!==state.route||search!==state.search)throw aborted();
+  appendSearchPage(page,value);state.rows=search.pages.flatMap(value=>value.items);
+ }catch(error){if(route===state.route&&epoch===state.epoch&&error.name!=='AbortError')search.problems.push(String(error.message||error));}
+ finally{page.loading=false;if(route===state.route)render();}
+}
+async function loadSearchFacets(){
+ const epoch=state.epoch,session=state.session;if(!session)return;
+ if(state.facets?.epoch===epoch&&state.facets.session===session&&!state.facets.controller.signal.aborted)return state.facets.promise;
+ clearSearchFacets();
+ const controller=new AbortController();
+ const facets=state.facets={epoch,session,controller,studios:[],tags:[],collections:[],pending:new Set(['studios','tags','collections']),loading:true,problems:[],truncated:false};
+ const current=()=>!pageRetired&&epoch===state.epoch&&session===state.session&&facets===state.facets&&!controller.signal.aborted;
+ const publish=()=>{if(current()&&state.route.kind==='search'&&state.route.refine)render();};
+ publish();
+ const calls=[
+  ['studios','Studios',[['UserId',session.user],['Recursive',true],['Limit',200]]],
+  ['tags','Items/Filters2',[['UserId',session.user]]],
+  ['collections','Users/'+session.user+'/Items',[['Recursive',true],['IncludeItemTypes','BoxSet'],['Limit',200]]]];
+ facets.promise=Promise.all(calls.map(async([kind,path,query])=>{
+  try{
+   const value=await api(path,'GET',undefined,query,controller.signal);if(!current())return;
+   let values,truncated;
+   if(kind==='tags'){
+    if(!Array.isArray(value?.Tags))throw Error('The server returned invalid tags.');
+    values=[...new Set(value.Tags.filter(tag=>typeof tag==='string'&&tag.length<=512))].slice(0,512);truncated=value.Tags.length>512;
+   }else{
+    values=items(value).map(item=>({id:id(item.Id),name:item.Name}));truncated=Number(value.TotalRecordCount)>values.length;
+   }
+   facets[kind]=values;facets.truncated||=truncated;
+  }catch(error){if(current()&&error.name!=='AbortError')facets.problems.push(String(error.message||error));}
+  finally{if(current()){facets.pending.delete(kind);facets.loading=facets.pending.size>0;publish();}}
+ }));
+ await facets.promise;
+}
+async function homeRecommendations(get,user){
+ let value;
+ try{
+  value=await get('Bluefin/Home/Recommendations');
+  if(!Array.isArray(value?.recommendations)||value.recommendations.length>12)throw Error('The server returned invalid Home recommendations.');
+  return {shelves:value.recommendations.map(row=>({title:String(row.title||'Recommended for you').slice(0,256),reason:row.reason,items:items(row.items).slice(0,18)})),
+   history:value.searchHistorySupported===true&&Number.isSafeInteger(value.searchHistoryGeneration)&&value.searchHistoryGeneration>=0?{generation:value.searchHistoryGeneration}:null};
+ }catch(error){if(!notFound(error))throw error;}
+ value=await get('Movies/Recommendations',[['UserId',user],['CategoryLimit',4],['ItemLimit',12],['Fields','Overview,PrimaryImageAspectRatio']]);
+ if(!Array.isArray(value)||value.length>12)throw Error('The server returned invalid recommendations.');
+ const labels={SimilarToRecentlyPlayed:'Because you watched',SimilarToLikedItem:'Because you like',
+  HasDirectorFromRecentlyPlayed:'More from',HasActorFromRecentlyPlayed:'More with',HasLikedDirector:'From a director you like:',HasLikedActor:'With an actor you like:'};
+ return {shelves:value.filter(row=>labels[row.RecommendationType]).map(row=>({
+  title:labels[row.RecommendationType]+' '+String(row.BaselineItemName||'a favorite').slice(0,128),
+  reason:row.RecommendationType.includes('Liked')?'liked':'watched',items:items(row.Items).slice(0,18)})),history:null};
+}
+async function recordHomeSearch(query,selectedItem){
+ const epoch=state.epoch,session=state.session,history=state.homeHistory;
+ const term=String(query||'').trim().replace(/\s+/g,' ');
+ if(!session||!history||term.length<2||term.length>128||/[\x00-\x1f\x7f]/.test(term))return;
+ const payload={eventId:crypto.randomUUID(),query:term,generation:history.generation,occurredAtUnixMs:Date.now()};
+ if(selectedItem&&uuid(selectedItem.Id))payload.selectedItemId=id(selectedItem.Id);
+ try{await api('Bluefin/Home/Searches','POST',payload);assertLive(epoch,session);}
+ catch(error){if(epoch===state.epoch&&session===state.session&&state.homeHistory===history&&error.status===409)state.homeHistory=null;}
+}
+async function clearHomeSearchHistory(){
+ const epoch=state.epoch,session=state.session,history=state.homeHistory;if(!history)return;
+ const value=await api('Bluefin/Home/Searches','DELETE',{generation:history.generation});assertLive(epoch,session);
+ if(!Number.isSafeInteger(value?.generation))throw Error('The server returned an invalid history revision.');
+ state.homeHistory={generation:value.generation};state.shelves=state.shelves.filter(shelf=>shelf.reason!=='search');
+ state.featured=state.shelves.find(shelf=>shelf.items.length)?.items[0]||null;
+ state.notice='Search history cleared for this account.';
+}
+async function loadRoute(){
+ const epoch=state.epoch,session=state.session,route=state.route,user=session?.user;assertLive(epoch,session);
+ routeController?.abort();const controller=routeController=new AbortController();
+ const current=()=>{assertLive(epoch,session);if(route!==state.route||controller!==routeController||controller.signal.aborted)throw aborted();};
+ const get=(path,query=[])=>api(path,'GET',undefined,query,controller.signal);
+ if(route.kind==='local_music'||route.kind==='local_search'){state.rows=route.kind==='local_search'?localOwner().search(state.localQuery).map(localItem):localItems();state.shelves=[];return;}
+ if(!user)return;state.rows=[];state.shelves=[];state.featured=null;state.error='';route.loading=true;
+ if(route.kind!=='search')state.search=null;
+ try{
+  if(route.kind==='home'){
+   const requests=[
+    get('Users/'+user+'/Items/Resume',[['Limit',12],['Fields','Overview']]).then(items),
+    get('Shows/NextUp',[['UserId',user],['Limit',12],['Fields','Overview']]).then(items),
+    get('Users/'+user+'/Items/Latest',[['Limit',18],['Fields','Overview']]).then(items),
+    homeRecommendations(get,user)];
+   const results=await Promise.allSettled(requests);current();
+   const values=results.map(result=>result.status==='fulfilled'?result.value:null);
+   const resume=values[0]||[],next=values[1]||[],latest=values[2]||[],recommended=values[3]?.shelves||[];
+   state.homeHistory=values[3]?.history||null;
+   state.shelves=[{title:'Continue watching',items:resume},{title:'Up next',items:next},...recommended,{title:'Recently added',items:latest}].filter(shelf=>shelf.items.length);
+   state.featured=resume[0]||recommended.find(shelf=>shelf.items.length)?.items[0]||next[0]||latest[0]||null;
+   if(results.every(result=>result.status==='rejected'))throw Error('Your library could not refresh. Open Collections or try again.');
+   if(results.some(result=>result.status==='rejected'))state.notice='Some Home sections could not refresh. Try again to load the remaining sections.';
+  }else if(route.kind==='library'){const rows=items(await get('Users/'+user+'/Views'));current();state.rows=rows;}
+  else if(route.kind==='music'){
+   const q=[['Limit',12],['Recursive',true],['IncludeItemTypes','MusicAlbum'],['Fields','Overview,PrimaryImageAspectRatio'],['SortBy','DateCreated'],['SortOrder','Descending']];
+   const recent=items(await get('Users/'+user+'/Items',q));current();state.shelves=[{title:'Recently added',items:recent}];
+   const favorites=await get('Users/'+user+'/Items',[...q,['IsFavorite',true]]).then(items).catch(()=>[]);current();
+   if(favorites.length)state.shelves.push({title:'Favorite albums',items:favorites});
+  }else if(route.kind==='live'){const rows=items(await get('LiveTv/Channels',[['UserId',user],['Limit',100]]));current();state.rows=rows;}
+  else if(route.kind==='sports'){
+   try{
+    const feed=await get('sports/api/v1/home');current();
+    if(feed?.schema!==1||feed.presentation_only!==true||!Array.isArray(feed.games)||!Array.isArray(feed.local_broadcasts)||feed.games.length+feed.local_broadcasts.length>400)throw Error('The server returned invalid sports information.');
+    route.sports=feed.games.concat(feed.local_broadcasts);
+   }catch(error){
+    if(!notFound(error))throw error;
+    const rows=items(await get('LiveTv/Programs',[['UserId',user],['IsSports',true],['MinEndDate',new Date().toISOString()],['Limit',100]]));current();state.rows=rows;
+   }
+  }else if(route.kind==='search'){route.filters=cleanSearchFilters(route.filters);route.query=route.query??state.query;route.liveAfter??=new Date().toISOString();await loadSearch(route,get,current);}
+  else if(route.kind==='collection'){
+   const q=[['Limit',100],['StartIndex',route.start||0],['Recursive',true],['Fields','Overview,PrimaryImageAspectRatio'],['SortBy',route.type==='Audio'&&route.parent?'ParentIndexNumber,IndexNumber,SortName':'SortName']];
+   if(route.type)q.push(['IncludeItemTypes',route.type]);if(route.parent)q.push(['ParentId',route.parent]);if(route.artist)q.push(['ArtistIds',route.artist]);
+   const value=await get('Users/'+user+'/Items',q);current();state.rows=items(value);route.total=Number(value.TotalRecordCount)||state.rows.length;
+  }else if(route.kind==='detail'){
+   const value=await get('Users/'+user+'/Items/'+id(route.item.Id));current();if(!uuid(value.Id))throw Error('The item is no longer available.');route.item=value;
+  }
+ }finally{if(controller===routeController)route.loading=false;}
+}
+async function navigate(tab){
+ if(tab==='Search'){
+  if(!state.session&&state.local){state.route={kind:'local_search',title:'Search'};state.back=[];return loadRoute();}
+  return openSearch();
+ }
+ if(tab==='Library'||tab==='Collections'){
+  state.route={kind:'library',title:'Collections'};state.back=[];return loadRoute();
+ }
+ state.tab=tab;state.back=[];
+ if(!state.session&&state.local){state.route={kind:tab==='Music'?'local_music':'local_connect',title:tab};return loadRoute();}
+ if(tab==='Movies'||tab==='TV Shows')state.route={kind:'collection',title:tab,type:tab==='Movies'?'Movie':'Series',start:0};
+ else state.route={kind:({Home:'home',Sports:'sports',Music:'music','Live TV':'live'})[tab]||'home'};
+ await loadRoute();
+}
+async function openCollection(title,type,parent,artist){state.back.push({...state.route});state.route={kind:'collection',title,type,parent,artist,start:0};await loadRoute();}
+async function openItem(item,recordSelection=true){
+ if(recordSelection&&state.route.kind==='search')recordHomeSearch(state.route.query,item).catch(()=>{});
+ if(['Program','LiveTvProgram'].includes(item.Type)){
+  if(!uuid(item.ChannelId))throw Error('This programme has no available channel.');
+  const channel=await api('Users/'+state.session.user+'/Items/'+id(item.ChannelId));
+  if(!uuid(channel?.Id)||!['TvChannel','LiveTvChannel'].includes(channel.Type))throw Error('This channel is no longer available.');
+  return openItem({...channel,Type:'TvChannel'},false);
+ }
+ if(item.Type==='LiveTvChannel')item={...item,Type:'TvChannel'};
+if(item.Type==='TvChannel'&&state.mode!=='mesh'){state.back.push({...state.route});state.route={kind:'detail',item};return;}if(isLocalItem(item)){const queue=localItems();return playLocal(item,queue,queue.findIndex(track=>track.Id===item.Id));}if(item.Type==='Audio')return play(item,[item],0);if(item.Type==='MusicArtist')return openCollection(item.Name,'MusicAlbum,Audio,MusicVideo',null,id(item.Id));if(['MusicAlbum','MusicArtist','Playlist','Series','Season','CollectionFolder','Folder','BoxSet'].includes(item.Type)||item.IsFolder){return openCollection(item.Name,item.Type==='Series'||item.Type==='Season'?'Episode':(item.Type==='MusicArtist'?'MusicAlbum':['MusicAlbum','Playlist'].includes(item.Type)?'Audio':null),id(item.Id));}state.back.push({...state.route});state.route={kind:'detail',item};await loadRoute();}
 function artKey(item,backdrop=false){return (backdrop?'b:':'p:')+id(item.Id);}
-function applyArtwork(element,url,backdrop=false){if(backdrop){element.style.backgroundImage='linear-gradient(transparent,#111b),url("'+url+'")';element.style.backgroundSize='cover';element.style.backgroundPosition='center';return;}const image=node('img');image.alt='';image.src=url;image.loading='lazy';image.onerror=()=>{element.replaceChildren(icon('music'));};element.replaceChildren(image);}
+function applyArtwork(element,url,backdrop=false){if(backdrop){element.style.backgroundImage='linear-gradient(180deg,rgba(6,23,39,.05),rgba(6,23,39,.9)),url("'+url+'")';element.style.backgroundSize='cover';element.style.backgroundPosition='center';return;}const image=node('img');image.alt='';image.src=url;image.loading='lazy';image.onerror=()=>{element.replaceChildren(icon('music'));};element.replaceChildren(image);}
 function bindArtwork(element,item,backdrop=false){if(isLocalItem(item))return;const key=artKey(item,backdrop);element.dataset.artKey=key;element.dataset.artId=id(item.Id);if(backdrop)element.dataset.backdrop='true';const cached=state.images.get(key);if(cached)applyArtwork(element,cached,backdrop);}
 function cover(item,square=false){const d=node('div',undefined,'artwork'+(square?' square':''));d.append(icon(item.Type==='Audio'||item.Type==='MusicAlbum'?'music':'library'));bindArtwork(d,item);return d;}
 async function imageBytes(item,backdrop,session,mode){
  if(mode==='mesh')return (await runtime().engine()).webMeshArtwork(session.handle,item,backdrop);
  const url=endpoint('Items/'+item+'/Images/'+(backdrop?'Backdrop':'Primary'),[['maxWidth',backdrop?1200:400],['quality',85]]);
- const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);imageControllers.add(controller);
  try{const response=await fetch(url,{headers:{Authorization:authorization(session.token)},credentials:'omit',redirect:'error',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});
  if(!response.ok||!['image/jpeg','image/png','image/webp'].includes((response.headers.get('Content-Type')||'').split(';')[0].trim()))throw Error('Artwork unavailable');
  const reader=response.body.getReader(),parts=[];let total=0;try{for(;;){const {done,value}=await reader.read();if(done)break;total+=value.length;if(total>2*1024*1024)throw Error('Artwork limit');parts.push(value);}}catch(e){await reader.cancel().catch(()=>{});throw e;}
  const bytes=new Uint8Array(total);let at=0;for(const part of parts){bytes.set(part,at);at+=part.length;}return bytes;
- }finally{clearTimeout(timer);}
+ }finally{clearTimeout(timer);imageControllers.delete(controller);}
 }
 function imageType(bytes){if(bytes.length>2&&bytes[0]===255&&bytes[1]===216&&bytes[2]===255)return 'image/jpeg';
  if(bytes.length>8&&[137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v))return 'image/png';
  if(bytes.length>12&&String.fromCharCode(...bytes.slice(0,4))==='RIFF'&&String.fromCharCode(...bytes.slice(8,12))==='WEBP')return 'image/webp';
  throw Error('Unsupported artwork format');}
+function visibleArtwork(){
+ return Array.from(document.querySelectorAll('[data-art-key]')).filter(element=>{
+  if(typeof element.getBoundingClientRect!=='function')return true;
+  const rect=element.getBoundingClientRect();return rect.bottom>=-200&&rect.top<=(globalThis.innerHeight||1080)+200&&rect.right>=0&&rect.left<=(globalThis.innerWidth||1920);
+ });
+}
 function pumpArtwork(){if(!state.session)return;const epoch=state.imageEpoch,session=state.session,mode=state.mode;
- for(const element of document.querySelectorAll('[data-art-key]')){
-  if(artworkActive>=3)break;const key=element.dataset.artKey;if(state.images.has(key)||artworkPending.has(key)||artworkMissing.has(key))continue;
-  if(state.images.size>=64)break;artworkPending.add(key);artworkActive++;
+ const elements=visibleArtwork(),visible=new Set(elements.map(element=>element.dataset.artKey));
+ for(const element of elements){
+  if(artworkActive>=2)break;const key=element.dataset.artKey;if(state.images.has(key)||artworkPending.has(key)||artworkMissing.has(key))continue;
+  while(state.images.size+artworkPending.size>=64){
+   const evict=Array.from(state.images.keys()).find(candidate=>!visible.has(candidate));
+   if(evict===undefined)break;URL.revokeObjectURL(state.images.get(evict));state.images.delete(evict);
+  }
+  if(state.images.size+artworkPending.size>=64)break;artworkPending.set(key,epoch);artworkActive++;
   const item=element.dataset.artId,backdrop=element.dataset.backdrop==='true';
   imageBytes(item,backdrop,session,mode).then(bytes=>{
    if(epoch!==state.imageEpoch||session!==state.session)return;const url=URL.createObjectURL(new Blob([bytes],{type:imageType(bytes)}));state.images.set(key,url);
    for(const target of document.querySelectorAll('[data-art-key]'))if(target.dataset.artKey===key)applyArtwork(target,url,target.dataset.backdrop==='true');
-  }).catch(()=>{if(epoch===state.imageEpoch)artworkMissing.add(key);}).finally(()=>{artworkActive--;artworkPending.delete(key);if(epoch===state.imageEpoch)pumpArtwork();});
+  }).catch(()=>{if(epoch===state.imageEpoch){if(artworkMissing.size>=256)artworkMissing.delete(artworkMissing.values().next().value);artworkMissing.add(key);}})
+   .finally(()=>{artworkActive--;if(artworkPending.get(key)===epoch)artworkPending.delete(key);pumpArtwork();});
  }
 }
-function poster(item){const b=button('',()=>perform(()=>openItem(item)),'poster'+(item.Type==='MusicAlbum'?' album':''));b.append(cover(item,item.Type==='MusicAlbum'),node('strong',item.Name));if(subtitle(item))b.append(node('small',subtitle(item)));return b;}
+addEventListener('scroll',()=>{clearTimeout(artworkScrollTimer);artworkScrollTimer=setTimeout(pumpArtwork,80);},{passive:true,capture:true});
+
+function poster(item){
+ const square=['MusicAlbum','MusicArtist'].includes(item.Type),b=button('',()=>perform(()=>openItem(item)),'poster'+(square?' album':''));
+ const copy=node('span',undefined,'poster-copy');copy.append(node('strong',item.Name));
+ if(subtitle(item))copy.append(node('small',subtitle(item)));
+ const duration=Number(item.RunTimeTicks),position=Number(item.UserData?.PlaybackPositionTicks);
+ const progress=duration>0&&position>0?Math.min(100,Math.max(0,100*position/duration)):0;
+ if(progress>0){const track=node('span',undefined,'poster-progress'),fill=node('span');fill.style.width=progress+'%';track.append(fill);track.setAttribute('role','progressbar');track.setAttribute('aria-label','Watched');track.setAttribute('aria-valuemin','0');track.setAttribute('aria-valuemax','100');track.setAttribute('aria-valuenow',String(Math.round(progress)));copy.append(track);}
+ b.setAttribute('aria-label',[item.Name,subtitle(item),progress>0?Math.round(progress)+' percent watched':''].filter(Boolean).join(', '));
+ b.append(cover(item,square),copy);return b;
+}
 function shelf(title,entries){if(!entries.length)return document.createDocumentFragment();const s=node('section',undefined,'shelf');s.append(node('h2',title));const row=node('div',undefined,'shelf-track');for(const item of entries.slice(0,18))row.append(poster(item));s.append(row);return s;}
 function row(item){const b=button('',()=>perform(()=>openItem(item)),'list-row'+(item.Type==='Audio'?' song':''));if(item.Type==='Audio')b.append(cover(item,true));else b.append(icon(item.CollectionType==='music'?'music':'library'));const t=node('span',undefined,'grow');t.append(node('strong',item.Name));if(subtitle(item))t.append(node('small',subtitle(item)));b.append(t,icon('chevron'));return b;}
 function empty(title,message){const d=node('section',undefined,'empty-state');d.append(icon('library'),node('h2',title),node('p',message,'secondary'));return d;}
-function toolbar(title,back=false){const d=node('div',undefined,'toolbar');if(back)d.append(action('Back',async()=>{state.route=state.back.pop()||{kind:'home'};await loadRoute();},'plain','back'));else d.append(node('h1',title));const b=button('',()=>{state.sheet='account';render();},'plain','account');b.setAttribute('aria-label','Account and settings');d.append(b);return d;}
+function toolbar(title,back=false){
+ const d=node('div',undefined,'toolbar');
+ if(back)d.append(action('Back',async()=>{state.route=state.back.pop()||{kind:'home'};await loadRoute();},'plain','back'));
+ else d.append(node('h1',title));
+ const utilities=node('div',undefined,'utility-actions');
+ const search=button('',()=>openSearch(),'plain','search');search.setAttribute('aria-label','Search all media');
+ const collections=action('',()=>navigate('Collections'),'plain','library');collections.setAttribute('aria-label','Collections');
+ const account=button('',()=>{state.sheet='account';render();},'plain','account');account.setAttribute('aria-label','Account and settings');
+ utilities.append(search,collections,account);d.append(utilities);return d;
+}
 function sourceFooter(){const p=node('p',undefined,'source-links');for(const [label,file]of[['Source code','SOURCE.txt'],['License','LICENSE']]){const link=node('a',label);link.href=new URL('./'+file,document.baseURI).href;link.target='_blank';link.rel='noopener noreferrer';p.append(link);}return p;}
 function welcome(){const main=node('main',undefined,'welcome');main.id='content';const mark=node('div',undefined,'wordmark');mark.append(icon('waves'),node('h1','Bluefin'));main.append(mark);const stack=node('section',undefined,'account-stack');
  if(state.phase==='connect'){stack.append(action('Open local music',openLocalMusic,'primary','music'));stack.append(button('Connect with QR or invitation',()=>{state.sheet='invite';state.error='';render();}));const form=node('form');form.append(node('h2','Connect to your server'));const [w,i]=field('Server address','url',state.base,'server');i.autocomplete='url';i.placeholder='https://media.example.com';i.required=true;form.append(w);const submit=node('button','Continue','primary');submit.disabled=state.busy;form.append(submit);form.onsubmit=e=>{e.preventDefault();perform(()=>connect(i.value.trim()));};stack.append(form);}
@@ -463,25 +704,115 @@ function welcome(){const main=node('main',undefined,'welcome');main.id='content'
  else if(state.phase==='password'||state.phase==='create'){const create=state.phase==='create';const f=node('form');f.append(node('h2',create?'Create account':'Sign in'));const [nw,ni]=field('Username','text','', 'username'),[pw,pi]=field('Password','password','','password');ni.autocomplete='username';pi.autocomplete=create?'new-password':'current-password';ni.required=true;pi.required=true;f.append(nw,pw);let confirm;if(create){const [w,i]=field('Confirm password','password','','confirm');confirm=i;i.autocomplete='new-password';f.append(w,node('p','Use at least 15 characters.','secondary'));}const b=node('button',create?'Create account':'Sign in','primary');b.disabled=state.busy;f.append(b);f.onsubmit=e=>{e.preventDefault();const password=pi.value,name=ni.value.trim();if(create&&password!==confirm.value){state.error='The passwords do not match.';render();return;}pi.value='';if(confirm)confirm.value='';perform(()=>signIn(name,password,create));};stack.append(f,button('Back to sign-in options',()=>{state.phase='options';render();},'plain'));}
  else if(state.phase==='device'){const d=state.device;stack.append(node('h2',d?.kind==='passkey'?'Sign in with a passkey':'Quick Connect'),node('p',d?.code||'','confirmation-code'));if(d?.url){const link=node('a','Open passkey page');link.href=d.url;link.target='_blank';link.rel='noopener noreferrer';stack.append(link,node('p','After verifying, return here to finish.','secondary'));}else stack.append(node('p','Enter this code in another client signed in to your server.'));stack.append(action('Finish sign-in',finishDevice,'primary'),action('Cancel',cancelDevice));}
  if(state.busy)stack.append(node('p','Connecting…','loading'));stack.append(status());main.append(stack,sourceFooter());return main;}
+function searchChoice(label,key,value,choices,changed,loading=false){
+ const wrap=node('div'),name='search-'+key,lab=node('label',label),select=node('select');
+ lab.htmlFor=name;select.id=name;select.setAttribute('aria-label',label);
+ for(const [id,title]of choices){const option=node('option',title);option.value=id;select.append(option);}
+ if(value&&!choices.some(([id])=>id===value)){const selected=node('option',label==='Tag'?value:'Selected '+label.toLowerCase());selected.value=value;select.append(selected);}
+ select.disabled=loading;select.setAttribute('aria-busy',String(loading));
+ select.value=value||'';select.onchange=()=>changed(select.value);wrap.append(lab,select);return wrap;
+}
+function searchView(main){
+ const route=state.route,filters=cleanSearchFilters(route.filters),form=node('form',undefined,'search-form'),input=node('input');
+ input.id='bluefin-search';input.type='search';input.placeholder='Movies, shows, music and live TV';input.value=state.query;
+ input.setAttribute('aria-label','Search all media');input.oninput=()=>{state.query=input.value;};
+ const submit=node('button','Search','primary');form.append(input,submit);
+ form.onsubmit=event=>{event.preventDefault();startSearch(input.value,filters,true);};main.append(form);
+ const tools=node('section',undefined,'search-tools');
+ tools.append(searchChoice('Media type','scope',filters.scope,searchScopes.map(([id,title])=>[id,title]),
+  scope=>startSearch(state.query,{...filters,scope})));
+ const refine=button(route.refine?'Hide refinements':'Refine search',()=>{
+  route.refine=!route.refine;render();if(route.refine)loadSearchFacets().catch(error=>{state.error=String(error.message||error);render();});
+ },'', 'search');refine.setAttribute('aria-expanded',String(!!route.refine));tools.append(refine);main.append(tools);
+ if(route.refine){
+  const panel=node('section',undefined,'search-refinements'),facets=state.facets;
+  panel.append(searchChoice('Studio','studio',filters.studioID,[['','All studios'],...(facets?.studios||[]).map(value=>[value.id,value.name])],
+   studioID=>startSearch(state.query,{...filters,studioID}),facets?.pending?.has('studios')||false));
+  panel.append(searchChoice('Tag','tag',filters.tag,[['','All tags'],...(facets?.tags||[]).map(value=>[value,value])],
+   tag=>startSearch(state.query,{...filters,tag}),facets?.pending?.has('tags')||false));
+  panel.append(searchChoice('Collection','collection',filters.collectionID,[['','All collections'],...(facets?.collections||[]).map(value=>[value.id,value.name])],
+   collectionID=>startSearch(state.query,{...filters,collectionID}),facets?.pending?.has('collections')||false));
+  main.append(panel);
+  if(facets?.loading)main.append(node('p','Loading '+[...facets.pending].join(', ')+'…','loading'));
+  main.append(node('p','Studios, tags, and collections come from your server. Its tags can identify services or custom groups. Refinements search the metadata of titles in your account’s library.','secondary'));
+  if(facets?.truncated)main.append(node('p','Your server has more refinements than this menu shows. Open Collections to browse all groups.','secondary'));
+  if(facets?.problems.length){main.append(node('p',facets.problems.join(' '),'error'),button('Reload refinements',()=>{clearSearchFacets();loadSearchFacets();}));}
+ }
+ if(hasSearchFacets(filters))main.append(node('p','Filtering your library. The live guide is searched when these refinements are cleared.','secondary'),
+  button('Clear refinements',()=>startSearch(state.query,{scope:filters.scope}),'plain'));
+ const search=state.search;
+ if(search?.route===route)for(const page of search.pages){
+  if(!page.items.length)continue;
+  const section=node('section',undefined,'search-results');section.append(node('h2',page.title));
+  const list=node('div',undefined,['channels','programmes'].includes(page.lane)?'group':'catalog-grid');
+  for(const item of page.items)list.append(['channels','programmes'].includes(page.lane)?row(item):poster(item));
+  section.append(list);
+  if(page.next<page.total){const more=button(page.loading?'Loading…':'More results',()=>loadMoreSearch(page.lane));more.disabled=page.loading;section.append(more);}
+  main.append(section);
+ }
+ for(const problem of search?.problems||[])main.append(node('p',problem,'error'));
+ if(!route.loading&&!search?.pages.some(page=>page.items.length))main.append(empty('Search your account',
+  route.query||filters.scope!=='all'||hasSearchFacets(filters)?'No matches. Try another title or refinement.':'Find movies, TV shows, artists, albums, songs, channels, and programmes.'));
+}
+function sportsView(main){
+ const games=state.route.sports||[];
+ if(games.length){
+  const grid=node('div',undefined,'sports-grid');
+  for(const game of games){
+   const card=node('section',undefined,'sports-card'),event=game.event||{};
+   card.append(node('small',String(event.league_name||game.kind||'Sports').slice(0,128)),
+    node('h2',String(event.name||game.title||game.native_title||'Sports broadcast').slice(0,256)));
+   for(const team of (Array.isArray(event.competitors)?event.competitors:[]).slice(0,4)){
+    const score=node('div',undefined,'score-row');score.append(node('span',String(team.short_name||team.name||team.abbreviation||'').slice(0,128)),
+     node('strong',String(team.score||'').slice(0,24)));card.append(score);
+   }
+   const start=new Date(game.native_start||game.start||event.date),time=Number.isNaN(start.valueOf())?'':start.toLocaleString();
+   if(event.detail||time)card.append(node('p',String(event.detail||time).slice(0,256),'secondary'));
+   if(uuid(game.channel_id))card.append(action(game.channel_name?'Open '+String(game.channel_name).slice(0,128):'Open channel',
+    ()=>openItem({Id:game.channel_id,Name:game.channel_name||'Live TV',Type:'TvChannel'}),'','live'));
+   grid.append(card);
+  }
+  main.append(grid);
+ }
+ if(state.rows.length){const list=node('div',undefined,'group');for(const item of state.rows)list.append(row(item));main.append(list);}
+ if(!games.length&&!state.rows.length&&!state.route.loading)main.append(empty('Sports for your account','Your server’s selected games and available sports broadcasts will appear here.'));
+}
 function libraryView(){const main=node('main',undefined,'app-main');main.id='content';const route=state.route,title=route.title||(route.kind==='detail'?route.item.Name:state.tab);main.append(toolbar(title,state.back.length>0));if(state.back.length)main.append(node('h1',title));
  if(route.kind==='local_music'||route.kind==='local_search')localMusicView(main);
  else if(route.kind==='local_connect'){main.append(empty('Connect to your live TV','Open your server’s Bluefin address or use a device invitation to access its channels.'),action('Connect account',openAccountConnection,'primary'));
  }
- else if(route.kind==='home'){const feature=state.shelves.find(s=>s.items.length)?.items[0];if(feature){const box=node('section',undefined,'featured'),hero=node('div',undefined,'hero');bindArtwork(hero,feature,true);hero.append(node('small','IN YOUR LIBRARY'),node('h2',feature.Name));if(subtitle(feature))hero.append(node('p',subtitle(feature)));box.append(hero);const a=node('div',undefined,'actions');if(['Movie','Episode','Audio','TvChannel'].includes(feature.Type))a.append(action(resumeTicks(feature)>0?'Resume':'Play',()=>play(feature,[feature],0),'primary','play'));a.append(action('Details',()=>openItem(feature),'','info'));box.append(a);main.append(box);}for(const s of state.shelves)main.append(shelf(s.title,s.items));if(!feature&&!state.busy)main.append(empty('Browse your library','Open Library to see your collections.'));}
+ else if(route.kind==='home'){
+  const feature=state.featured;
+  if(feature){
+   const hero=node('section',undefined,'hero featured'),copy=node('div',undefined,'hero-copy');bindArtwork(hero,feature,true);
+   copy.append(node('small','FEATURED'),node('h2',feature.Name));if(subtitle(feature))copy.append(node('p',subtitle(feature)));
+   const actions=node('div',undefined,'actions');
+   if(['Movie','Episode','Audio','TvChannel'].includes(feature.Type))actions.append(action(resumeTicks(feature)>0?'Resume':'Play',()=>play(feature,[feature],0),'primary','play'));
+   actions.append(action('Details',()=>openItem(feature),'hero-secondary','info'));copy.append(actions);hero.append(copy);main.append(hero);
+  }
+  for(const shelfValue of state.shelves)main.append(shelf(shelfValue.title,shelfValue.items));
+  if(!feature&&!route.loading)main.append(empty('Browse your library','Open Collections to see your libraries.'));
+ }
+ else if(route.kind==='sports')sportsView(main);
  else if(route.kind==='library'){const collections=group('Collections');for(const item of state.rows)collections.append(row(item));if(!state.rows.length&&!state.busy)collections.append(node('p','No libraries are available to this account.','secondary'));main.append(collections);}
  else if(route.kind==='music'){main.append(action('Music on this device',openLocalMusic,'','music'));const browse=node('div',undefined,'music-browse');for(const [name,type,symbol]of[['Songs','Audio','music'],['Albums','MusicAlbum','library'],['Artists','MusicArtist','account'],['Playlists','Playlist','queue']])browse.append(action(name,()=>openCollection(name,type,null),'',symbol));main.append(browse);for(const s of state.shelves)main.append(shelf(s.title,s.items));if(!state.shelves.some(s=>s.items.length)&&!state.busy)main.append(empty('Your music, in one place','Albums from your connected library will appear here. Browse Songs to find individual tracks.'));}
- else if(route.kind==='search'){const f=node('form',undefined,'search-form'),i=node('input');i.type='search';i.placeholder='Search your library';i.value=state.query;i.setAttribute('aria-label','Search your library');const b=node('button','Search');f.append(i,b);f.onsubmit=e=>{e.preventDefault();state.query=i.value.trim().slice(0,256);perform(loadRoute);};main.append(f);const results=node('div',undefined,'catalog-grid');for(const item of state.rows)results.append(poster(item));main.append(results);if(!state.rows.length&&!state.busy)main.append(empty('Search your library',state.query?'No results. Try another title, artist or album.':'Find movies, shows, artists, albums and songs.'));}
+ else if(route.kind==='search')searchView(main);
  else if(route.kind==='collection'||route.kind==='live'){if(route.kind==='live'&&state.mode!=='mesh')main.append(node('p','You can browse channels here. Live TV playback is not yet available on this server’s web connection.','secondary'));const audio=route.type==='Audio';if(audio&&state.rows.length){const a=node('div',undefined,'actions');a.append(action('Play',()=>play(state.rows[0],state.rows,0),'','play'),action('Shuffle',()=>playShuffled(state.rows),'','shuffle'));main.append(a);}const list=node('div',undefined,audio||route.kind==='live'?'group':'catalog-grid');for(const item of state.rows)list.append(audio||route.kind==='live'?row(item):poster(item));main.append(list);if(!state.rows.length&&!state.busy)main.append(empty('No items to show','Try another collection or refresh your library.'));if(route.kind==='collection'){const a=node('div',undefined,'actions');if(route.start>0)a.append(action('Previous page',async()=>{route.start=Math.max(0,route.start-100);await loadRoute();}));if(route.start+state.rows.length<route.total)a.append(action('Next page',async()=>{route.start+=100;await loadRoute();}));main.append(a);}}
  else if(route.kind==='detail'){const item=route.item;main.append(cover(item,item.Type==='Audio'));main.lastChild.style.maxWidth='360px';main.append(node('h2',item.Name),node('p',subtitle(item),'secondary'));if(item.Type==='TvChannel'&&state.mode!=='mesh')main.append(node('p','Live TV playback is not yet available on this server’s web connection.','secondary'));else if(['Movie','Episode','Audio','TvChannel'].includes(item.Type))main.append(action(resumeTicks(item)>0?'Resume':'Play',()=>play(item,[item],0),'primary','play'));main.append(node('p',item.Overview||''));}
- if(state.busy)main.append(node('p','Loading your library…','loading'));main.append(status());if(state.error)main.append(action('Try again',loadRoute));return main;}
-function tabbar(){const nav=node('nav',undefined,'tabbar');nav.setAttribute('aria-label','Library');for(const [title,symbol]of[['Home','home'],['Library','library'],['Music','music'],['Search','search'],['Live TV','live']]){const b=action(title,()=>navigate(title),'',symbol);b.setAttribute('aria-current',state.tab===title?'page':'false');nav.append(b);}return nav;}
+ if(state.busy||route.loading)main.append(node('p',route.kind==='search'?'Searching your account…':'Loading your library…','loading'));main.append(status());if(state.error)main.append(action('Try again',loadRoute));return main;}
+function tabbar(){
+ const nav=node('nav',undefined,'tabbar');nav.setAttribute('aria-label','Categories');
+ const brand=node('div',undefined,'nav-brand');brand.append(icon('waves'),node('strong','Bluefin'));nav.append(brand);
+ for(const [title,symbol]of categories){const entry=action(title,()=>navigate(title),'',symbol);entry.setAttribute('aria-current',state.tab===title?'page':'false');nav.append(entry);}
+ return nav;
+}
 function sheet(){if(state.expanded)return nowPlaying();const outer=node('section',undefined,'sheet');outer.setAttribute('role','dialog');outer.setAttribute('aria-modal','true');outer.id='bluefin-dialog';outer.tabIndex=-1;outer.setAttribute('aria-label',state.sheet==='invite'?'Connect Bluefin':state.sheet==='connections'?'Connections':'Account and settings');const inner=node('div',undefined,'sheet-inner'),bar=node('div',undefined,'toolbar');bar.append(node('h2',state.sheet==='invite'?'Connect Bluefin':state.sheet==='connections'?'Connections':'Account and settings'),button('Done',closeSheet,'plain'));inner.append(bar);
  if(state.sheet==='invite'){const g=group(state.pairing?'Saved connection':'Connect with an invitation');if(state.pairing){g.append(node('p',state.remember?'This request is saved on this device.':'This request stays in this tab. Keep it open until your connection is complete.'));if(state.pairing.awaitingApproval)g.append(node('p','Your request is waiting for administrator approval.'));if(state.pairing.externalUrl){const u=new URL(state.pairing.externalUrl);if(u.protocol==='https:'&&!u.username&&!u.password){const a=node('a','Open passkey page');a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';g.append(a,node('p','After verifying, return here to finish.','secondary'));}}g.append(action(state.pairing.awaitingApproval?'Check approval':state.pairing.needsBeginRetry?'Resume connection':'Verify and finish',continueMesh,'primary'));}
- else{g.append(node('p','Scan a Bluefin QR code, open an invitation image, or paste the full connection code.'));const f=node('form'),[cw,ci]=field('Connection code','password',state.code,'mesh-code'),[nw,ni]=field('Your account name for a signup request','text',state.meshName,'mesh-name');ni.oninput=()=>{state.meshName=ni.value;};ci.autocomplete='off';ci.spellcheck=false;ci.maxLength=3072;ci.oninput=()=>{state.code=ci.value;};f.append(cw,nw);const remember=node('label',undefined,'check'),c=node('input');c.type='checkbox';c.checked=state.remember;c.onchange=()=>{state.remember=c.checked;};remember.append(c,node('span','Remember this device in protected browser storage'));f.append(remember,node('p','Temporary by default. Closing this tab removes its connection key. Use Sign out to request immediate remote revocation.','secondary'));const b=node('button','Connect securely','primary');b.disabled=state.busy;f.append(b);f.onsubmit=e=>{e.preventDefault();const code=ci.value.trim(),name=ni.value.trim(),keep=c.checked;ci.value='';perform(()=>beginMesh(code,name,keep));};g.append(f);for(const [label,capture]of[['Open QR image or screenshot',false],['Take a photo of a QR code',true]]){const l=node('label',label),input=node('input');input.type='file';input.accept='image/png,image/jpeg';if(capture)input.setAttribute('capture','environment');input.onchange=()=>{const file=input.files?.[0];input.value='';if(!file)return;perform(()=>importInvitationImage(file));};l.append(input);g.append(l);}if(validInvitation()){const a=node('a','Open in the installed Bluefin app');a.href='bluefin://connect/'+state.code;g.append(a);}}
+ else{g.append(node('p','Scan a Bluefin QR code, open an invitation image, or paste the full connection code.'));const f=node('form'),[cw,ci]=field('Connection code','password',state.code,'mesh-code'),[nw,ni]=field('Your account name for a signup request','text',state.meshName,'mesh-name');ni.oninput=()=>{state.meshName=ni.value;};ci.autocomplete='off';ci.spellcheck=false;ci.maxLength=3072;ci.oninput=()=>{state.code=ci.value;};f.append(cw,nw);const remember=node('label',undefined,'check'),c=node('input');c.type='checkbox';c.checked=state.remember;c.onchange=()=>{state.remember=c.checked;};remember.append(c,node('span','Remember this device in protected browser storage'));f.append(remember,node('p','Temporary by default. Closing this tab removes its connection key. Use Sign out to request immediate remote revocation.','secondary'));const b=node('button','Connect securely','primary');b.disabled=state.busy;f.append(b);f.onsubmit=e=>{e.preventDefault();const code=ci.value.trim(),name=ni.value.trim(),keep=c.checked;ci.value='';perform(()=>beginMesh(code,name,keep));};g.append(f);for(const [label,capture]of[['Open QR image or screenshot',false],['Take a photo of a QR code',true]]){const l=node('label',label),input=node('input');input.type='file';input.accept='image/png,image/jpeg';if(capture)input.setAttribute('capture','environment');input.onchange=()=>{const file=input.files?.[0];input.value='';if(!file)return;perform(()=>readInvitationImage(file));};l.append(input);g.append(l);}if(validInvitation()){const a=node('a','Open in the installed Bluefin app');a.href='bluefin://connect/'+state.code;g.append(a);}}
  g.append(action('Resume request in this tab',()=>resumeMesh(false)),action('Restore a remembered device',()=>resumeMesh(true)));inner.append(g,node('p','The QR verifies a device connection. Your browser still uses its normal trusted HTTPS certificate.','secondary'));
  }else if(state.sheet==='account'){const g=group(state.session?.name||'Music on this device');g.append(node('p',!state.session?'Temporary local music · no account connected':state.mode==='mesh'?'Connected through the encrypted Bluefin mesh':'Signed in through the server address'));if(state.session)g.append(button('Connections',()=>{state.sheet='connections';render();},'','qr'));else g.append(action('Connect account',openAccountConnection,'','qr'));g.append(action(state.session?'Sign out':'Close local library',signOut,'danger'));inner.append(g);}
  else if(state.sheet==='connections'){const device=group('This device');device.append(node('p',state.mode==='mesh'?'Connected through the encrypted Bluefin mesh':'Signed in through the server address'));if(state.mode==='mesh')device.append(node('p',state.remember?'Your connection key is saved in protected storage on this browser.':'Your connection key exists only in this tab.','secondary'));inner.append(device);const g=group('Connect another device to your account');g.append(node('p','Use this invitation on a device you own. Your account passkey is still required.'),action('Create one-use invitation',issueInvite));if(state.invitation){const invite=state.invitation,image=node('img',undefined,'qr');image.src=invite.image;image.alt='One-use Bluefin device invitation';g.append(image,node('p','Every copy is the same invitation. Once claimed, no copy can connect another device.','secondary'));g.append(button('Copy invitation',()=>copy(invite.webLink)),button('Copy connection code',()=>copy(invite.code)));const save=node('a','Save QR image');save.href=invite.image;save.download='bluefin-invitation.png';g.append(save);const d=node('details'),summary=node('summary','Manual connection code');d.append(summary,node('p',invite.code,'code'));g.append(d);}g.append(node('p','Sharing a library with another person requires a separate grant to that person’s own account. A device invitation does not authorize shared storage or onward sharing.','secondary'));inner.append(g);}
- if(state.sheet==='account')inner.append(sourceFooter());if(state.busy)inner.append(node('p','Connecting…','loading'));inner.append(status());outer.append(inner);return outer;}
+ if(state.sheet==='account'&&state.session){const home=group('Home personalization');home.append(node('p','Your viewing progress and favorites shape Home on your account’s server.','secondary'));if(state.homeHistory)home.append(node('p','Submitted searches and selected results also help. History stays with this account for up to 90 days, with at most 64 recent events.','secondary'),action('Clear search history',clearHomeSearchHistory,'danger'));inner.append(home);}if(state.sheet==='account')inner.append(sourceFooter());if(state.busy)inner.append(node('p','Connecting…','loading'));inner.append(status());outer.append(inner);return outer;}
 async function copy(value){try{await navigator.clipboard.writeText(value);state.notice='Copied.';}catch(_){state.error='Copy was not available. Open the manual code and select it.';}render();}
 async function issueInvite(){
  const epoch=state.epoch,session=state.session,mode=state.mode;
@@ -714,7 +1045,7 @@ async function signOut(){
  state.mode='https';state.base=hostedBase();state.server=null;state.options={};state.remember=false;
  if(cleanup)throw Error('Signed out in this tab. Remote cleanup is not confirmed; '+String(cleanup.message||cleanup));
 }
-function clearImages(){state.imageEpoch++;artworkMissing.clear();for(const url of state.images.values())URL.revokeObjectURL(url);state.images.clear();}
+function clearImages(){state.imageEpoch++;clearTimeout(artworkScrollTimer);for(const controller of imageControllers)controller.abort();imageControllers.clear();artworkPending.clear();artworkMissing.clear();for(const url of state.images.values())URL.revokeObjectURL(url);state.images.clear();}
 function render(){
  if(pageRetired)return;
  const active=document.activeElement,activeId=active?.id,activeKey=active?.dataset?.focusKey;

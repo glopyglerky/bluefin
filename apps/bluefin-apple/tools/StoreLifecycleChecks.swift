@@ -90,6 +90,46 @@ struct VideoDeviceCapabilities {
     }
 }
 
+@MainActor enum Artwork {
+    static func clearCache() {}
+    static func prefetch(items: [MediaItem], session: AccountSession) async {
+        // No image transport is used by the lifecycle fixture. Production Home
+        // still schedules and cancels this task through the real store.
+    }
+}
+
+// This executable exercises ordinary HTTPS-account cleanup. Unexpected mesh
+// calls fail immediately instead of silently replacing the account protocol.
+struct MeshSavedSession {
+    let sessionId: String
+    let apiOrigin: String
+    let userId: String
+    let deviceId: String
+}
+struct HostMeshPending { struct Completion { let id: String }; let completion: Completion? }
+@MainActor enum MeshPendingVault {
+    static func load() throws -> HostMeshPending? { preconditionFailure("Unexpected mesh pending lookup") }
+    static func clear() throws { preconditionFailure("Unexpected mesh pending mutation") }
+}
+@MainActor enum MeshRevocationVault {
+    static func contains(_ reference: String) throws -> Bool { preconditionFailure("Unexpected mesh revocation lookup") }
+}
+@MainActor enum MeshSessionVault {
+    static func save(_ session: MeshSavedSession) throws { preconditionFailure("Unexpected mesh session save") }
+    static func clear(reference: String) throws { preconditionFailure("Unexpected mesh session clear") }
+}
+@MainActor final class MeshRevocationQueue {
+    static let shared = MeshRevocationQueue()
+    var count: Int { preconditionFailure("Unexpected mesh revocation count") }
+    func prepare(_ session: AccountSession) async throws {
+        precondition(session.meshSessionId == nil, "HTTPS lifecycle fixture entered mesh cleanup")
+    }
+    func retry() async { preconditionFailure("Unexpected mesh revocation retry") }
+}
+@MainActor final class DeviceMusicLibrary {
+    func stopPlayback() -> Task<Void, Error>? { nil }
+}
+
 @MainActor final class SportsStore { func disconnect() {} }
 
 @MainActor final class OfflineLibrary {
@@ -103,6 +143,7 @@ struct VideoDeviceCapabilities {
     var videoSelection = VideoOptionSelection()
     var onVideoOptions: ((VideoOptionSelection) -> Void)?
     func configureAudio(_ settings: NativeAudioSettings) {}
+    func loadSkipSegments(for session: AccountSession) {}
     func discardNextMusicCandidate() -> Task<Void, Error> { Task {} }
     func setNextMusicCandidate(_ item: MediaItem?, session: AccountSession) {}
     let item: MediaItem
@@ -148,7 +189,7 @@ struct VideoDeviceCapabilities {
             SessionVault.failDeletion = true
             await store.signOut()
             precondition(store.session?.token == account.token && SessionVault.current?.token == account.token)
-            precondition(store.error?.contains("saved sign-in") == true)
+            precondition(store.error?.contains("sign-out could not be saved") == true)
             let beforeRetry = await RustBridge.events.snapshot()
             precondition(beforeRetry.isEmpty, "A failed local sign-out invalidated the still-saved account")
             SessionVault.failDeletion = false
@@ -166,9 +207,12 @@ struct VideoDeviceCapabilities {
         await events.wait("progress")
         store.dismissPlayback()
         precondition(store.playback == nil)
+        SessionVault.current = account
         let logout = Task { await store.signOut() }
-        while SessionVault.clearCount == 0 { await Task.yield() }
+        while !store.signingOut { await Task.yield() }
         await events.wait("stopPlaybackProxy")
+        precondition(SessionVault.clearCount == 0 && SessionVault.current?.token == account.token,
+                     "Sign-out discarded cleanup credentials before media teardown completed")
         let blocked = await events.snapshot()
         if blocked.contains("logout") {
             print("FAIL: dismissal lost teardown ownership before sign-out: \(blocked)")
@@ -196,7 +240,7 @@ struct VideoDeviceCapabilities {
         for _ in 0..<1000 where store.error == nil { await Task.yield() }
         precondition(store.error != nil, "Dismissed player lost its cleanup failure")
         await store.signOut()
-        precondition(store.error?.contains("could not confirm") == true, "Sign-out lost an earlier cleanup failure")
+        precondition(store.error?.contains("remote cleanup is unconfirmed") == true, "Sign-out lost an earlier cleanup failure")
         let failedOrder = await failedEvents.snapshot()
         precondition(failedOrder == ["stopPlaybackProxy", "started", "stopped", "releasePlayback", "logout"])
         RustBridge.events = StoreEvents()

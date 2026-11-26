@@ -24,7 +24,7 @@ struct BluefinNavigation<Content: View>: View {
             #if os(tvOS)
             TVMediaNavigation(path: $path) { content }
             #else
-            NavigationStack { content }
+            NavigationStack { content.bluefinNavigationChrome() }
             #endif
         } else {
             NavigationView { content }.navigationViewStyle(.stack)
@@ -34,6 +34,7 @@ struct BluefinNavigation<Content: View>: View {
 
 enum MediaDestination: Hashable {
     case detail(MediaItem)
+    case searchResult(MediaItem, query: String, accountContext: UUID)
     case trailers(String)
     case collections
     case collection(title: String, parent: MediaItem?, types: String?)
@@ -51,6 +52,8 @@ enum MediaDestination: Hashable {
     @ViewBuilder func screen(back: (() -> Void)? = nil) -> some View {
         switch self {
         case .detail(let item): DetailView(item: item, onBack: back)
+        case .searchResult(let item, let query, let context):
+            HomeSearchDestination(item: item, query: query, accountContext: context, onBack: back)
         case .trailers(let id): TrailersDetailView(itemID: id, onBack: back)
         case .collections: LibrariesView().bluefinBackNavigation(back)
         case .collection(let title, let parent, let types):
@@ -140,10 +143,10 @@ struct TVDetailAction: View {
     var body: some View {
         Label(title, systemImage: symbol)
             .font(.callout.weight(prominent ? .bold : .medium))
-            .foregroundStyle(focused ? Color.black : Color.white)
+            .foregroundStyle(focused ? BluefinStyle.onPrimary : BluefinStyle.text)
             .padding(.horizontal, 24).padding(.vertical, 14)
-            .background(focused ? Color.white : Color.black.opacity(0.65), in: Capsule())
-            .overlay { Capsule().strokeBorder(.white.opacity(focused ? 0 : 0.35), lineWidth: 1) }
+            .background(focused ? BluefinStyle.primaryFill : BluefinStyle.secondaryBackground.opacity(0.95), in: Capsule())
+            .overlay { Capsule().strokeBorder(BluefinStyle.controlBorder.opacity(focused ? 0 : 1), lineWidth: 1) }
     }
 }
 
@@ -235,6 +238,17 @@ private struct BluefinHomeControl: ViewModifier {
 }
 
 extension View {
+    @ViewBuilder func bluefinNavigationChrome() -> some View {
+        #if os(iOS)
+        if #available(iOS 16, *) {
+            self.toolbarBackground(BluefinStyle.background, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
+        } else { self }
+        #else
+        self
+        #endif
+    }
+
     @ViewBuilder func bluefinBackNavigation(_ action: (() -> Void)? = nil) -> some View {
         #if os(tvOS)
         modifier(TVBackControl(action: action))
@@ -349,9 +363,7 @@ struct TVWelcomeView: View {
 
     private var wordmark: some View {
         HStack(spacing: 16) {
-            Image(systemName: "water.waves")
-                .font(.system(size: 38, weight: .medium)).foregroundStyle(BluefinStyle.accent)
-                .accessibilityHidden(true)
+            BluefinMark().frame(width: 38, height: 38)
             Text("Bluefin").font(.system(size: 56, weight: .bold, design: .rounded))
         }.accessibilityAddTraits(.isHeader)
     }
@@ -538,10 +550,10 @@ private struct AccountActionLabel: View {
         #if os(tvOS)
         Text(title)
             .font(.callout.weight(primary ? .semibold : .medium))
-            .foregroundStyle(focused && enabled ? Color.black : Color.white.opacity(enabled ? 1 : 0.55))
+            .foregroundStyle(focused && enabled ? BluefinStyle.onPrimary : BluefinStyle.text.opacity(enabled ? 1 : 0.55))
             .padding(.horizontal, 24).padding(.vertical, 16)
             .frame(maxWidth: primary ? .infinity : nil)
-            .background(focused && enabled ? Color.white : Color.white.opacity(primary && enabled ? 0.20 : 0.09),
+            .background(focused && enabled ? BluefinStyle.primaryFill : (primary && enabled ? BluefinStyle.hover : BluefinStyle.secondaryBackground),
                         in: Capsule())
         #else
         Text(title).frame(maxWidth: primary ? .infinity : nil)
@@ -554,7 +566,7 @@ private extension View {
         #if os(tvOS)
         buttonStyle(.plain)
         #else
-        if primary { buttonStyle(.borderedProminent) }
+        if primary { buttonStyle(.borderedProminent).tint(BluefinStyle.primaryFill).foregroundStyle(BluefinStyle.onPrimary) }
         else { buttonStyle(.bordered) }
         #endif
     }
@@ -724,7 +736,7 @@ struct PasskeySignInView: View {
                     #if os(tvOS)
                     Text("Scan with your phone, then check the code.").foregroundStyle(.secondary)
                     #else
-                    Link("Open on this device", destination: request.url).buttonStyle(.borderedProminent)
+                    Link("Open on this device", destination: request.url).buttonStyle(.borderedProminent).tint(BluefinStyle.primaryFill).foregroundStyle(BluefinStyle.onPrimary)
                     Text("Or scan with another device.").foregroundStyle(.secondary)
                     #endif
                     if let qr {
@@ -802,6 +814,9 @@ struct TVHomeView: View {
     @EnvironmentObject private var store: LibraryStore
     @Binding var shelfItem: MediaItem?
     @ObservedObject var sports: SportsStore
+    var openSearch: () -> Void = {}
+    var openCollections: () -> Void = {}
+    var openAccount: () -> Void = {}
 
     private var shelfIsPresented: Binding<Bool> {
         Binding(get: { shelfItem != nil }, set: { if !$0 { shelfItem = nil } })
@@ -830,19 +845,23 @@ struct TVHomeView: View {
                         .accessibilityAddTraits(.isHeader)
                         .accessibilityIdentifier("homeHeading")
                     Spacer()
-                    MediaNavigationLink(destination: .collections) { Label("Collections", systemImage: "square.stack") }
-                    MediaNavigationLink(destination: .account) { Label("Account", systemImage: "person.crop.circle") }
+                    Button(action: openSearch) { Label("Search", systemImage: "magnifyingglass") }.accessibilityIdentifier("openSearch")
+                    Button(action: openCollections) { Label("Collections", systemImage: "square.stack") }.accessibilityIdentifier("openCollections")
+                    Button(action: openAccount) { Label("Account", systemImage: "person.crop.circle") }.accessibilityIdentifier("openAccount")
                 }.buttonStyle(.bordered).padding(.horizontal, 32).focusSection()
                 if store.preview {
                     Label("Sample library", systemImage: "sparkles")
                         .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 32)
                 }
-                if let featured = store.home.resume.first ?? store.home.latest.first { TVFeaturedItem(item: featured) }
+                if let featured = store.home.featured { TVFeaturedItem(item: featured) }
                 if (store.loading || (!store.initialHomeLoaded && !store.preview)) && store.home.latest.isEmpty && store.home.resume.isEmpty && store.home.nextUp.isEmpty {
                     ProgressView("Loading your library").padding(.horizontal, 32)
                 }
                 if !store.home.resume.isEmpty { MediaShelf(title: "Continue watching", items: store.home.resume) }
                 if !store.home.nextUp.isEmpty { MediaShelf(title: "Up next", items: store.home.nextUp) }
+                ForEach(store.home.recommendations) { shelf in
+                    if !shelf.items.isEmpty { MediaShelf(title: shelf.title, items: shelf.items) }
+                }
                 let movies = store.home.latest.filter { $0.Type == "Movie" }
                 let shows = store.home.latest.filter { ["Series", "Season", "Episode"].contains($0.Type ?? "") }
                 if !movies.isEmpty { MediaShelf(title: store.homeFromCatalog ? "Movies" : "Recently added movies", items: movies) }
@@ -877,17 +896,18 @@ private struct TVFeaturedItem: View {
             LinearGradient(colors: [.black.opacity(0.88), .black.opacity(0.16), .clear],
                            startPoint: .bottomLeading, endPoint: .topTrailing)
             VStack(alignment: .leading, spacing: 14) {
+                Text("FEATURED").font(.caption.weight(.semibold)).tracking(1.5)
                 Text(item.title).font(.largeTitle.bold()).lineLimit(2)
                 if !item.subtitle.isEmpty { Text(item.subtitle).font(.callout).foregroundStyle(.white.opacity(0.8)) }
                 HStack(spacing: 20) {
                     if !item.isContainer {
                         Button { Task { await store.play(item) } } label: {
                             Label(item.resumeTicks > 0 ? "Resume" : "Play", systemImage: "play.fill")
-                        }.buttonStyle(.borderedProminent).disabled(store.startingPlayback)
+                        }.buttonStyle(.borderedProminent).tint(BluefinStyle.primaryFill).foregroundStyle(BluefinStyle.onPrimary).disabled(store.startingPlayback)
                     }
                     MediaNavigationLink(destination: .detail(item)) {
                         Text(item.Type == "Series" ? "Episodes" : "Details")
-                    }.buttonStyle(.bordered)
+                    }.buttonStyle(.bordered).tint(.white).foregroundStyle(.white)
                 }
             }.foregroundStyle(.white).padding(42)
         }.frame(height: 370).clipShape(RoundedRectangle(cornerRadius: 26))

@@ -1,8 +1,11 @@
 //! Shared desktop and browser application. No server connectors or administration.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod bridge;
+pub mod catalog;
 #[cfg(all(not(target_arch = "wasm32"), feature = "ui"))]
 pub mod gl_video;
+#[cfg(target_arch = "wasm32")]
+pub mod mesh;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mpv;
 pub mod playback;
@@ -11,12 +14,10 @@ pub mod player;
 pub mod protocol;
 pub mod service;
 pub mod state;
-#[cfg(target_arch = "wasm32")]
-pub mod mesh;
-#[cfg(target_arch = "wasm32")]
-pub mod web_client;
 #[cfg(feature = "ui")]
 pub mod ui;
+#[cfg(target_arch = "wasm32")]
+pub mod web_client;
 #[cfg(all(target_arch = "wasm32", feature = "ui"))]
 mod web_input;
 

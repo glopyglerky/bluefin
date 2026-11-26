@@ -1,7 +1,27 @@
 ' Original native SceneGraph adapter. Roku cannot execute the Rust/WASM policy.
 sub init()
-    m.top.backgroundColor = "0x071C29FF"
+    m.top.backgroundColor = "0x061727FF"
     m.list = m.top.findNode("list")
+    m.artPreview = m.top.findNode("artPreview")
+    m.artPoster = m.top.findNode("artPoster")
+    m.artTitle = m.top.findNode("artTitle")
+    m.artProgress = m.top.findNode("artProgress")
+    m.artDebounce = m.top.findNode("artDebounce")
+    m.artDebounce.ObserveField("fire", "loadFocusedArtwork")
+    m.list.ObserveField("itemFocused", "focusArtwork")
+    m.artScope = ""
+    m.artItemId = ""
+    m.pendingArtwork = invalid
+    m.categories = m.top.findNode("categories")
+    m.utilities = m.top.findNode("utilities")
+    m.categories.ObserveField("itemSelected", "categorySelected")
+    m.utilities.ObserveField("itemSelected", "utilitySelected")
+    m.accountGeneration = 0
+    m.viewGeneration = 0
+    m.userId = ""
+    m.search = invalid
+    m.home = invalid
+    m.facetCache = {}
     m.guide = m.top.findNode("guide")
     m.guidePending = false
     m.title = m.top.findNode("title")
@@ -35,6 +55,9 @@ sub init()
     m.actions = []
     m.history = []
     m.playbackScreen = invalid
+    m.appearance = CreateObject("roRegistrySection", "bluefin-ui").Read("appearance")
+    if m.appearance <> "light" then m.appearance = "dark"
+    applyAppearance()
     menu()
 end sub
 sub rows(title as String, labels as Object, actions as Object)
@@ -44,6 +67,21 @@ sub rows(title as String, labels as Object, actions as Object)
     m.status.visible = true
     m.list.visible = true
     m.title.text = title
+    if m.token <> ""
+        m.list.translation = [330,215]
+        m.list.itemSize = [880,64]
+        m.title.translation = [330,115]
+        m.title.width = 880
+        m.status.translation = [330,650]
+        m.status.width = 880
+    else
+        m.list.translation = [70,215]
+        m.list.itemSize = [1120,64]
+        m.title.translation = [70,115]
+        m.title.width = 1130
+        m.status.translation = [70,650]
+        m.status.width = 1130
+    end if
     root = CreateObject("roSGNode", "ContentNode")
     for each label in labels
         child = root.CreateChild("ContentNode")
@@ -52,6 +90,7 @@ sub rows(title as String, labels as Object, actions as Object)
     m.actions = actions
     m.list.content = root
     m.list.jumpToItem = 0
+    prepareArtwork()
     m.list.SetFocus(true)
 end sub
 function screen() as Object
@@ -74,6 +113,7 @@ sub restoreScreen(previous as Object)
         m.actions = previous.actions
         m.list.content = previous.content
         if previous.index >= 0 then m.list.jumpToItem = previous.index
+        prepareArtwork()
         m.list.SetFocus(true)
     end if
 end sub
@@ -82,6 +122,7 @@ sub rememberScreen()
     m.history.Push(screen())
 end sub
 function previousScreen() as Boolean
+    invalidateCatalog()
     if m.history.Count() = 0 then return false
     restoreScreen(m.history.Pop())
     return true
@@ -93,14 +134,42 @@ sub leavePlayer()
     if previous <> invalid then restoreScreen(previous)
 end sub
 sub menu()
+    invalidateCatalog()
     m.history = []
     m.playbackScreen = invalid
     m.guidePending = false
+    m.categories.visible = m.token <> ""
+    m.utilities.visible = m.token <> ""
     if m.token = ""
         rows("Bluefin", ["Connect to server"], [{kind:"connect"}])
     else
-        rows("Home", ["Movies", "TV Shows", "Live TV", "Music", "Search", "Queue", "Sign out"], [{kind:"movies"}, {kind:"shows"}, {kind:"guide"}, {kind:"music"}, {kind:"search"}, {kind:"queue"}, {kind:"signout"}])
+        m.categoryActions = ["home", "sports", "shows", "movies", "guide", "music"]
+        m.utilityActions = ["search", "collections", "account"]
+        m.categories.content = labelContent(["Home", "Sports", "TV Shows", "Movies", "Live TV", "Music"])
+        m.utilities.content = labelContent(["Search", "Collections", "Account"])
+        loadHome()
     end if
+end sub
+function labelContent(labels as Object) as Object
+    root = CreateObject("roSGNode", "ContentNode")
+    for each label in labels
+        child = root.CreateChild("ContentNode")
+        child.title = label
+    end for
+    return root
+end function
+sub categorySelected()
+    index = m.categories.itemSelected
+    if index < 0 or index >= m.categoryActions.Count() then return
+    invalidateCatalog()
+    m.history = []
+    activate({kind:m.categoryActions[index]})
+end sub
+sub utilitySelected()
+    index = m.utilities.itemSelected
+    if index < 0 or index >= m.utilityActions.Count() then return
+    invalidateCatalog()
+    activate({kind:m.utilityActions[index]})
 end sub
 sub accountMenu()
     labels = ["Sign in"]
@@ -147,6 +216,9 @@ sub selected()
     index = m.list.itemSelected
     if index < 0 or index >= m.actions.Count() then return
     action = m.actions[index]
+    activate(action)
+end sub
+sub activate(action as Object)
     if action.kind = "connect"
         keyboard("Server HTTPS URL", "server", false)
     else if action.kind = "passwordSignIn" or action.kind = "createAccount"
@@ -164,6 +236,52 @@ sub selected()
         cancelAccount()
     else if action.kind = "waitAccount"
         return
+    else if action.kind = "home"
+        invalidateCatalog()
+        loadHome()
+    else if action.kind = "sports"
+        rememberScreen()
+        rows("Sports", ["Loading your sports"], [{kind:"waitAccount"}])
+        api("sports", "/sports/api/v1/home", "GET", invalid)
+    else if action.kind = "collections"
+        rememberScreen()
+        m.libraryTitle = "Collections"
+        loadLibrary("/Users/" + m.userId + "/Views?Limit=100", 0)
+    else if action.kind = "account"
+        rememberScreen()
+        rows("Account", ["Music queue", "Appearance", "Sign out", "Back"], [{kind:"queue"}, {kind:"appearance"}, {kind:"signout"}, {kind:"back"}])
+    else if action.kind = "appearance"
+        rememberScreen()
+        rows("Appearance", ["Dark", "Light", "Back"], [{kind:"setAppearance",value:"dark"},{kind:"setAppearance",value:"light"},{kind:"back"}])
+    else if action.kind = "setAppearance"
+        m.appearance = action.value
+        section = CreateObject("roRegistrySection", "bluefin-ui")
+        section.Write("appearance", m.appearance)
+        section.Flush()
+        applyAppearance()
+    else if action.kind = "searchTerm"
+        keyboard("Search all media", "search", false)
+    else if action.kind = "searchScope"
+        rows("Media type", ["All Media", "TV Shows", "Movies", "Music", "Live TV"], [{kind:"setScope",value:"all"},{kind:"setScope",value:"tvShows"},{kind:"setScope",value:"movies"},{kind:"setScope",value:"music"},{kind:"setScope",value:"liveTv"}])
+    else if action.kind = "setScope"
+        m.search.scope = action.value
+        beginSearch()
+    else if action.kind = "searchFacet"
+        showFacet(action.field)
+    else if action.kind = "setFacet"
+        m.search[action.field] = action.value
+        if action.field = "studioId" then m.search.studioName = action.name
+        if action.field = "collectionId" then m.search.collectionName = action.name
+        beginSearch()
+    else if action.kind = "clearFacets"
+        m.search.studioId = ""
+        m.search.studioName = "All studios"
+        m.search.tag = ""
+        m.search.collectionId = ""
+        m.search.collectionName = "All collections"
+        beginSearch()
+    else if action.kind = "searchMore"
+        requestSearchPage(action.lane)
     else if action.kind = "movies"
         rememberScreen()
         m.libraryTitle = "Movies"
@@ -175,9 +293,11 @@ sub selected()
     else if action.kind = "music"
         rememberScreen()
         m.libraryTitle = "Music"
-        loadLibrary("/Items?Recursive=true&IncludeItemTypes=Audio,MusicAlbum&Limit=100&Fields=Overview,MediaStreams",0)
+        loadLibrary("/Items?Recursive=true&IncludeItemTypes=Audio,MusicAlbum,MusicArtist,Playlist&Limit=100&Fields=Overview,MediaStreams",0)
     else if action.kind = "search"
-        keyboard("Search your library", "search", false)
+        rememberScreen()
+        m.search = {term:"", scope:"all", studioId:"", studioName:"All studios", tag:"", collectionId:"", collectionName:"All collections", pages:[], after:""}
+        searchMenu()
     else if action.kind = "guide"
         rememberScreen()
         m.guidePending = true
@@ -199,13 +319,25 @@ sub selected()
     else if action.kind = "page"
         loadLibrary(m.libraryBase,action.offset)
     else if action.kind = "detail"
+        invalidateCatalog()
+        if action.item.Type = "Program" or action.item.Type = "LiveTvProgram"
+            if action.item.ChannelId = invalid
+                m.status.text = "This programme has no available channel."
+                return
+            end if
+            action.item = {Id:action.item.ChannelId, Type:"TvChannel"}
+        end if
         rememberScreen()
         m.detail = action.item
         api("details", "/Items/" + action.item.Id + "?Fields=Overview,MediaStreams,ExternalUrls,RunTimeTicks", "GET", invalid)
     else if action.kind = "browse"
         rememberScreen()
         m.libraryTitle = action.item.Name
-        loadLibrary("/Items?Limit=100&ParentId=" + action.item.Id + "&Fields=Overview,MediaStreams",0)
+        if action.item.Type = "MusicArtist"
+            loadLibrary("/Items?Limit=100&Recursive=true&ArtistIds=" + action.item.Id + "&IncludeItemTypes=MusicAlbum,Audio,MusicVideo&Fields=Overview,MediaStreams",0)
+        else
+            loadLibrary("/Items?Limit=100&ParentId=" + action.item.Id + "&Fields=Overview,MediaStreams",0)
+        end if
     else if action.kind = "play"
         m.playbackScreen = screen()
         beginPlay(action.item, invalid)
@@ -215,6 +347,11 @@ sub selected()
             m.status.text = "Added to this TV queue."
         end if
     else if action.kind = "signout"
+        invalidateCatalog()
+        m.accountGeneration = m.accountGeneration + 1
+        m.search = invalid
+        m.home = invalid
+        m.facetCache = {}
         stopPlayer()
         api("logout", "/Sessions/Logout", "POST", {})
         m.token = ""
@@ -306,9 +443,9 @@ sub keyboardDone()
             api("login", "/Users/AuthenticateByName", "POST", {Username:m.username, Pw:password})
         end if
     else if m.inputKind = "search"
-        transfer = CreateObject("roUrlTransfer")
-        query = transfer.Escape(text)
-        loadLibrary("/Items?Recursive=true&Limit=100&SearchTerm=" + query + "&IncludeItemTypes=Movie,Series,Episode,Audio,MusicAlbum&Fields=Overview,MediaStreams",0)
+        if m.search = invalid then return
+        m.search.term = Left(text,128)
+        beginSearch()
     end if
 end sub
 function authorization() as String
@@ -319,7 +456,7 @@ end function
 sub api(kind as String, path as String, method as String, body as Dynamic)
     text = ""
     if body <> invalid then text = FormatJson(body)
-    request = {kind:kind, server:m.server, path:path, method:method, body:text, authorization:authorization()}
+    request = {kind:kind, server:m.server, path:path, method:method, body:text, authorization:authorization(), accountGeneration:m.accountGeneration, viewGeneration:m.viewGeneration}
     if m.task <> invalid
         if kind <> "report" and m.requests.Count() < 16 then m.requests.Push(request)
         return
@@ -328,22 +465,59 @@ sub api(kind as String, path as String, method as String, body as Dynamic)
 end sub
 sub startRequest(request as Object)
     m.requestKind = request.kind
+    m.requestContext = request
     m.task = CreateObject("roSGNode", "ApiTask")
     m.task.request = request
     m.task.ObserveField("result", "response")
     m.task.control = "RUN"
 end sub
 sub drainRequests()
-    if m.task = invalid and m.requests.Count() > 0
+    while m.task = invalid and m.requests.Count() > 0
         request = m.requests.Shift()
-        startRequest(request)
-    end if
+        if not catalogRequest(request.kind) or (request.accountGeneration = m.accountGeneration and request.viewGeneration = m.viewGeneration)
+            startRequest(request)
+        end if
+    end while
 end sub
 sub response()
     result = m.task.result
     m.task.UnobserveField("result")
     m.task = invalid
+    if catalogRequest(m.requestKind)
+        if m.requestContext.accountGeneration <> m.accountGeneration or m.requestContext.viewGeneration <> m.viewGeneration
+            drainRequests()
+            return
+        end if
+    end if
     if not result.ok
+        if result.status = 401 and m.requestContext.accountGeneration = m.accountGeneration
+            m.accountGeneration = m.accountGeneration + 1
+            m.token = ""
+            m.userId = ""
+            invalidateCatalog()
+            stopPlayer()
+            menu()
+            drainRequests()
+            return
+        end if
+        if Left(m.requestKind,4) = "home"
+            if m.requestKind = "homeRecommendations" and result.status = 404
+                api("homeLegacy", "/Movies/Recommendations?UserId=" + m.userId + "&CategoryLimit=4&ItemLimit=12&Fields=Overview", "GET", invalid)
+            else
+                m.home.problem = true
+                finishHomePart()
+            end if
+            drainRequests()
+            return
+        else if Left(m.requestKind,6) = "search"
+            searchFailed(m.requestKind)
+            drainRequests()
+            return
+        else if m.requestKind = "sports" and result.status = 404
+            api("sportsGuide", "/LiveTv/Programs?IsSports=true&Limit=100&UserId=" + m.userId, "GET", invalid)
+            drainRequests()
+            return
+        end if
         if m.requestKind = "accountOptions"
             api("legacyOptions", "/QuickConnect/Enabled", "GET", invalid)
             return
@@ -369,11 +543,6 @@ sub response()
             drainRequests()
             return
         end if
-        if result.status = 401
-            m.token = ""
-            stopPlayer()
-            menu()
-        end if
         if result.status = 404
             m.status.text = "This server does not support the requested Bluefin feature."
         else
@@ -383,6 +552,23 @@ sub response()
         return
     end if
     data = result.data
+    if Left(m.requestKind,4) = "home"
+        acceptHomePart(m.requestKind, data)
+        drainRequests()
+        return
+    else if Left(m.requestKind,6) = "search"
+        acceptSearchPage(m.requestKind, data)
+        drainRequests()
+        return
+    else if Left(m.requestKind,5) = "facet"
+        acceptFacet(m.requestKind, data)
+        drainRequests()
+        return
+    else if m.requestKind = "sports" or m.requestKind = "sportsGuide"
+        acceptSports(data)
+        drainRequests()
+        return
+    end if
     if m.requestKind = "publicInfo"
         if data = invalid or data.ServerName = invalid
             m.status.text = "The address did not return media server information."
@@ -434,7 +620,13 @@ sub response()
         m.pendingSignIn = invalid
         tokenPattern = CreateObject("roRegex", "^[a-zA-Z0-9_-]{1,512}$", "")
         if not tokenPattern.IsMatch(data.AccessToken) then return
+        if data.User = invalid or data.User.Id = invalid then return
+        validUser = CreateObject("roRegex", "^[a-fA-F0-9-]{32,36}$", "")
+        if not validUser.IsMatch(data.User.Id) then return
+        m.accountGeneration = m.accountGeneration + 1
+        m.userId = data.User.Id
         m.token = data.AccessToken
+        m.artScope = CreateObject("roDeviceInfo").GetRandomUUID()
         api("capabilities", "/Bluefin/TV/v1", "GET", invalid)
     else if m.requestKind = "capabilities"
         m.canLease = data.version = 1 and data.mediaLease = true
@@ -466,7 +658,7 @@ sub response()
         m.detail = data
         labels = []
         actions = []
-        if data.IsFolder = true or data.Type = "Series" or data.Type = "MusicAlbum"
+        if data.IsFolder = true or data.Type = "Series" or data.Type = "Season" or data.Type = "MusicAlbum" or data.Type = "MusicArtist" or data.Type = "Playlist" or data.Type = "BoxSet" or data.Type = "CollectionFolder"
             labels.Push("Browse")
             actions.Push({kind:"browse", item:data})
         else
@@ -562,6 +754,7 @@ sub requestGuide(data as Dynamic)
 end sub
 
 sub showGuide(data as Dynamic)
+    clearArtwork()
     m.guidePending = false
     root = CreateObject("roSGNode", "ContentNode")
     schedules = {}
@@ -677,6 +870,7 @@ sub beginPlay(item as Object, selection as Dynamic)
     api("lease", "/Bluefin/TV/v1/leases", "POST", {version:1, itemId:item.Id.Replace("-", "").LCase(), playback:options})
 end sub
 sub showNativeVideo()
+    clearArtwork()
     m.list.visible = false
     m.title.visible = false
     m.status.visible = false
@@ -735,6 +929,22 @@ sub playerState()
 end sub
 function onKeyEvent(key as String, press as Boolean) as Boolean
     if not press then return false
+    if m.token <> "" and m.lease = invalid
+        if key = "left" and m.list.HasFocus()
+            m.categories.SetFocus(true)
+            return true
+        else if key = "right" and (m.categories.HasFocus() or m.utilities.HasFocus())
+            m.list.SetFocus(true)
+            return true
+        else if key = "down" and m.categories.HasFocus() and m.categories.itemFocused = 5
+            m.utilities.SetFocus(true)
+            return true
+        else if key = "up" and m.utilities.HasFocus() and m.utilities.itemFocused = 0
+            m.categories.SetFocus(true)
+            m.categories.jumpToItem = 5
+            return true
+        end if
+    end if
     if key = "back"
         if m.pendingSignIn <> invalid
             cancelAccount()
@@ -782,4 +992,408 @@ sub loadLibrary(base as String, offset as Integer)
     m.libraryBase = base
     m.libraryOffset = offset
     api("library",base+"&StartIndex="+offset.ToStr(),"GET",invalid)
+end sub
+
+function catalogRequest(kind as String) as Boolean
+    return kind = "library" or kind = "details" or kind = "sports" or kind = "sportsGuide" or Left(kind,4) = "home" or Left(kind,5) = "facet" or Left(kind,6) = "search" or Left(kind,5) = "guide"
+end function
+sub invalidateCatalog()
+    m.viewGeneration = m.viewGeneration + 1
+    retained = []
+    for each request in m.requests
+        if not catalogRequest(request.kind) then retained.Push(request)
+    end for
+    m.requests = retained
+    if m.task <> invalid and catalogRequest(m.requestKind)
+        m.task.UnobserveField("result")
+        m.task.control = "STOP"
+        m.task = invalid
+    end if
+    drainRequests()
+end sub
+function catalogItems(data as Dynamic) as Object
+    if data = invalid then return []
+    if Type(data) = "roArray" then return data
+    if Type(data) <> "roAssociativeArray" then return []
+    if data.Items = invalid then return []
+    if Type(data.Items) <> "roArray" then return []
+    return data.Items
+end function
+sub loadHome()
+    m.home = {resume:[], next:[], latest:[], recommendations:[], remaining:4, problem:false}
+    rows("Home", ["Loading your account"], [{kind:"waitAccount"}])
+    api("homeResume", "/Users/" + m.userId + "/Items/Resume?Limit=12&Fields=Overview,RunTimeTicks", "GET", invalid)
+    api("homeNext", "/Shows/NextUp?UserId=" + m.userId + "&Limit=12&Fields=Overview,RunTimeTicks", "GET", invalid)
+    api("homeLatest", "/Users/" + m.userId + "/Items/Latest?Limit=18&Fields=Overview,RunTimeTicks", "GET", invalid)
+    api("homeRecommendations", "/Bluefin/Home/Recommendations", "GET", invalid)
+end sub
+sub acceptHomePart(kind as String, data as Dynamic)
+    if m.home = invalid then return
+    if kind = "homeResume"
+        m.home.resume = catalogItems(data)
+    else if kind = "homeNext"
+        m.home.next = catalogItems(data)
+    else if kind = "homeLatest"
+        m.home.latest = catalogItems(data)
+    else if kind = "homeRecommendations"
+        if data <> invalid and data.recommendations <> invalid
+            for each shelf in data.recommendations
+                if shelf.items <> invalid and shelf.title <> invalid and m.home.recommendations.Count() < 4
+                    m.home.recommendations.Push({title:Left(shelf.title,180), items:catalogItems(shelf.items)})
+                end if
+            end for
+        end if
+    else if kind = "homeLegacy"
+        labels = {SimilarToRecentlyPlayed:"Because you watched", SimilarToLikedItem:"Because you like", HasDirectorFromRecentlyPlayed:"More from", HasActorFromRecentlyPlayed:"More with", HasLikedDirector:"From a director you like:", HasLikedActor:"With an actor you like:"}
+        for each shelf in catalogItems(data)
+            prefix = labels[shelf.RecommendationType]
+            if prefix <> invalid and shelf.BaselineItemName <> invalid
+                m.home.recommendations.Push({title:prefix + " " + Left(shelf.BaselineItemName,128), items:catalogItems(shelf.Items)})
+            end if
+        end for
+    end if
+    finishHomePart()
+end sub
+sub finishHomePart()
+    if m.home = invalid then return
+    m.home.remaining = m.home.remaining - 1
+    if m.home.remaining > 0 then return
+    shelves = [{title:"Continue watching",items:m.home.resume},{title:"Up next",items:m.home.next}]
+    for each shelf in m.home.recommendations
+        shelves.Push(shelf)
+    end for
+    shelves.Push({title:"Recently added",items:m.home.latest})
+    labels = []
+    actions = []
+    for each shelf in shelves
+        if shelf.items.Count() > 0
+            labels.Push(shelf.title)
+            actions.Push({kind:"waitAccount"})
+            count = 0
+            for each item in shelf.items
+                if item.Id <> invalid and item.Name <> invalid and count < 18
+                    labels.Push(item.Name)
+                    actions.Push({kind:"detail",item:item})
+                    count = count + 1
+                end if
+            end for
+        end if
+    end for
+    if labels.Count() = 0
+        labels.Push("Open Collections to browse your account")
+        actions.Push({kind:"collections"})
+    end if
+    rows("Home", labels, actions)
+    if m.home.problem then m.status.text = "Some Home sections could not refresh."
+end sub
+sub searchMenu()
+    if m.search = invalid then return
+    scopeNames = {all:"All Media",tvShows:"TV Shows",movies:"Movies",music:"Music",liveTv:"Live TV"}
+    term = "Enter search"
+    if m.search.term <> "" then term = "Search: " + m.search.term
+    tag = "All tags"
+    if m.search.tag <> "" then tag = m.search.tag
+    labels = [term, "Media type: " + scopeNames[m.search.scope], "Studio: " + m.search.studioName, "Tag: " + tag, "Collection: " + m.search.collectionName, "Clear refinements"]
+    actions = [{kind:"searchTerm"},{kind:"searchScope"},{kind:"searchFacet",field:"studioId"},{kind:"searchFacet",field:"tag"},{kind:"searchFacet",field:"collectionId"},{kind:"clearFacets"}]
+    for each page in m.search.pages
+        if page.items.Count() > 0
+            labels.Push(page.title)
+            actions.Push({kind:"waitAccount"})
+            for each item in page.items
+                if item.Name <> invalid and item.Id <> invalid
+                    labels.Push(item.Name)
+                    actions.Push({kind:"detail",item:item})
+                end if
+            end for
+        end if
+        if page.next < page.total and not page.busy
+            labels.Push("More " + page.title.LCase())
+            actions.Push({kind:"searchMore",lane:page.lane})
+        end if
+    end for
+    rows("Search",labels,actions)
+end sub
+function scopeTypes(scope as String) as String
+    if scope = "tvShows" then return "Series,Season,Episode"
+    if scope = "movies" then return "Movie"
+    if scope = "music" then return "Audio,MusicAlbum,MusicArtist,MusicVideo,Playlist"
+    if scope = "liveTv" then return "TvChannel,LiveTvProgram"
+    return ""
+end function
+sub beginSearch()
+    invalidateCatalog()
+    if m.search = invalid then return
+    now = CreateObject("roDateTime")
+    m.search.after = Left(now.ToISOString(),19) + "Z"
+    facets = m.search.studioId <> "" or m.search.tag <> "" or m.search.collectionId <> ""
+    lanes = ["library"]
+    if not facets
+        if m.search.scope = "liveTv"
+            lanes = ["programmes","channels"]
+        else
+            if m.search.scope = "all" or m.search.scope = "music" then lanes.Push("artists")
+            if m.search.scope = "all"
+                lanes.Push("programmes")
+                lanes.Push("channels")
+            end if
+        end if
+    end if
+    m.search.pages = []
+    titles = {library:"Your library",artists:"Artists",programmes:"On now and upcoming",channels:"Channels"}
+    for each lane in lanes
+        m.search.pages.Push({lane:lane,title:titles[lane],items:[],next:0,total:0,busy:false})
+    end for
+    searchMenu()
+    if m.search.term = "" and m.search.scope = "all" and not facets then return
+    m.status.text = "Searching your account..."
+    for each lane in lanes
+        requestSearchPage(lane)
+    end for
+end sub
+function searchPage(lane as String) as Dynamic
+    if m.search = invalid then return invalid
+    for each page in m.search.pages
+        if page.lane = lane then return page
+    end for
+    return invalid
+end function
+function searchPath(lane as String, start as Integer) as String
+    transfer = CreateObject("roUrlTransfer")
+    query = "?UserId=" + transfer.Escape(m.userId) + "&Limit=60&StartIndex=" + start.ToStr()
+    if m.search.term <> "" then query = query + "&SearchTerm=" + transfer.Escape(m.search.term)
+    if lane = "library"
+        query = query + "&Recursive=true&Fields=Overview,RunTimeTicks"
+        types = scopeTypes(m.search.scope)
+        if types <> "" then query = query + "&IncludeItemTypes=" + transfer.Escape(types)
+        if m.search.studioId <> "" then query = query + "&StudioIds=" + transfer.Escape(m.search.studioId)
+        if m.search.tag <> "" then query = query + "&Tags=" + transfer.Escape(m.search.tag)
+        if m.search.collectionId <> "" then query = query + "&ParentId=" + transfer.Escape(m.search.collectionId)
+        return "/Items" + query
+    else if lane = "artists"
+        return "/Artists" + query + "&Recursive=true"
+    else if lane = "programmes"
+        return "/LiveTv/Programs" + query + "&MinEndDate=" + transfer.Escape(m.search.after)
+    end if
+    return "/LiveTv/Channels" + query
+end function
+sub requestSearchPage(lane as String)
+    page = searchPage(lane)
+    if page = invalid or page.busy then return
+    page.busy = true
+    api("search" + lane, searchPath(lane,page.next), "GET", invalid)
+end sub
+sub acceptSearchPage(kind as String, data as Dynamic)
+    lane = Mid(kind,7)
+    page = searchPage(lane)
+    if page = invalid then return
+    values = catalogItems(data)
+    seen = {}
+    for each item in page.items
+        seen[item.Id.Replace("-","").LCase()] = true
+    end for
+    for each item in values
+        if item.Id <> invalid and item.Name <> invalid
+            key = item.Id.Replace("-","").LCase()
+            if not seen.DoesExist(key)
+                seen[key] = true
+                page.items.Push(item)
+            end if
+        end if
+    end for
+    page.next = page.next + values.Count()
+    page.total = page.next
+    if Type(data) = "roAssociativeArray"
+        if values.Count() > 0 and data.TotalRecordCount <> invalid then page.total = data.TotalRecordCount
+    end if
+    page.busy = false
+    searchMenu()
+    m.status.text = "Refinements search your account's server metadata."
+end sub
+sub searchFailed(kind as String)
+    page = searchPage(Mid(kind,7))
+    if page <> invalid then page.busy = false
+    searchMenu()
+    m.status.text = "Some search sources could not refresh."
+end sub
+sub showFacet(field as String)
+    if m.facetCache.DoesExist(field)
+        renderFacet(field,m.facetCache[field])
+        return
+    end if
+    rows("Refine search",["Loading server metadata"],[{kind:"waitAccount"}])
+    if field = "studioId"
+        api("facetStudio", "/Studios?UserId=" + m.userId + "&Limit=200", "GET", invalid)
+    else if field = "tag"
+        api("facetTag", "/Items/Filters2?UserId=" + m.userId, "GET", invalid)
+    else
+        api("facetCollection", "/Items?UserId=" + m.userId + "&Recursive=true&IncludeItemTypes=BoxSet&Limit=200", "GET", invalid)
+    end if
+end sub
+sub acceptFacet(kind as String, data as Dynamic)
+    options = []
+    if kind = "facetTag"
+        field = "tag"
+        if data <> invalid and data.Tags <> invalid
+            for each tag in data.Tags
+                if options.Count() < 512 then options.Push({id:tag,name:tag})
+            end for
+        end if
+    else
+        field = "collectionId"
+        if kind = "facetStudio" then field = "studioId"
+        for each item in catalogItems(data)
+            if item.Id <> invalid and item.Name <> invalid and options.Count() < 200 then options.Push({id:item.Id,name:item.Name})
+        end for
+    end if
+    m.facetCache[field] = options
+    renderFacet(field,options)
+end sub
+sub renderFacet(field as String, options as Object)
+    labels = ["All"]
+    actions = [{kind:"setFacet",field:field,value:"",name:"All"}]
+    for each option in options
+        labels.Push(option.name)
+        actions.Push({kind:"setFacet",field:field,value:option.id,name:option.name})
+    end for
+    title = "Collection"
+    if field = "studioId" then title = "Studio"
+    if field = "tag" then title = "Tag"
+    rows(title,labels,actions)
+    m.status.text = "Groups and service tags come from your server. Open Collections for additional groups."
+end sub
+sub acceptSports(data as Dynamic)
+    labels = []
+    actions = []
+    if m.requestKind = "sportsGuide"
+        for each item in catalogItems(data)
+            if item.Name <> invalid
+                labels.Push(item.Name)
+                actions.Push({kind:"detail",item:item})
+            end if
+        end for
+    else if data <> invalid and data.games <> invalid and data.local_broadcasts <> invalid
+        games = []
+        for each game in data.games
+            games.Push(game)
+        end for
+        for each game in data.local_broadcasts
+            games.Push(game)
+        end for
+        for each game in games
+            title = "Sports broadcast"
+            if game.title <> invalid then title = game.title
+            if game.event <> invalid and game.event.name <> invalid then title = game.event.name
+            labels.Push(title)
+            if game.channel_id <> invalid
+                actions.Push({kind:"detail",item:{Id:game.channel_id,Type:"TvChannel"}})
+            else
+                actions.Push({kind:"waitAccount"})
+            end if
+        end for
+    end if
+    if labels.Count() = 0
+        labels.Push("Your server has no selected sports events right now")
+        actions.Push({kind:"waitAccount"})
+    end if
+    rows("Sports",labels,actions)
+end sub
+
+' A single native Poster bounds texture memory and retires its authenticated
+' HTTP agent whenever the account/view stops showing media. Never use token URLs.
+sub clearArtwork()
+    m.artDebounce.control = "stop"
+    m.pendingArtwork = invalid
+    m.artItemId = ""
+    m.artPoster.uri = ""
+    m.artPoster.SetHttpAgent(CreateObject("roHttpAgent"))
+    m.artPreview.visible = false
+end sub
+sub prepareArtwork()
+    clearArtwork()
+    if m.token = "" then return
+    for each action in m.actions
+        if action.item <> invalid and (action.kind = "detail" or action.kind = "play")
+            m.list.itemSize = [550,64]
+            m.artPreview.visible = true
+            focusArtwork()
+            return
+        end if
+    end for
+    m.list.itemSize = [880,64]
+end sub
+sub focusArtwork()
+    if not m.artPreview.visible or m.token = "" then return
+    index = m.list.itemFocused
+    candidate = invalid
+    if index >= 0 and index < m.actions.Count()
+        action = m.actions[index]
+        if action.item <> invalid then candidate = action.item
+    end if
+    if candidate = invalid
+        for each action in m.actions
+            if action.item <> invalid and (action.kind = "detail" or action.kind = "play")
+                candidate = action.item
+                exit for
+            end if
+        end for
+    end if
+    if candidate = invalid or candidate.Id = invalid then return
+    m.pendingArtwork = candidate
+    m.artDebounce.control = "stop"
+    m.artDebounce.control = "start"
+end sub
+sub loadFocusedArtwork()
+    item = m.pendingArtwork
+    m.pendingArtwork = invalid
+    if item = invalid or m.token = "" or not m.artPreview.visible then return
+    itemId = item.Id.Replace("-", "").LCase()
+    valid = CreateObject("roRegex", "^[a-f0-9]{32}$", "")
+    if not valid.IsMatch(itemId) or itemId = m.artItemId then return
+    m.artItemId = itemId
+    m.artPoster.uri = ""
+    m.artTitle.text = ""
+    if item.Name <> invalid then m.artTitle.text = Left(item.Name,256)
+    progress = 0.0
+    if item.UserData <> invalid
+        if item.UserData.PlayedPercentage <> invalid
+            progress = item.UserData.PlayedPercentage / 100.0
+        else if item.UserData.PlaybackPositionTicks <> invalid and item.RunTimeTicks <> invalid and item.RunTimeTicks > 0
+            progress = item.UserData.PlaybackPositionTicks / item.RunTimeTicks
+        end if
+    end if
+    if progress < 0 then progress = 0
+    if progress > 1 then progress = 1
+    m.artProgress.width = 280 * progress
+    agent = CreateObject("roHttpAgent")
+    agent.SetCertificatesFile("common:/certs/ca-bundle.crt")
+    agent.AddHeader("Authorization", authorization())
+    m.artPoster.SetHttpAgent(agent)
+    ' A random view nonce isolates native image caching across account changes.
+    transfer = CreateObject("roUrlTransfer")
+    m.artPoster.uri = m.server + "/Items/" + itemId + "/Images/Primary?maxWidth=280&maxHeight=420&quality=85&format=jpg&bluefinView=" + transfer.Escape(m.artScope)
+end sub
+
+sub applyAppearance()
+    textColor = "0xCCD0D3FF"
+    secondaryColor = "0xA3ACB1FF"
+    focusColor = "0xADB5D1FF"
+    focusedText = "0x061727FF"
+    background = "0x061727FF"
+    if m.appearance = "light"
+        textColor = "0x061727FF"
+        secondaryColor = "0x2B4050FF"
+        focusColor = "0x061727FF"
+        focusedText = "0xCCD0D3FF"
+        background = "0xA3ACB1FF"
+    end if
+    m.top.backgroundColor = background
+    m.title.color = textColor
+    m.status.color = secondaryColor
+    m.top.findNode("brand").color = textColor
+    for each list in [m.list, m.categories, m.utilities]
+        list.color = textColor
+        list.focusedColor = focusedText
+        list.focusBitmapBlendColor = focusColor
+        list.focusFootprintBlendColor = focusColor
+    end for
 end sub

@@ -1,8 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <component name="BluefinScene" extends="Scene"><script type="text/brightscript" uri="BluefinScene.brs"/><children>
-<Label id="brand" text="BLUEFIN TV" translation="[70,40]" width="1100" height="55" color="0x65D5DFFF"><Font role="font" size="32"/></Label>
-<Label id="title" text="Bluefin" translation="[70,115]" width="1130" height="80"><Font role="font" size="38"/></Label>
-<LabelList id="list" translation="[70,215]" itemSize="[1120,64]" numRows="6"/><Label id="status" text="" translation="[70,650]" width="1130" height="55" wrap="true"/>
+<Poster id="brandMark" translation="[45,42]" width="44" height="44" loadWidth="44" loadHeight="44" loadDisplayMode="limitSize" uri="pkg:/images/bluefin-mark.png"/><Label id="brand" text="Bluefin" translation="[105,40]" width="1100" height="55" color="0xADB5D1FF"><Font role="font" size="32"/></Label>
+<LabelList id="categories" translation="[45,130]" itemSize="[240,56]" numRows="6" visible="false"/>
+<LabelList id="utilities" translation="[45,500]" itemSize="[240,46]" numRows="3" visible="false"/>
+<Label id="title" text="Bluefin" color="0xCCD0D3FF" translation="[70,115]" width="1130" height="80"><Font role="font" size="38"/></Label>
+<LabelList id="list" translation="[70,215]" itemSize="[1120,64]" numRows="6"/><Label id="status" text="" color="0xA3ACB1FF" translation="[70,650]" width="1130" height="55" wrap="true"/>
+<Group id="artPreview" translation="[920,215]" visible="false">
+<Rectangle width="280" height="420" color="0x102536FF"/>
+<Poster id="artPoster" width="280" height="420" loadWidth="280" loadHeight="420" loadDisplayMode="limitSize" loadSync="false"/>
+<Rectangle translation="[0,310]" width="280" height="110" color="0x061727F2"/>
+<Label id="artTitle" translation="[14,322]" width="252" height="82" color="0xE8EDEDFF" wrap="true" maxLines="3"><Font role="font" size="22"/></Label>
+<Rectangle id="artProgress" translation="[0,416]" width="0" height="4" color="0xA9A2C9FF"/>
+</Group><Timer id="artDebounce" duration="0.12" repeat="false"/>
 <Poster id="accountQr" translation="[860,240]" width="280" height="280" visible="false"/><Timer id="accountPoll" duration="3" repeat="true"/>
 <TimeGrid id="guide" translation="[70,210]" itemSize="[1120,63]" numRows="6" duration="7200" channelInfoWidth="220" fillProgramGaps="true" visible="false"/>
 <Video id="video" width="1280" height="720" visible="false"/><Audio id="audio"/><Timer id="progress" duration="10" repeat="true"/>
