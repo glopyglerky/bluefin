@@ -2,14 +2,16 @@
 //! database and is ignored unless the build owner admits its sealed snapshot.
 //! The fixture stays outside this repository and outside release artifacts.
 
+use std::borrow::Cow;
 use std::io::Read as _;
 use std::path::Path;
 
 use ferrofin_db::Database;
+use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[derive(PartialEq, Eq, sqlx::FromRow)]
 struct LedgerRow {
@@ -53,6 +55,63 @@ async fn integrity(pool: &SqlitePool) {
 
 fn identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+#[tokio::test]
+async fn version_55_ledger_receives_missing_mesh_migrations() {
+    let temporary = checked(tempfile::tempdir(), "create synthetic gap fixture");
+    let copy = temporary.path().join("upgrade.sqlite");
+    let before = checked(
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&copy)
+                    .create_if_missing(true)
+                    .foreign_keys(false),
+            )
+            .await,
+        "open synthetic gap fixture",
+    );
+    let installed_profile = Migrator {
+        migrations: Cow::Owned(
+            MIGRATOR
+                .iter()
+                .filter(|migration| {
+                    migration.version <= 55 && !(52..=54).contains(&migration.version)
+                })
+                .cloned()
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    };
+    checked(installed_profile.run(&before).await, "apply installed schema");
+    let original_ledger = ledger(&before).await;
+    assert_eq!(original_ledger.len(), 52);
+    assert_eq!(original_ledger.last().map(|row| row.version), Some(55));
+    before.close().await;
+
+    let url = format!("sqlite://{}", copy.display());
+    let db = checked(
+        Database::connect_sized(&url, Some(1)).await,
+        "apply missing migrations to the existing version-55 schema",
+    );
+    checked(db.run_migrations().await, "repeat gap upgrade");
+    let upgraded_ledger = ledger(db.pool()).await;
+    assert_eq!(upgraded_ledger.len(), MIGRATOR.iter().count());
+    assert!(
+        original_ledger
+            .iter()
+            .all(|row| upgraded_ledger.contains(row)),
+        "an existing migration receipt changed"
+    );
+    for (row, migration) in upgraded_ledger.iter().zip(MIGRATOR.iter()) {
+        assert!(row.success && row.version == migration.version);
+        assert_eq!(row.checksum.as_slice(), migration.checksum.as_ref());
+    }
+    integrity(db.pool()).await;
+    db.close().await;
+    checked(temporary.close(), "remove synthetic gap fixture");
 }
 
 #[tokio::test]
