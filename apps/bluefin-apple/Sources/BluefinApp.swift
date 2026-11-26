@@ -699,6 +699,7 @@ struct SettingsView: View {
                 #endif
                 if store.sports.available { NavigationLink(destination: SportsSettingsView(sports: store.sports)) { Label("Sports preferences", systemImage: "sportscourt") } }
                 NavigationLink(destination: HomeAssistantView()) { Label("Home Assistant", systemImage: "house") }
+                if !store.preview { NavigationLink(destination: MusicAssistantView()) { Label("Music Assistant", systemImage: "music.note.list") } }
             }
             Section("Bluefin") {
                 NavigationLink(destination: AuthorizedUseView()) { Label("Libraries and rights", systemImage: "checkmark.shield") }
