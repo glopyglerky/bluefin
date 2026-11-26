@@ -129,7 +129,11 @@ async fn copied_version_51_database_upgrades_without_changing_existing_content()
     );
     checked(db.run_migrations().await, "repeat migration after connection");
     let upgraded_ledger = ledger(db.pool()).await;
-    assert!(upgraded_ledger.len() == 54, "unexpected upgraded schema head");
+    assert_eq!(
+        upgraded_ledger.len(),
+        MIGRATOR.iter().count(),
+        "upgraded ledger must cover every compiled migration"
+    );
     assert!(
         upgraded_ledger[..51] == original_ledger,
         "an existing migration receipt changed"
