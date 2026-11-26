@@ -126,7 +126,11 @@ pub fn decode_qr_image(input:&[u8])->Result<ConnectInvite>{
     let mut found:Option<ConnectInvite>=None;
     for grid in grids{
         let Ok((_,text))=grid.decode() else{continue};
-        let Ok(invite)=ConnectInvite::parse(&text) else{continue};
+        let invite = match ConnectInvite::parse(&text) {
+            Ok(invite) => invite,
+            Err(error) if looks_like_invitation(&text) => return Err(error),
+            Err(_) => continue,
+        };
         if let Some(old)=&found {
             if old!=&invite{return Err(Error::AmbiguousImage);}
         }else{found=Some(invite);}
@@ -135,4 +139,10 @@ pub fn decode_qr_image(input:&[u8])->Result<ConnectInvite>{
 }
 pub fn decode_qr_image_at(input:&[u8],now_unix_ms:u64)->Result<ConnectInvite>{
     let invite=decode_qr_image(input)?;invite.validate_at(now_unix_ms)?;Ok(invite)
+}
+
+fn looks_like_invitation(text: &str) -> bool {
+    let text = text.trim_ascii().to_ascii_lowercase();
+    text.starts_with("mesh-connect://invite/") || text.starts_with("bluefin://connect/")
+        || (text.starts_with("mc") && text.as_bytes().get(2).is_some_and(u8::is_ascii_digit))
 }

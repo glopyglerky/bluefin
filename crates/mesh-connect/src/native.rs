@@ -17,6 +17,18 @@ const HANDSHAKE_TIMEOUT:Duration=Duration::from_secs(20);
 const FRAME_TIMEOUT:Duration=Duration::from_secs(30);
 type QuicIo=tokio::io::Join<iroh::endpoint::RecvStream,iroh::endpoint::SendStream>;
 
+fn quic_transport() -> iroh::endpoint::QuicTransportConfig {
+    iroh::endpoint::QuicTransportConfig::builder()
+        .max_concurrent_bidi_streams(1u32.into())
+        .max_concurrent_uni_streams(0u32.into())
+        .stream_receive_window((1024*1024u32).into())
+        .receive_window((1024*1024u32).into())
+        .send_window(2*1024*1024)
+        .datagram_receive_buffer_size(None)
+        .build()
+}
+
+
 /// Administrative/application relay policy, never constructed from an imported
 /// invitation. Empty by default: public discovery and default relays stay off.
 #[derive(Clone,Debug,Default)]
@@ -79,6 +91,7 @@ impl PqcEndpoint{
             .clear_address_lookup().clear_relay_transports()
             .relay_mode(relay_policy.mode()?)
             .portmapper_config(iroh::endpoint::PortmapperConfig::Disabled)
+            .transport_config(quic_transport())
             .bind().await.map_err(|_|Error::Network)?;
         Ok(Self{endpoint,identity:identity.clone(),relay_policy,service:None,server_config:None})
     }
@@ -93,6 +106,7 @@ impl PqcEndpoint{
             .bind_addr(bind).map_err(|_|Error::InvalidFields)?
             .relay_mode(relay_policy.mode()?)
             .portmapper_config(iroh::endpoint::PortmapperConfig::Disabled)
+            .transport_config(quic_transport())
             .alpns(vec![service.as_bytes().to_vec()])
             .bind().await.map_err(|_|Error::Network)?;
         // Relay-backed invitations must not publish an unreachable home relay.
@@ -153,33 +167,53 @@ impl PqcEndpoint{
         };
         tokio::time::timeout(HANDSHAKE_TIMEOUT,future).await.map_err(|_|Error::Timeout)?
     }
-    pub async fn accept(&self)->Result<PqcConnection>{
-        let config=self.server_config.clone().ok_or(Error::ServiceMismatch)?;
-        let service=self.service.as_ref().ok_or(Error::ServiceMismatch)?;
-        // Waiting for a new connection is intentionally cancelable, with no
-        // idle timeout. Each accepted handshake has its own deadline.
-        let incoming=self.endpoint.accept().await.ok_or(Error::Closed)?;
-        let future=async{
-            let outer=incoming.await.map_err(|_|Error::Network)?;
-            if outer.alpn()!=service.as_bytes(){return Err(Error::ServiceMismatch);}
-            let (send,recv)=outer.accept_bi().await.map_err(|_|Error::Network)?;
-            let stream=TlsAcceptor::from(config).accept(tokio::io::join(recv,send)).await.map_err(|_|Error::Authentication)?;
-            tls::check_negotiated(stream.get_ref().1,service)?;
-            let binding=stream.get_ref().1.export_keying_material([0u8;32],tls::EXPORTER_LABEL,Some(service.as_bytes()))
-                .map_err(|_|Error::Authentication)?;
-            let certificates=stream.get_ref().1.peer_certificates().ok_or(Error::Authentication)?;
-            if certificates.len()!=1{return Err(Error::Authentication);}
-            let public_key=tls::certificate_key(&certificates[0]).map_err(|_|Error::Authentication)?;
-            let certificate_sha256=Sha256::digest(certificates[0].as_ref()).into();
-            let peer_device=Some(AuthenticatedDevice{public_key,certificate_sha256,connection_binding:binding});
-            Ok(PqcConnection{stream:TlsStream::Server(stream),outer,_endpoint:self.endpoint.clone(),
-                binding,peer_device,failed:false})
-        };
-        tokio::time::timeout(HANDSHAKE_TIMEOUT,future).await.map_err(|_|Error::Timeout)?
+    /// Returns before doing either handshake. The listener reserves a bounded
+    /// slot before calling authenticate; a slow peer cannot block new accepts.
+    pub async fn incoming(&self) -> Result<PendingConnection> {
+        let config = self.server_config.clone().ok_or(Error::ServiceMismatch)?;
+        let service = self.service.clone().ok_or(Error::ServiceMismatch)?;
+        let incoming = self.endpoint.accept().await.ok_or(Error::Closed)?;
+        Ok(PendingConnection { incoming, endpoint: self.endpoint.clone(), config, service })
+    }
+    pub async fn accept(&self) -> Result<PqcConnection> {
+        self.incoming().await?.authenticate().await
     }
     /// Closes active connections and unblocks accept. The listener owner joins
     /// its own spawned tasks and drops endpoint clones during shutdown.
     pub async fn close(&self){self.endpoint.close().await;}
+}
+
+/// An unverified incoming transport. It has no device identity and cannot
+/// carry application frames until authenticate completes the full PQ handshake.
+pub struct PendingConnection {
+    incoming: iroh::endpoint::Incoming,
+    endpoint: Endpoint,
+    config: Arc<rustls::ServerConfig>,
+    service: String,
+}
+impl PendingConnection {
+    pub fn refuse(self) { self.incoming.refuse(); }
+    pub async fn authenticate(self) -> Result<PqcConnection> {
+        let Self { incoming, endpoint, config, service } = self;
+        let future = async move {
+            let outer = incoming.await.map_err(|_| Error::Network)?;
+            if outer.alpn() != service.as_bytes() { return Err(Error::ServiceMismatch); }
+            let (send, recv) = outer.accept_bi().await.map_err(|_| Error::Network)?;
+            let stream = TlsAcceptor::from(config).accept(tokio::io::join(recv, send)).await
+                .map_err(|_| Error::Authentication)?;
+            tls::check_negotiated(stream.get_ref().1, &service)?;
+            let binding = stream.get_ref().1.export_keying_material([0u8;32], tls::EXPORTER_LABEL,
+                Some(service.as_bytes())).map_err(|_| Error::Authentication)?;
+            let certificates = stream.get_ref().1.peer_certificates().ok_or(Error::Authentication)?;
+            if certificates.len() != 1 { return Err(Error::Authentication); }
+            let public_key = tls::certificate_key(&certificates[0]).map_err(|_| Error::Authentication)?;
+            let certificate_sha256 = Sha256::digest(certificates[0].as_ref()).into();
+            let peer_device = Some(AuthenticatedDevice { public_key, certificate_sha256, connection_binding: binding });
+            Ok(PqcConnection { stream: TlsStream::Server(stream), outer, _endpoint: endpoint,
+                binding, peer_device, failed: false })
+        };
+        tokio::time::timeout(HANDSHAKE_TIMEOUT, future).await.map_err(|_| Error::Timeout)?
+    }
 }
 
 /// Framed application channel. Its fields and constructor are private so

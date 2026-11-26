@@ -57,3 +57,33 @@ async fn wrong_pin_wrong_service_and_unapproved_relay_never_release_application_
     assert!(client.connect_server(&address).await.is_err());
     client.close().await;server.close().await;
 }
+
+#[tokio::test]
+async fn stalled_peer_does_not_hold_the_incoming_accept_queue() {
+    use std::time::Duration;
+    let server = PqcEndpoint::server(&DeviceIdentity::from_seed([41;32]).unwrap(),
+        "127.0.0.1:0".parse().unwrap(), vec![], "bluefin/connect/1").await.unwrap();
+    let address = server.server_address().unwrap();
+    let raw = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .clear_address_lookup().clear_relay_transports().relay_mode(iroh::RelayMode::Disabled)
+        .portmapper_config(iroh::endpoint::PortmapperConfig::Disabled).bind().await.unwrap();
+    let mut target = iroh::EndpointAddr::new(iroh::EndpointId::from_bytes(&address.endpoint_id).unwrap());
+    for address in &address.direct_addresses { target = target.with_ip_addr(*address); }
+    let slow_endpoint = raw.clone();
+    let connecting = tokio::spawn(async move { slow_endpoint.connect(target, b"bluefin/connect/1").await });
+    let pending = tokio::time::timeout(Duration::from_secs(5), server.incoming()).await.unwrap().unwrap();
+    let stalled = tokio::spawn(pending.authenticate());
+    let outer = connecting.await.unwrap().unwrap();
+    // This peer completed outer QUIC but deliberately never starts inner TLS.
+    let client = PqcEndpoint::client(&DeviceIdentity::from_seed([42;32]).unwrap()).await.unwrap();
+    let healthy_endpoint = client.clone();
+    let healthy = tokio::spawn(async move { healthy_endpoint.connect_server(&address).await });
+    let second = tokio::time::timeout(Duration::from_secs(5), server.incoming()).await.unwrap().unwrap();
+    let mut authenticated = second.authenticate().await.unwrap();
+    let mut client_connection = healthy.await.unwrap().unwrap();
+    assert!(authenticated.peer_device().is_some());
+    outer.close(0u32.into(), b"test complete");
+    assert!(tokio::time::timeout(Duration::from_secs(5), stalled).await.unwrap().unwrap().is_err());
+    client_connection.close().await; authenticated.close().await;
+    raw.close().await; client.close().await; server.close().await;
+}

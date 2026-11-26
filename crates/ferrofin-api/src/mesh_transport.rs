@@ -77,15 +77,15 @@ pub async fn run(endpoint:PqcEndpoint,state:AppState,app:Router,mut stop:watch::
             biased;
             _=stop.changed()=>{break;}
             Some(_result)=jobs.join_next(),if !jobs.is_empty()=>{joined+=1;}
-            accepted=endpoint.accept()=>{
-                let Ok(connection)=accepted else {if *stop.borrow(){break;}continue;};
+            accepted=endpoint.incoming()=>{
+                let Ok(pending)=accepted else {if *stop.borrow(){break;}continue;};
                 let Ok(permit)=slots.clone().try_acquire_owned()else{
-                    let mut connection=connection;connection.close().await;continue;
+                    pending.refuse();continue;
                 };
                 let state=state.clone();let app=app.clone();
                 jobs.spawn(async move{
                     let _permit=permit;
-                    let mut connection=connection;
+                    let Ok(mut connection) = pending.authenticate().await else { return; };
                     // Bound each device connection lifetime independently from
                     // individual frame deadlines; a reconnect proves the key again.
                     let _=tokio::time::timeout(Duration::from_hours(6),serve_connection(&mut connection,state,app)).await;
@@ -189,6 +189,7 @@ async fn forward(connection:&mut PqcConnection,state:&AppState,service:&Service,
     if response.status().is_redirection(){return Err(denied());}
     let content_type=response.headers().get(header::CONTENT_TYPE).and_then(|v|v.to_str().ok()).unwrap_or("").to_ascii_lowercase();
     let mut headers=public_headers(response.headers());
+    if headers.iter().any(|(_, value)| value.contains(authorization.token.expose())) { return Err(denied()); }
     let manifest=uri.path().to_ascii_lowercase().ends_with(".m3u8")||content_type.contains("mpegurl");
     let buffered=control.kind==ControlKind::Control||manifest||content_type.contains("json");
     if buffered{
@@ -311,5 +312,6 @@ mod tests{
         let playlist=b"#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key?api_key=private-bearer\"\nsegment.ts?api_key=private-bearer\n";
         let out=String::from_utf8(sanitize_manifest(playlist,"private-bearer").unwrap()).unwrap();
         assert!(!out.contains("private-bearer"));assert!(!out.contains("api_key"));
+        assert!(out.contains("URI=\"key\"")); assert!(out.ends_with("segment.ts\n"));
     }
 }

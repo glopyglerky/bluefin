@@ -51,3 +51,22 @@ fn image_and_theme_resource_bounds_apply_before_qr_detection(){
     assert!(matches!(decode_qr_image(&oversized),Err(Error::TooLarge)));
     assert!(decode_qr_image(b"<svg/>").is_err());
 }
+
+#[test]
+fn recognized_unsupported_code_cannot_be_hidden_beside_a_valid_invite() {
+    let invite = invite();
+    let valid = image::load_from_memory(&qr_png(&invite, &QrTheme::bluefin()).unwrap()).unwrap().to_rgb8();
+    let unsupported = invite.to_code().unwrap().replacen("MC1-", "MC2-", 1);
+    let code = qrcode::QrCode::with_error_correction_level(unsupported, qrcode::EcLevel::H).unwrap();
+    let side = (code.width() + 8) as u32 * 6;
+    let mut other = RgbImage::from_pixel(side, side, Rgb([255, 255, 255]));
+    for y in 0..code.width() { for x in 0..code.width() {
+        if code[(x,y)] == qrcode::Color::Dark {
+            for py in 0..6 { for px in 0..6 { other.put_pixel((x as u32+4)*6+px, (y as u32+4)*6+py, Rgb([0,0,0])); } }
+        }
+    } }
+    let mut screenshot = RgbImage::from_pixel(valid.width()+other.width()+80, valid.height().max(other.height())+40, Rgb([255,255,255]));
+    image::imageops::replace(&mut screenshot, &valid, 20, 20);
+    image::imageops::replace(&mut screenshot, &other, i64::from(valid.width()+60), 20);
+    assert!(decode_qr_image(&png(screenshot)).is_err());
+}
