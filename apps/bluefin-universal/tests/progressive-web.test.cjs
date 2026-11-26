@@ -149,6 +149,23 @@ test('a delayed optional runtime cannot begin pairing after pagehide',async()=>{
  await until(()=>resolve);t.events.pagehide();
  resolve({webMeshBegin(){begin++;return Promise.resolve('{"kind":"pairing"}');},webMeshPageExit(){retire++;}});
  await result;assert.equal(begin,0);assert.equal(retire,0);assert.equal(t.requests.length,0);
+ assert.equal(t.ui.state.code,'');assert.equal(t.ui.state.capability,null);assert.equal(t.ui.state.session,null);
+});
+test('a late capability rejection cannot reopen its dialog after pagehide',async()=>{
+ const t=setup({launchCode:'MC1-EXAMPLE'});let rejectEngine;
+ t.context.BluefinRuntime.engine=()=>new Promise((_resolve,reject)=>{rejectEngine=reject;});
+ const attempt=t.ui.beginMesh('MC1-EXAMPLE','',false);const result=assert.rejects(attempt,/Late engine failure/);
+ await until(()=>rejectEngine);t.events.pagehide();rejectEngine(browserFailure('Late engine failure'));
+ await result;assert.equal(t.ui.state.capability,null);assert.equal(t.ui.state.code,'');assert.equal(t.requests.length,0);
+});
+test('a Begin reply arriving after pagehide cannot restore the cleared pairing view',async()=>{
+ const t=setup({launchCode:'MC1-EXAMPLE'});let resolveBegin;
+ t.context.BluefinRuntime.engine=async()=>({webMeshBegin:()=>new Promise(resolve=>{resolveBegin=resolve;})});
+ const attempt=t.ui.beginMesh('MC1-EXAMPLE','',false);const result=assert.rejects(attempt,/page or account changed/);
+ await until(()=>resolveBegin);t.events.pagehide();
+ resolveBegin(JSON.stringify({kind:'pairing',needsBeginRetry:false}));await result;
+ assert.equal(t.ui.state.pairing,null);assert.equal(t.ui.state.session,null);
+ assert.equal(t.ui.state.code,'');assert.equal(t.requests.length,0);
 });
 test('pending mesh worker setup cannot start a retired player',async()=>{
  const t=setup();let resolve,plays=0,retire=0;
@@ -254,6 +271,13 @@ test('an invitation or account rejection after Rust starts does not suggest a br
  const t=setup({engine:async()=>({webMeshBegin:async()=>{throw Error('Invitation was already used');}})});
  await assert.rejects(t.ui.beginMesh('MC1-EXAMPLE','',false),/Invitation was already used/);
  assert.equal(t.ui.state.capability,null);assert.equal(t.requests.length,0);
+});
+test('capability guidance warns against reloading after an earlier Begin reached Rust',async()=>{
+ const t=setup({engine:async()=>({webMeshBegin:async()=>{throw Error('Connection interrupted');}})});
+ await assert.rejects(t.ui.beginMesh('MC1-EXAMPLE','',false),/Connection interrupted/);
+ t.context.BluefinRuntime.engine=async()=>{throw browserFailure('Optional engine blocked');};
+ await assert.rejects(t.ui.beginMesh('MC1-EXAMPLE','',false),/Optional engine blocked/);
+ assert.equal(t.ui.state.capability.beforeBegin,false);assert.equal(t.requests.length,0);
 });
 test('leaving the capability sheet for HTTPS sign-in does not redeem the invitation',async()=>{
  const t=setup({launchCode:'MC1-EXAMPLE',meshFailure:true});

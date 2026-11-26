@@ -12,6 +12,7 @@ const state={phase:'connect',base:hostedBase(),server:null,options:{},session:nu
   busy:false,error:'',notice:'',epoch:0,capabilities:null,capability:null,player:null,expanded:false,
   queue:[],unshuffledQueue:[],queueIndex:0,shuffle:false,repeat:'off',query:'',local:false,localQuery:'',localSnapshot:null,images:new Map(),imageEpoch:0};
 let modalWasOpen=false,focusReturn=null,pageRetired=false,authTask=false,playbackGeneration=0,leaseRenew=null,progressTimer=null,meshPoll=null,hlsPromise,meshRetirement=null;
+let meshBeginStarted=false;
 let localLibrary=null;
 function isLocalItem(item){return item?.LocalSource===true&&globalThis.BluefinLocalMusic?.isLocalId(item.Id)===true;}
 function localItem(record){return {Id:record.id,Name:record.title,Type:'Audio',LocalSource:true,Source:record.source,
@@ -93,7 +94,7 @@ async function importInvitationImage(file){
  const epoch=state.epoch,view=state.pairingView;
  const current=()=>{assertLive(epoch);if(view!==state.pairingView||state.sheet!=='invite')throw Error('The connection screen was closed.');};
  current();if(file.size<=0||file.size>8*1024*1024)throw Error('Choose a PNG or JPEG smaller than 8 MiB.');
- const engine=await meshEngine(()=>importInvitationImage(file),!state.pairing&&!state.session,false,view);current();
+ const engine=await meshEngine(()=>importInvitationImage(file),canReloadBeforeMeshBegin(),false,view);current();
  const bytes=new Uint8Array(await file.arrayBuffer());current();
  const code=engine.webMeshImage(bytes);current();state.code=code;state.notice='Invitation read. Continue to connect.';
 }
@@ -288,8 +289,10 @@ async function meshProgress(serialized,epoch,view,engine){
 async function beginMesh(code,name,remember){
  const epoch=state.epoch,view=state.pairingView;assertLive(epoch);
  state.code=code;state.meshName=name;
- const engine=await meshEngine(()=>beginMesh(code,name,remember),true,false,view);assertLive(epoch);if(view!==state.pairingView)throw Error('The connection screen was closed.');
- state.remember=remember;const result=await engine.webMeshBegin(code,name,remember);
+ const engine=await meshEngine(()=>beginMesh(code,name,remember),canReloadBeforeMeshBegin(),false,view);assertLive(epoch);if(view!==state.pairingView)throw Error('The connection screen was closed.');
+ state.remember=remember;
+ meshBeginStarted=true;
+ const result=await engine.webMeshBegin(code,name,remember);
  await meshProgress(result,epoch,view,engine);
 }
 async function resumeMesh(remembered){
@@ -305,6 +308,7 @@ async function continueMesh(){
 }
 function closeSheet(){if(state.sheet==='invite')state.pairingView++;state.capability=null;state.sheet=null;state.expanded=false;state.invitation=null;clearTimeout(state.inviteTimer);render();}
 
+function canReloadBeforeMeshBegin(){return !meshBeginStarted&&!state.pairing&&!state.session;}
 function showCapability(error,retry,beforeBegin=false,mediaOnly=false) {
   state.capability={reason:String(error.message||error),retry,beforeBegin,mediaOnly};
   state.error='';
