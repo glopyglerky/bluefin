@@ -4348,6 +4348,7 @@ dependencies = [
  "image",
  "iroh",
  "ml-dsa",
+ "n0-future",
  "qrcode",
  "rqrr",
  "rustls",
