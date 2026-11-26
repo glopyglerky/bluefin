@@ -142,7 +142,8 @@ function encode(value) {
 export async function meshPasskey(serialized) {
   if (!globalThis.isSecureContext || location.protocol !== 'https:' || !window.PublicKeyCredential) throw Error('Passkeys unavailable');
   const value = JSON.parse(serialized);
-  if (value.origin !== location.origin || !['authentication','registration'].includes(value.kind)) throw Error('Use the paired server passkey page');
+  // Match the account owner's wire discriminants; Login is assertion.
+  if (value.origin !== location.origin || !['assertion','registration'].includes(value.kind)) throw Error('Use the paired server passkey page');
   const enroll = value.kind === 'registration', options = value.publicKey;
   const parser = enroll ? PublicKeyCredential.parseCreationOptionsFromJSON : PublicKeyCredential.parseRequestOptionsFromJSON;
   let publicKey;

@@ -486,3 +486,63 @@ test('unsupported HTTPS live TV does not allocate a lease or stop current librar
  assert.equal(t.requests.length,before);assert.equal(t.video.src,source);assert.equal(t.ui.state.player,player);
  await t.ui.signOut();
 });
+
+function passkeyContext() {
+ const calls=[],credential={id:'synthetic-credential',type:'public-key',response:{clientDataJSON:'e30'}};
+ const context=vm.createContext({crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,ArrayBuffer,URL,
+  atob:value=>Buffer.from(value,'base64').toString('binary'),
+  btoa:value=>Buffer.from(value,'binary').toString('base64'),
+  location:new URL('https://bluefin.test/web/bluefin/'),isSecureContext:true,
+  PublicKeyCredential:class{},
+  navigator:{credentials:{
+   get:async options=>{calls.push({method:'get',options});return {toJSON:()=>credential};},
+   create:async options=>{calls.push({method:'create',options});return {toJSON:()=>credential};}
+  }},document:{addEventListener(){}},addEventListener(){},dispatchEvent(){},CustomEvent:class{},
+  setTimeout,clearTimeout});
+ context.window=context;
+ vm.runInContext(source('mesh-platform.js').replace(/\bexport /g,'')+
+  '\nglobalThis.passkeyAdapter=meshPasskey;',context);
+ return {context,calls,credential};
+}
+test('same-origin Login accepts the server assertion kind and requests an existing passkey',async()=>{
+ const t=passkeyContext();
+ // Exact BeginResult passkey_options shape emitted by bluefin_mesh_accounts.
+ const options={kind:'assertion',rpId:'bluefin.test',origin:'https://bluefin.test',
+  publicKey:{challenge:'AQIDBA',timeout:60000,rpId:'bluefin.test',
+   allowCredentials:[{type:'public-key',id:'BQYHCA'}],userVerification:'required'},
+  browserUrl:'https://bluefin.test/Bluefin/Accounts/Mesh/Passkey#'+'a'.repeat(64)+'.'+'b'.repeat(64)};
+ assert.deepEqual(JSON.parse(await t.context.passkeyAdapter(JSON.stringify(options))),t.credential);
+ assert.equal(t.calls.length,1);assert.equal(t.calls[0].method,'get');
+ const publicKey=t.calls[0].options.publicKey;
+ assert.deepEqual(Array.from(publicKey.challenge),[1,2,3,4]);
+ assert.deepEqual(Array.from(publicKey.allowCredentials[0].id),[5,6,7,8]);
+ assert.equal(publicKey.rpId,'bluefin.test');assert.equal(publicKey.userVerification,'required');
+});
+test('same-origin registration uses creation options and decodes the server user and exclusion IDs',async()=>{
+ const t=passkeyContext();
+ const options={kind:'registration',rpId:'bluefin.test',origin:'https://bluefin.test',
+  publicKey:{challenge:'AQIDBA',timeout:60000,rp:{id:'bluefin.test',name:'Bluefin'},
+   user:{id:'BQYHCA',name:'Listener',displayName:'Listener'},
+   pubKeyCredParams:[{type:'public-key',alg:-7}],
+   authenticatorSelection:{residentKey:'required',userVerification:'required'},
+   excludeCredentials:[{type:'public-key',id:'CQoL'}]},
+  browserUrl:'https://bluefin.test/Bluefin/Accounts/Mesh/Passkey#'+'a'.repeat(64)+'.'+'b'.repeat(64)};
+ await t.context.passkeyAdapter(JSON.stringify(options));
+ assert.equal(t.calls.length,1);assert.equal(t.calls[0].method,'create');
+ const publicKey=t.calls[0].options.publicKey;
+ assert.deepEqual(Array.from(publicKey.challenge),[1,2,3,4]);
+ assert.deepEqual(Array.from(publicKey.user.id),[5,6,7,8]);
+ assert.deepEqual(Array.from(publicKey.excludeCredentials[0].id),[9,10,11]);
+ assert.equal(publicKey.rp.id,'bluefin.test');
+ assert.equal(publicKey.authenticatorSelection.userVerification,'required');
+});
+test('the passkey adapter rejects wrong-origin requests and unsupported kind aliases before WebAuthn',async()=>{
+ const t=passkeyContext();
+ for(const options of [
+  {kind:'authentication',origin:'https://bluefin.test',publicKey:{}},
+  {kind:'unknown',origin:'https://bluefin.test',publicKey:{}},
+  {kind:'assertion',origin:'https://other.test',publicKey:{}},
+  {kind:'registration',origin:'https://other.test',publicKey:{}}
+ ])await assert.rejects(t.context.passkeyAdapter(JSON.stringify(options)),/paired server passkey page/);
+ assert.equal(t.calls.length,0);
+});
