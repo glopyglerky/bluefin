@@ -49,11 +49,18 @@ async function workerMessage(message) {
   });
 }
 function stopLocal() {
-  const old=current;current=null;
-  if(old){clearInterval(old.renew);old.hls?.destroy();}
-  const video=media();video.pause();video.removeAttribute('src');video.load();
-  for(const track of [...video.querySelectorAll('track')])track.remove();
+  const old=current;current=null;const video=media();
+  // A decoder exception must not prevent source removal, worker retirement,
+  // delivery of Rust's Stop/Logout command, or the account cleanup handshake.
+  let failed=false;
+  try {video.pause();} catch (_) {failed=true;}
+  try {video.removeAttribute('src');} catch (_) {failed=true;}
+  try {video.load();} catch (_) {failed=true;}
+  if(old){clearInterval(old.renew);try {old.hls?.destroy();} catch (_) {failed=true;}}
+  for(const track of [...video.querySelectorAll('track')]){try {track.remove();} catch (_) {failed=true;}}
+  if(failed)status('Local decoder cleanup reported an error; connection retirement is continuing.');
 }
+
 export function stopMedia() {
   const mine=++revision;
   stopLocal();

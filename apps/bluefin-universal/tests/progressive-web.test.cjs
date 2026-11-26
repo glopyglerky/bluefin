@@ -18,10 +18,10 @@ class Element{
  set textContent(v){this.text=String(v);this.children=[];}
  get textContent(){return this.text+this.children.map(c=>c.textContent||'').join(' ');}
 }
-function setup({meshFailure=false,leaseOrigin=''}={}){
- const root=new Element('div'),video=new Element('video'),labels=new Map(),events={},requests=[];
+function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false}={}){
+ const root=new Element('div'),video=new Element('video'),labels=new Map(),events={},requests=[],pending={};
  Object.assign(video,{paused:true,duration:60,currentTime:0,src:'',
-  pause(){this.paused=true;},load(){},play(){this.paused=false;return Promise.resolve();},canPlayType(){return 'probably';}});
+  pause(){this.paused=true;},load(){},play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},canPlayType(){return 'probably';}});
  labels.set('app',root);labels.set('media',video);
  const document={baseURI:'https://bluefin.test/web/bluefin/',body:new Element('body'),head:new Element('head'),activeElement:null,
   createElement:tag=>new Element(tag),createElementNS:(_ns,tag)=>new Element(tag),createDocumentFragment:()=>new Element('fragment'),
@@ -31,6 +31,8 @@ function setup({meshFailure=false,leaseOrigin=''}={}){
  const fetch=async(url,options={})=>{
   const u=new URL(url);requests.push({url:u.href,options});
   let body;
+  if(u.pathname==='/Users/AuthenticateByName'&&holdLogin)await new Promise(resolve=>pending.login=resolve);
+  if(u.pathname==='/Bluefin/Web/v1/leases'&&options.method==='POST'&&holdLease)await new Promise(resolve=>pending.lease=resolve);
   if(u.pathname==='/System/Info/Public')body={ServerName:'Bluefin'};
   else if(u.pathname==='/Bluefin/Accounts/Options')body={passkeys:true,quickConnect:true};
   else if(u.pathname==='/Users/AuthenticateByName')body={AccessToken:'synthetic-private-bearer',User:{Id:user,Name:'Listener'}};
@@ -55,9 +57,9 @@ function setup({meshFailure=false,leaseOrigin=''}={}){
  Object.defineProperty(context,'indexedDB',{get(){throw Error('Default view touched IndexedDB');}});
  Object.defineProperty(context,'localStorage',{get(){throw Error('Default view touched localStorage');}});
  Object.defineProperty(context,'sessionStorage',{get(){throw Error('Default view touched sessionStorage');}});
- const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,render,nativeLeasePath};})();');
+ const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath};})();');
  vm.runInContext(script,context);
- return {context,ui:context.contract,root,video,requests,events,item};
+ return {context,ui:context.contract,root,video,requests,events,item,pending};
 }
 test('ordinary HTML controls and HTTPS library work without Wasm, storage, or workers',async()=>{
  const t=setup();assert.match(t.root.textContent,/Connect with QR or invitation/);assert.equal(t.requests.length,0);
@@ -110,11 +112,52 @@ test('mesh journal is temporary by default and enforces exact revision retry',as
  await assert.rejects(j.saveMeshVault(0,'different request'),/changed/);
  await assert.rejects(j.selectMeshStorage(true),/already active/);
  j.clearEphemeralMeshVault();assert.equal(JSON.parse(await j.loadMeshVault()).value,null);
- await assert.rejects(j.selectMeshStorage(true),/Protected storage blocked/);
+ await assert.rejects(j.selectMeshStorage(true),/Protected connection storage unavailable/);
 });
 test('tiny-Wasm denial does not import the optional Rust module',async()=>{
  const context=vm.createContext({isSecureContext:true,location:new URL('https://bluefin.test/'),WebAssembly:undefined,setTimeout,clearTimeout});
  context.window=context;vm.runInContext(source('bootstrap.js'),context);
  await assert.rejects(context.BluefinRuntime.engine(),/HTTPS library remains available/);
  assert.equal(context.BluefinRuntime.ready(),undefined);
+});
+
+async function until(check){for(let n=0;n<100;n++){if(check())return;await new Promise(setImmediate);}assert.fail('pending boundary was not reached');}
+test('a login minted after pagehide is revoked instead of adopted',async()=>{
+ const t=setup({holdLogin:true});await t.ui.connect('https://bluefin.test');
+ const login=t.ui.signIn('Listener','example-password',false);const result=assert.rejects(login,/page or account changed/);
+ await until(()=>t.pending.login);t.events.pagehide();t.pending.login();await result;
+ assert.equal(t.ui.state.session,null);
+ assert(t.requests.some(r=>r.url.endsWith('/Sessions/Logout')&&r.options.keepalive===true));
+ assert(!t.root.textContent.includes('Original test tone'));
+});
+test('a delayed optional runtime cannot begin pairing after pagehide',async()=>{
+ const t=setup();let resolve,begin=0,retire=0;
+ t.context.BluefinRuntime.engine=()=>new Promise(r=>resolve=r);
+ const attempt=t.ui.beginMesh('MC1-EXAMPLE','',false);const result=assert.rejects(attempt,/page or account changed/);
+ await until(()=>resolve);t.events.pagehide();
+ resolve({webMeshBegin(){begin++;return Promise.resolve('{"kind":"pairing"}');},webMeshPageExit(){retire++;}});
+ await result;assert.equal(begin,0);assert.equal(retire,0);assert.equal(t.requests.length,0);
+});
+test('pending mesh worker setup cannot start a retired player',async()=>{
+ const t=setup();let resolve,plays=0,retire=0;
+ const engine={webMeshPlay(){plays++;},webMeshControl(){},webMeshPageExit(){retire++;}};
+ t.context.BluefinRuntime.engine=async()=>engine;t.context.BluefinRuntime.ready=()=>engine;
+ t.context.BluefinRuntime.mediaWorker=()=>new Promise(r=>resolve=r);
+ t.ui.state.session={handle:'bluefin-mesh-v1:'+'a'.repeat(64),user:'1'.repeat(32)};t.ui.state.mode='mesh';
+ const playing=t.ui.play(t.item),result=assert.rejects(playing,/page or account changed/);
+ await until(()=>resolve);t.events.pagehide();resolve();await result;
+ assert.equal(plays,0);assert.equal(retire,1);assert.equal(t.video.src,'');
+});
+test('a late HTTP media lease is released without starting playback',async()=>{
+ const t=setup({holdLease:true});await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const playing=t.ui.play(t.item),result=assert.rejects(playing,/page or account changed/);
+ await until(()=>t.pending.lease);t.events.pagehide();t.pending.lease();await result;
+ assert.equal(t.video.src,'');assert.equal(t.video.playCalls||0,0);
+ assert(t.requests.some(r=>r.options.method==='DELETE'&&r.options.keepalive===true&&r.url.includes('/Bluefin/Web/v1/leases/')));
+});
+test('a throwing decoder still loses its local source and playback state',async()=>{
+ const t=setup();t.video.src='blob:synthetic';t.video.paused=false;
+ t.ui.state.player={mode:'https',hls:{destroy(){throw Error('decoder failure');}}};
+ await assert.rejects(t.ui.stopPlayback(),/decoder failure/);
+ assert.equal(t.video.src,'');assert.equal(t.video.paused,true);assert.equal(t.ui.state.player,null);
 });

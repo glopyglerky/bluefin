@@ -44,8 +44,11 @@ const request = value => new Promise((resolve,reject) => {
 });
 function database() {
   if (!globalThis.isSecureContext || location.protocol !== 'https:') throw Error('Use a trusted HTTPS address');
+  let storage;
+  try {storage=globalThis.indexedDB;} catch (_) {throw Error('Protected connection storage unavailable');}
+  if (!storage || typeof storage.open !== 'function') throw Error('Protected connection storage unavailable');
   return databasePromise ||= new Promise((resolve,reject) => {
-    const open = indexedDB.open('bluefin-mesh-v1', 1);
+    const open = storage.open('bluefin-mesh-v1', 1);
     let expired=false;
     const timer=setTimeout(()=>{expired=true;reject(Error('Protected connection storage did not respond'));},5000);
     open.onupgradeneeded = () => open.result.createObjectStore('vault');

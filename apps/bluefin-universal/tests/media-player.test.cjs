@@ -39,7 +39,7 @@ function setup({holdReady=false,holdStart=false,foreignWorker=false}={}){
   const start=()=>context.binding.startMedia('https://server.example/', 'MediaBrowser Client="Synthetic"',
     JSON.stringify({selection:{position:0},offset:0,hls:false}),false);
   const ready=()=>{serviceWorker.controller=worker;for(const listener of listeners)listener();};
-  return {binding:context.binding,start,ready,pending,messages,plays,video,listeners,foreignMessages};
+  return {binding:context.binding,start,ready,pending,messages,plays,video,listeners,foreignMessages,context};
 }
 async function until(check){for(let n=0;n<100;n++){if(check())return;await new Promise(setImmediate);}assert.fail('controlled worker operation was not reached');}
 function outcome(promise){return promise.then(()=>({ok:true}),error=>({ok:false,error}));}
@@ -82,4 +82,10 @@ test('replacement cannot publish an old registration or clear the new player',as
   const active=s.video.src;await s.binding.stopMedia();
   assert.equal(oldResult.ok,false);assert.equal(nextResult.ok,true);
   assert.deepEqual(s.plays,[active]);assert(active.startsWith('/media/'));
+});
+
+test('a throwing HLS decoder cannot block local stop or worker retirement',async()=>{
+ const s=setup();await s.start();vm.runInContext('current.hls={destroy(){throw Error("decoder failure")}}',s.context);
+ s.binding.interruptMedia();await s.binding.stopMedia();
+ assert.equal(s.video.src,'');assert.equal(s.video.paused,true);assert(s.messages.includes('clear'));
 });

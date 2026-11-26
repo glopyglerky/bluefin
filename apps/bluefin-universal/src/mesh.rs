@@ -114,11 +114,13 @@ impl Vault {
 
 thread_local! {
     static BUSY: Cell<bool> = const { Cell::new(false) };
+    static PAGE_RETIRED: Cell<bool> = const { Cell::new(false) };
     static SESSIONS: RefCell<HashMap<String, Rc<Connected>>> = RefCell::new(HashMap::new());
 }
 struct Operation;
 impl Operation {
     fn enter() -> Result<Self> {
+        ensure_page()?;
         if BUSY.with(|busy| busy.replace(true)) {
             return Err("Another connection operation is still finishing.".into());
         }
@@ -204,7 +206,20 @@ async fn exchange(endpoint: &PqcEndpoint, server: &ServerAddress, message: &Valu
     connection.close().await;
     result
 }
+fn ensure_page() -> Result<()> {
+    if PAGE_RETIRED.with(Cell::get) { Err("This browser page has retired. Reload to connect again.".into()) } else { Ok(()) }
+}
 async fn endpoint(saved: &Saved, server: &ServerAddress) -> Result<PqcEndpoint> {
+    ensure_page()?;
+    let policy = policy().await?;
+    ensure_page()?;
+    policy.permits(server).map_err(|_| "This invitation has no browser route through an approved relay.")?;
+    let device = DeviceIdentity::from_seed(saved.seed).map_err(|_| failure())?;
+    let endpoint = PqcEndpoint::client_with_policy(&device, policy).await.map_err(|_| failure())?;
+    if let Err(error) = ensure_page() { endpoint.close().await; return Err(error); }
+    Ok(endpoint)
+}
+async fn cleanup_endpoint(saved: &Saved, server: &ServerAddress) -> Result<PqcEndpoint> {
     let policy = policy().await?;
     policy.permits(server).map_err(|_| "This invitation has no browser route through an approved relay.")?;
     let device = DeviceIdentity::from_seed(saved.seed).map_err(|_| failure())?;
@@ -404,9 +419,11 @@ struct Connected {
     active: Cell<usize>,
 }
 async fn install(saved: Saved, descriptor: Descriptor) -> Result<Session> {
+    ensure_page()?;
     validate_descriptor(&descriptor)?;
     install_media_bridge();
     let endpoint = endpoint(&saved, &descriptor.server).await?;
+    if let Err(error) = ensure_page() { endpoint.close().await; return Err(error); }
     let token = format!("{HANDLE_PREFIX}{}", descriptor.id);
     let session = Session { base: origin(&descriptor.api_origin)?, token: token.clone(),
         user: uuid::Uuid::parse_str(&descriptor.user_id).map_err(|_| "Invalid account identity.")? };
@@ -417,6 +434,7 @@ async fn install(saved: Saved, descriptor: Descriptor) -> Result<Session> {
 }
 pub fn is_mesh(handle: &str) -> bool { handle.starts_with(HANDLE_PREFIX) }
 pub(crate) fn restored_session(handle: &str) -> Result<Session> {
+    ensure_page()?;
     let current = connected(handle)?;
     if current.closing.get() { return Err("This device is signing out.".into()); }
     Ok(Session { base: origin(&current.descriptor.api_origin)?, token: handle.to_owned(),
@@ -433,7 +451,9 @@ async fn retire_local(handle: &str, session: &Connected) {
     session.endpoint.close().await;
 }
 async fn ensure_current(session: &Connected) -> Result<()> {
+    ensure_page()?;
     let current = Vault::load().await;
+    ensure_page()?;
     let matches = current.as_ref().ok().and_then(|vault| vault.saved.as_ref())
         .is_some_and(|saved| matches!(&saved.state,
             Phase::Connected { descriptor, logout_id: None }
@@ -448,6 +468,7 @@ async fn ensure_current(session: &Connected) -> Result<()> {
 struct Permit(Rc<Connected>);
 impl Permit {
     fn acquire(session: Rc<Connected>) -> Result<Self> {
+        ensure_page()?;
         if session.closing.get() || session.active.get() >= 6 { return Err("The device connection is busy or closing.".into()); }
         validate_descriptor(&session.descriptor)?;
         session.active.set(session.active.get() + 1);
@@ -469,6 +490,7 @@ pub async fn request(base: &Url, handle: &str, method: &str, path: &str,
     let mut headers = vec![];
     if body.is_some() { headers.push(("content-type".to_owned(), "application/json".to_owned())); }
     let (status, _, bytes) = fetch(&session, method, &url, &headers, body.unwrap_or_default(), false, protocol::MAX_RESPONSE).await?;
+    ensure_page()?;
     match status {
         401 | 403 => return Err("Account access denied. Sign in again.".into()),
         409 => return Err("The server state changed. Reload before retrying.".into()),
@@ -506,7 +528,9 @@ async fn open_request(session: &Connected, method: &str, url: &Url,
     let mut path = url.path().to_owned();
     if let Some(query) = url.query() { path.push('?'); path.push_str(query); }
     if path.len() > 8192 { return Err("Resource path limit.".into()); }
+    ensure_page()?;
     let mut connection = session.endpoint.connect_server(&session.descriptor.server).await.map_err(|_| failure())?;
+    if let Err(error) = ensure_page() { connection.close().await; return Err(error); }
     connection.send(&json!({"version":1,"body":{
         "type":if media { "media" } else { "control" }, "session_id":session.descriptor.id,
         "binding":connection.binding(), "request":{"method":method,"path":path,"headers":headers,"body":body}
@@ -547,7 +571,7 @@ async fn fetch(session: &Connected, method: &str, url: &Url, headers: &[(String,
 }
 
 async fn revoke_identity(saved: &Saved, descriptor: &Descriptor, request_id: &[u8;32]) -> Result<()> {
-    let endpoint = endpoint(saved, &descriptor.server).await?;
+    let endpoint = cleanup_endpoint(saved, &descriptor.server).await?;
     let result: Result<()> = async {
         let mut connection = endpoint.connect_server(&descriptor.server).await.map_err(|_| failure())?;
         connection.send(&json!({"version":1,"body":{"type":"revoke_session","session_id":descriptor.id,
@@ -576,6 +600,7 @@ async fn revoke_saved(vault: &mut Vault) -> Result<()> {
 /// Page retirement fences every request synchronously. Browsers can suspend a
 /// page before asynchronous work finishes, so this never claims remote revoke.
 pub(crate) fn retire_page() {
+    PAGE_RETIRED.with(|retired| retired.set(true));
     let remembered = mesh_remembered();
     let sessions: Vec<_> = SESSIONS.with(|sessions| sessions.borrow_mut().drain().collect());
     for (handle,session) in sessions {
@@ -593,6 +618,10 @@ pub(crate) fn retire_page() {
     clear_ephemeral_vault();
 }
 
+pub(crate) async fn suspend(handle: &str) -> Result<()> {
+    if let Ok(session) = connected(handle) { retire_local(handle,&session).await; }
+    Ok(())
+}
 pub async fn logout(handle: &str) -> Result<()> {
     let session = connected(handle)?;
     // Stop local output and network resources before any fallible storage or

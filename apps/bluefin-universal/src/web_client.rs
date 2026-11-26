@@ -23,7 +23,7 @@ pub async fn begin(code: String, name: String, remember: bool) -> Result<String,
 }
 #[wasm_bindgen(js_name = webMeshResume)]
 pub async fn resume(remembered: bool) -> Result<String, JsValue> {
-    if remembered {mesh::resume_remembered().await} else {mesh::resume().await}.map(progress).map_err(error)
+    (if remembered {mesh::resume_remembered().await} else {mesh::resume().await}).map(progress).map_err(error)
 }
 #[wasm_bindgen(js_name = webMeshProceed)]
 pub async fn proceed() -> Result<String, JsValue> {
@@ -72,11 +72,16 @@ fn player(handle: &str) -> Result<(), JsValue> {
 #[wasm_bindgen(js_name = webMeshPlay)]
 pub fn play(handle: String, serialized: String) -> Result<(), JsValue> {
     if serialized.len()>128*1024 {return Err(JsValue::from_str("Item limit."));}
-    let item: Item = serde_json::from_str(&serialized).map_err(|_| JsValue::from_str("Invalid library item."))?;
+    let value: Value = serde_json::from_str(&serialized).map_err(|_| JsValue::from_str("Invalid library item."))?;
+    let item: Item = serde_json::from_value(value.clone()).map_err(|_| JsValue::from_str("Invalid library item."))?;
+    let position = value["UserData"]["PlaybackPositionTicks"].as_u64()
+        .filter(|position| *position <= 9_007_199_254_740_991 &&
+            value["RunTimeTicks"].as_u64().is_some_and(|duration| *position < duration))
+        .map_or(0.0, |ticks| ticks as f64 / 10_000_000.0);
     if item.id.is_nil() || !item.playable() {return Err(JsValue::from_str("Choose a playable item."));}
     player(&handle)?;
     PLAYER.with(|player| {if let Some((_,service))=player.borrow().as_ref() {
-        service.send(Command::Play(Box::new(item),Selection::default(),None));
+        service.send(Command::Play(Box::new(item),Selection {position,..Selection::default()},None));
     }});
     Ok(())
 }
@@ -129,6 +134,8 @@ pub async fn logout(handle: String) -> Result<(), JsValue> {
         result
     } else {mesh::logout(&handle).await.map_err(error)}
 }
+#[wasm_bindgen(js_name = webMeshSuspend)]
+pub async fn suspend(handle: String) -> Result<(), JsValue> { mesh::suspend(&handle).await.map_err(error) }
 #[wasm_bindgen(js_name = webMeshPageExit)]
 pub fn page_exit() {
     PLAYER.with(|player| {
