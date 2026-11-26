@@ -513,14 +513,15 @@ async function play(item,queue=[item],index=0,original=null){
   await runtime().mediaWorker();current();
   const engine=await runtime().engine();current();
   engine.webMeshPlay(session.handle,JSON.stringify(item));current();
-  state.player={mode:'mesh',handle:session.handle,item,session,offset:resumeTicks(item)/10000000,snapshot:null};
+  state.player={mode:'mesh',handle:session.handle,item,session,offset:0,snapshot:null};
   meshPoll=setInterval(()=>{
    if(pageRetired||generation!==playbackGeneration||session!==state.session)return;
-   try{const sample=JSON.parse(engine.webMeshPlayback(session.handle));if(state.player?.handle===session.handle)state.player.snapshot=sample;if(sample?.message)document.getElementById('media-status').textContent=sample.message;updatePlayback();}
+   try{const sample=JSON.parse(engine.webMeshPlayback(session.handle));if(state.player?.handle===session.handle){state.player.snapshot=sample;state.player.offset=Number.isFinite(sample?.plan?.offset)?sample.plan.offset:0;}if(sample?.message)document.getElementById('media-status').textContent=sample.message;updatePlayback();}
    catch(_){if(generation===playbackGeneration)stopPlayback(false).catch(()=>{});}
   },500);
  }else{
-  const Hls=await hlsSupport();current();
+  if(item.Type==='Audio'&&!media.canPlayType('audio/mpeg'))throw Error('This browser cannot play the server’s MP3 audio profile.');
+  const Hls=item.Type==='Audio'?null:await hlsSupport();current();
   const policy=await httpsMediaPolicy(session,base,epoch);current();
   const wire=await http(policy.create,'POST',{version:1,itemId:id(item.Id),
    playback:{kind:item.Type==='Audio'?'audio':'video',maxBitrate:8000000,startTicks:resumeTicks(item)}},[],session,false,true,base);
@@ -535,10 +536,11 @@ async function play(item,queue=[item],index=0,original=null){
   if(pageRetired||epoch!==state.epoch||session!==state.session||generation!==playbackGeneration){
    await releaseLease(lease,session,true).catch(()=>{});current();
   }
-  state.player={mode:'https',item,lease,session,offset:resumeTicks(item)/10000000,domOwner:Object.freeze({generation,kind:'https'})};
+  state.player={mode:'https',item,lease,session,offset:item.Type==='Audio'?resumeTicks(item)/10000000:0,
+   resumePosition:resumeTicks(item)/10000000,resumeApplied:item.Type==='Audio',reportingReady:item.Type==='Audio'||resumeTicks(item)===0,domOwner:Object.freeze({generation,kind:'https'})};
   media.__bluefinOutputOwner=state.player.domOwner;
   if(Hls){
-   const hls=new Hls({enableWorker:false,maxBufferLength:20,maxMaxBufferLength:40,backBufferLength:10,maxBufferSize:32*1024*1024,
+   const hls=new Hls({enableWorker:false,startPosition:state.player.resumePosition,maxBufferLength:20,maxMaxBufferLength:40,backBufferLength:10,maxBufferSize:32*1024*1024,
     manifestLoadingTimeOut:10000,fragLoadingTimeOut:10000,fragLoadingMaxRetry:1,manifestLoadingMaxRetry:1,
     xhrSetup(xhr,url){const target=new URL(url,location.origin);if(target.origin!==location.origin||target.search||target.hash||target.username||target.password)throw Error('Media left its lease origin.');mediaLeasePath(lease.kind,target.pathname,'media',route.id);}});
    state.player.hls=hls;hls.on(Hls.Events.ERROR,(_event,data)=>{
@@ -558,7 +560,7 @@ async function play(item,queue=[item],index=0,original=null){
  current();document.body.classList.toggle('audio-playing',item.Type==='Audio');
  document.body.classList.toggle('video-playing',item.Type!=='Audio');document.body.classList.add('with-player');render();
 }
-async function reportProgress(phase){const p=state.player;if(!p||p.mode!=='https'||p.session!==state.session)return;await api('Sessions/Playing'+(phase==='started'?'':phase==='stopped'?'/Stopped':'/Progress'),'POST',{ItemId:p.item.Id,PlaySessionId:p.lease.playSessionId,PositionTicks:Math.floor(playbackTimeline().position*10000000),IsPaused:media.paused,CanSeek:p.item.Type!=='TvChannel',PlayMethod:'Transcode'});}
+async function reportProgress(phase){const p=state.player;if(!p||p.mode!=='https'||p.session!==state.session||!p.reportingReady)return;await api('Sessions/Playing'+(phase==='started'?'':phase==='stopped'?'/Stopped':'/Progress'),'POST',{ItemId:p.item.Id,PlaySessionId:p.lease.playSessionId,PositionTicks:Math.floor(playbackTimeline().position*10000000),IsPaused:media.paused,CanSeek:p.item.Type!=='TvChannel',PlayMethod:'Transcode'});}
 async function skip(forward,automatic=false){if(!state.player||!state.queue.length)return;let next=state.queueIndex+(forward?1:-1);if(automatic&&state.repeat==='one')next=state.queueIndex;if(next>=state.queue.length){if(state.repeat!=='all')return stopPlayback();next=0;}if(next<0){if(state.repeat!=='all')next=0;else next=state.queue.length-1;}await play(state.queue[next],state.queue,next);}
 function toggle(){if(media.paused)media.play().catch(()=>{state.error='Press Play in the media controls.';render();});else media.pause();updatePlayback();}
 function miniPlayer(){const p=state.player;if(!p||p.item.Type!=='Audio')return document.createDocumentFragment();const e=node('section',undefined,'mini-player');e.setAttribute('aria-label','Now playing');e.append(cover(p.item,true));const title=button('',()=>{state.expanded=true;render();},'grow');title.append(node('strong',p.item.Name),node('small',subtitle(p.item)));e.append(title);const playButton=button('',toggle,'plain',media.paused?'play':'pause');playButton.setAttribute('aria-label',media.paused?'Play':'Pause');playButton.dataset.playToggle='';e.append(playButton);const next=action('',()=>skip(true),'plain','next');next.setAttribute('aria-label','Next track');next.disabled=state.busy||(state.repeat!=='all'&&state.queueIndex+1>=state.queue.length);e.append(next);return e;}
@@ -660,7 +662,20 @@ media.addEventListener('play',()=>{
 });
 media.addEventListener('pause',()=>{if(state.player)state.player.pausedAt=Date.now();updatePlayback();});
 media.addEventListener('timeupdate',updatePlayback);
-media.addEventListener('loadedmetadata',()=>{const p=state.player;if(!pageRetired&&p?.mode==='local'&&p.generation===playbackGeneration&&(media.currentSrc||media.src)===p.source.url)p.source.metadata(media.duration);updatePlayback();});
+function applyMediaMetadata(){
+ const p=state.player;if(pageRetired||!p)return;
+ if(p.mode==='local'&&p.generation===playbackGeneration&&(media.currentSrc||media.src)===p.source.url)p.source.metadata(media.duration);
+ else if(p.mode==='https'&&media.__bluefinOutputOwner===p.domOwner&&p.item.Type!=='Audio'&&!p.resumeApplied&&Number.isFinite(media.duration)&&media.duration>0){
+  const target=p.resumePosition||0;
+  if(target>0&&target<media.duration){
+   try{media.currentTime=target;p.resumeApplied=true;p.reportingReady=true;reportProgress('started').catch(()=>{});}catch(_){/* Retry when metadata becomes seekable. */}
+  }else if(target===0){p.resumeApplied=true;p.reportingReady=true;}
+ }
+ updatePlayback();
+}
+media.addEventListener('loadedmetadata',applyMediaMetadata);
+media.addEventListener('durationchange',applyMediaMetadata);
+media.addEventListener('canplay',applyMediaMetadata);
 media.addEventListener('encrypted',()=>{if(state.player?.mode!=='local'||pageRetired)return;stopPlayback(false).catch(()=>{});state.error='This file is protected. Play it through its licensed provider or choose an unprotected local file.';render();});
 media.addEventListener('ended',()=>{if(pageRetired||!state.player||!media.ended)return;perform(async()=>{await reportProgress('stopped').catch(()=>{});await skip(true,true);});});
 media.addEventListener('error',()=>{if(pageRetired||!media.getAttribute('src'))return;if(state.player?.mode==='local'){stopPlayback(false).catch(()=>{});state.error='This local file could not play. Its format may be unsupported or protected. Choose another file.';}else state.error='This media could not play. Try another title or refresh your library.';render();});

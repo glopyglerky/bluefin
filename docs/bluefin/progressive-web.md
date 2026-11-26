@@ -187,3 +187,14 @@ samples from a retired mesh owner cannot touch a local or HTTPS successor.
 The Rust service remains owned through sign-out timeout until its lifecycle
 actually finishes. Local search remains explicit inside Music even while an
 account is connected, and a new explicit selection resets prior queue ordering.
+
+The server-owned HTTPS lease profile transcodes audio to MP3 over HTTP and video
+to H.264/AAC HLS. Audio therefore uses native audio/mpeg support without loading
+an HLS decoder; only video uses the native-HLS or pinned MSE decoder path.
+
+HLS playlists enumerate the full original timeline: their initial encoder seek
+does not turn the playlist into a cropped stream. Video and mesh HLS therefore
+use zero timeline offset and seek to the bookmark after metadata is available.
+HTTP progress reporting waits for that initial seek instead of overwriting a
+saved bookmark with zero. Progressive MP3 is a separate cropped stream whose
+browser clock starts at zero, so only that profile adds its requested offset.

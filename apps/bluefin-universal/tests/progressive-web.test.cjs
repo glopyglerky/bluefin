@@ -19,10 +19,10 @@ class Element{
  set textContent(v){this.text=String(v);this.children=[];}
  get textContent(){return this.text+this.children.map(c=>c.textContent||'').join(' ');}
 }
-function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false,cookieStatus=200,cookieMalformed=false,cookieCreateStatus=200,tvAdvertisement=true}={}){
+function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false,cookieStatus=200,cookieMalformed=false,cookieCreateStatus=200,tvAdvertisement=true,nativeHls=true,audioPlayable=true}={}){
  const root=new Element('div'),video=new Element('video'),labels=new Map(),events={},requests=[],pending={};
  Object.assign(video,{paused:true,duration:60,currentTime:0,src:'',
-  pause(){this.paused=true;},load(){},play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},canPlayType(){return 'probably';}});
+  pause(){this.paused=true;},load(){},play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},canPlayType(type){return (type==='audio/mpeg'?audioPlayable:nativeHls)?'probably':'';}});
  labels.set('app',root);labels.set('media',video);
  const document={baseURI:'https://bluefin.test/web/bluefin/',body:new Element('body'),head:new Element('head'),activeElement:null,
   createElement:tag=>new Element(tag),createElementNS:(_ns,tag)=>new Element(tag),createDocumentFragment:()=>new Element('fragment'),
@@ -96,7 +96,7 @@ test('HTTPS origin and media lease escapes are rejected before playback',async()
  await assert.rejects(t.ui.play(t.item),/Invalid playback lease route/);
  assert.equal(t.video.src,'');
 });
-test('native HLS uses a scoped cookie route without a worker or bearer URL',async()=>{
+test('native media uses a scoped cookie route without a worker or bearer URL',async()=>{
  const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
  await t.ui.play(t.item);assert.match(t.video.src,/^https:\/\/bluefin.test\/Bluefin\/Web\/v1\/media\/[a-f0-9]{64}\/0$/);
  assert(!t.video.src.includes('synthetic-private-bearer'));assert.equal(t.video.paused,false);
@@ -229,7 +229,7 @@ test('local source removal stops the shared player and prevents stale ID replay'
  t.ui.localOwner().remove(track.Id);assert.equal(t.video.src,'');assert.equal(t.ui.state.player,null);
  await assert.rejects(t.ui.play(track,[track],0),/Choose this file again/);assert.equal(t.requests.length,0);
 });
-test('resume progress, duration and seek use the same original timeline as the Rust player',async()=>{
+test('cropped MP3 resume progress, duration and seek add only the audio stream offset',async()=>{
  const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
  const item={...t.item,RunTimeTicks:3600*10000000,UserData:{PlaybackPositionTicks:1800*10000000}};
  t.video.duration=1800;await t.ui.play(item);t.video.currentTime=12;
@@ -299,4 +299,28 @@ test('local music exposes local search even when a server account is connected',
  assert(descendants(t.root).some(element=>element.tagName==='INPUT'&&element.attributes['aria-label']==='Search music on this device'));
  const before=t.requests.length;t.ui.state.localQuery='local';t.ui.state.route={kind:'local_search'};await t.ui.loadRoute();
  assert.equal(t.requests.length,before);await t.ui.signOut();
+});
+
+test('forced MP3 HTTP leases use native audio even when HLS and MSE are unavailable',async()=>{
+ const t=setup({nativeHls:false});await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.play(t.item);assert.equal(t.ui.state.player.mode,'https');assert.equal(t.ui.state.player.hls,undefined);
+ assert.equal(t.context.document.head.children.length,0);assert.equal(t.video.paused,false);await t.ui.signOut();
+ const unsupported=setup({nativeHls:false,audioPlayable:false});await unsupported.ui.connect('https://bluefin.test');await unsupported.ui.signIn('Listener','example-password',false);
+ const before=unsupported.requests.length;await assert.rejects(unsupported.ui.play(unsupported.item),/MP3 audio/);
+ assert.equal(unsupported.requests.length,before);assert.equal(unsupported.video.src,'');
+});
+
+test('full HLS video seeks to the bookmark and never reports a doubled or premature zero position',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const item={...t.item,Type:'Movie',RunTimeTicks:3600*10000000,UserData:{PlaybackPositionTicks:1800*10000000}};
+ t.video.duration=3600;await t.ui.play(item);
+ assert.equal(t.ui.state.player.offset,0);
+ assert(!t.requests.some(request=>request.url.endsWith('/Sessions/Playing')));
+ t.video.listeners.loadedmetadata();assert.equal(t.video.currentTime,1800);
+ t.video.currentTime=1812;await t.ui.reportProgress('progress');
+ const body=JSON.parse(t.requests.findLast(request=>request.url.endsWith('/Sessions/Playing/Progress')).options.body);
+ assert.equal(body.PositionTicks,1812*10000000);
+ assert.equal(t.ui.playbackTimeline().duration,3600);assert.equal(t.ui.playbackTimeline().minimum,0);
+ t.ui.seekPlayback(1700);assert.equal(t.video.currentTime,1700);
+ await t.ui.signOut();
 });
