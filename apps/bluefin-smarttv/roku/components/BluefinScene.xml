@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <component name="BluefinScene" extends="Scene"><script type="text/brightscript" uri="BluefinScene.brs"/><children>
-<Label id="brand" text="BLUEFIN TV" translation="[70,40]" width="1100" height="55" color="0xADB5D1FF"><Font role="font" size="32"/></Label>
+<Label id="brand" text="Bluefin" translation="[70,40]" width="1100" height="55" color="0xADB5D1FF"><Font role="font" size="32"/></Label>
+<LabelList id="categories" translation="[45,130]" itemSize="[240,56]" numRows="6" visible="false"/>
+<LabelList id="utilities" translation="[45,500]" itemSize="[240,46]" numRows="3" visible="false"/>
 <Label id="title" text="Bluefin" color="0xCCD0D3FF" translation="[70,115]" width="1130" height="80"><Font role="font" size="38"/></Label>
 <LabelList id="list" translation="[70,215]" itemSize="[1120,64]" numRows="6"/><Label id="status" text="" color="0xA3ACB1FF" translation="[70,650]" width="1130" height="55" wrap="true"/>
 <Poster id="accountQr" translation="[860,240]" width="280" height="280" visible="false"/><Timer id="accountPoll" duration="3" repeat="true"/>

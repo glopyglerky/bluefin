@@ -1,13 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {Session} from './session.mjs';
+import {Session,mergeSearchPage} from './session.mjs';
 const id = '1'.repeat(32), g = 'a'.repeat(64);
 const lease = {version:1,mediaUrl:`/Bluefin/TV/v1/media/${g}/0`,releaseUrl:`/Bluefin/TV/v1/leases/${g}`,playSessionId:'synthetic-session'};
 const response = (body, status=200) => new Response(status===204 ? null : JSON.stringify(body),{status});
 function fixture(overrides = {}) {
   const calls = [];
   const s = new Session('https://fixture.invalid','synthetic_device_0001', async (url,options) => {
-    const path = new URL(url).pathname; calls.push({path,...options});
+    const path = new URL(url).pathname; calls.push({path,url,...options});
     if (overrides[path]) return overrides[path](options);
     if (path === '/Users/AuthenticateByName') return response({AccessToken:'synthetic_token',User:{Id:id}});
     if (path === '/Bluefin/TV/v1') return response({version:1,mediaLease:true});
@@ -64,4 +64,46 @@ test('account queue uses compare-and-swap and source-track admission is explicit
 test('hostile account queues fail before item fetch',async () => {
   const {s} = fixture({'/Bluefin/Music/Queue':() => response({revision:1,queue:{itemIds:['https://foreign.invalid/']}})});
   await s.signIn('v','p');await assert.rejects(s.loadQueue());
+});
+
+test('Vega scoped metadata search preserves all refinements at the requested server cursor',async()=>{
+ const {s,calls}=fixture();await s.signIn('viewer','password');
+ const filters={scope:'tvShows',studioID:'2'.repeat(32),tag:'Service: Acme+',collectionID:'3'.repeat(32)};
+ await s.search('ocean',filters,60);const request=calls.at(-1),query=new URL(request.url).searchParams;
+ assert.equal(query.get('IncludeItemTypes'),'Series,Season,Episode');assert.equal(query.get('StudioIds'),'2'.repeat(32));
+ assert.equal(query.get('Tags'),'Service: Acme+');assert.equal(query.get('ParentId'),'3'.repeat(32));assert.equal(query.get('StartIndex'),'60');
+});
+test('Vega broad search has server music artists, channels and programmes',async()=>{
+ const {s,calls}=fixture();await s.signIn('viewer','password');
+ for(const lane of ['library','artists','programmes','channels'])await s.search('ocean',{scope:'all'},0,lane);
+ assert(calls.some(c=>c.path==='/Artists'));assert(calls.some(c=>c.path==='/LiveTv/Programs'));assert(calls.some(c=>c.path==='/LiveTv/Channels'));
+ assert(!new URL(calls.find(c=>c.path==='/Items').url).searchParams.has('IncludeItemTypes'));
+});
+test('Vega Home uses only 404 to fall back to existing account recommendations',async()=>{
+ for(const status of [200,404,403]){
+  const {s,calls}=fixture({'/Bluefin/Home/Recommendations':()=>response(status===200?{recommendations:[]}: {},status),
+   '/Movies/Recommendations':()=>response([])});
+  await s.signIn('v','p');await s.home();
+  assert.equal(calls.filter(c=>c.path==='/Movies/Recommendations').length,status===404?1:0);
+ }
+});
+test('Vega catalogue discards results completed after logout',async()=>{
+ let deliver,started;const ready=new Promise(resolve=>started=resolve);
+ const {s}=fixture({'/Items':()=>{started();return new Promise(resolve=>deliver=resolve);}});
+ await s.signIn('v','p');const pending=s.search('old',{scope:'movies'});await ready;await s.logout();
+ deliver(response({Items:[{Id:id,Name:'private title'}]}));await assert.rejects(pending,/account|cancelled/i);
+});
+
+test('Vega cursor consumes source rows while merging duplicate IDs and stops on empty pages',()=>{
+ let page=mergeSearchPage({lane:'library',items:[],next:0},{Items:[{Id:id},{Id:id}],TotalRecordCount:5});
+ assert.equal(page.items.length,1);assert.equal(page.next,2);
+ page=mergeSearchPage(page,{Items:[{Id:id},{Id:'2'.repeat(32)}],TotalRecordCount:5});
+ assert.equal(page.items.length,2);assert.equal(page.next,4);
+ page=mergeSearchPage(page,{Items:[],TotalRecordCount:5});assert.equal(page.next,page.total);
+});
+test('Vega partial facet aggregation cannot outlive its account',async()=>{
+ let deliver,started;const ready=new Promise(resolve=>started=resolve);
+ const {s}=fixture({'/Items/Filters2':()=>{started();return new Promise(resolve=>deliver=resolve);}});
+ await s.signIn('v','p');const pending=s.searchFacets();await ready;await s.logout();deliver(response({Tags:['private group']}));
+ await assert.rejects(pending,/account|refinements/i);
 });

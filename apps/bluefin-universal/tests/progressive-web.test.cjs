@@ -20,7 +20,7 @@ class Element{
  get textContent(){return this.text+this.children.map(c=>c.textContent||'').join(' ');}
 }
 function browserFailure(message){return Object.assign(Error(message),{bluefinBrowserCapability:true});}
-function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false,cookieStatus=200,cookieMalformed=false,cookieCreateStatus=200,tvAdvertisement=true,nativeHls=true,audioPlayable=true,launchCode='',engine}={}){
+function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false,cookieStatus=200,cookieMalformed=false,cookieCreateStatus=200,tvAdvertisement=true,nativeHls=true,audioPlayable=true,launchCode='',engine,apiResponse}={}){
  const root=new Element('div'),video=new Element('video'),labels=new Map(),events={},requests=[],pending={};
  Object.assign(video,{paused:true,duration:60,currentTime:0,src:'',
   pause(){this.paused=true;},load(){},play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},canPlayType(type){return (type==='audio/mpeg'?audioPlayable:nativeHls)?'probably':'';}});
@@ -32,6 +32,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  const user='11111111111141118111111111111111',item={Id:'22222222222242228222222222222222',Name:'Original test tone',Type:'Audio'};
  const fetch=async(url,options={})=>{
   const u=new URL(url);requests.push({url:u.href,options});
+  const custom=await apiResponse?.(u,options);if(custom!==undefined)return custom;
   let body;
   if(u.pathname==='/Bluefin/Web/v1'&&cookieStatus!==200)return new Response('{}',{status:cookieStatus});
   if(u.pathname==='/Bluefin/Web/v1/leases'&&cookieCreateStatus!==200)return new Response('{}',{status:cookieCreateStatus});
@@ -40,6 +41,8 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
   if(u.pathname==='/System/Info/Public')body={ServerName:'Bluefin'};
   else if(u.pathname==='/Bluefin/Accounts/Options')body={passkeys:true,quickConnect:true};
   else if(u.pathname==='/Users/AuthenticateByName')body={AccessToken:'synthetic-private-bearer',User:{Id:user,Name:'Listener'}};
+  else if(u.pathname==='/Bluefin/Home/Recommendations')return new Response('{}',{status:404});
+  else if(u.pathname==='/Movies/Recommendations')body=[];
   else if(u.pathname==='/Bluefin/Capabilities')body={protocolVersion:1,viewer:{userId:user}};
   else if(u.pathname==='/Bluefin/Accounts/Mesh/Invite')body={singleUse:true,intent:'login',code:'MC1-INVITATION',webLink:'https://bluefin.test/web/bluefin/#bluefin-connect=MC1-INVITATION',pngBase64:'iVBORw0KGgo=',handle:'a'.repeat(64)};
   else if(u.pathname==='/Bluefin/Web/v1')body={version:cookieMalformed?99:1,cookieMediaLease:true,expiresInSeconds:300,maxSessionSeconds:7200,idleSeconds:90};
@@ -69,7 +72,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  Object.defineProperty(context,'localStorage',{get(){throw Error('Default view touched localStorage');}});
  Object.defineProperty(context,'sessionStorage',{get(){throw Error('Default view touched sessionStorage');}});
  vm.runInContext(source('local-music.js'),context);
- const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,importInvitationImage:readInvitationImage};})();');
+ const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,startSearch,openSearch,searchCall,loadMoreSearch,loadSearchFacets,recordHomeSearch,clearHomeSearchHistory,importInvitationImage:readInvitationImage};})();');
  vm.runInContext(script,context);
  return {context,ui:context.contract,root,video,requests,events,item,pending};
 }
@@ -555,4 +558,92 @@ test('the passkey adapter rejects wrong-origin requests and unsupported kind ali
   {kind:'registration',origin:'https://other.test',publicKey:{}}
  ])await assert.rejects(t.context.passkeyAdapter(JSON.stringify(options)),/paired server passkey page/);
  assert.equal(t.calls.length,0);
+});
+
+const jsonReply=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
+test('moonlit six primary categories keep utilities outside the category bar',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);t.ui.render();
+ const nav=findElement(t.root,e=>e.tagName==='NAV');
+ assert.deepEqual(nav.children.filter(e=>e.tagName==='BUTTON').map(e=>e.textContent.trim()),
+  ['Home','Sports','TV Shows','Movies','Live TV','Music']);
+ await t.ui.navigate('Movies');
+ assert(t.requests.some(r=>new URL(r.url).searchParams.get('IncludeItemTypes')==='Movie'));
+ await t.ui.navigate('TV Shows');
+ assert(t.requests.some(r=>new URL(r.url).searchParams.get('IncludeItemTypes')==='Series'));
+ await t.ui.openSearch();assert.equal(t.ui.state.route.filters.scope,'all');assert.equal(t.ui.state.tab,'TV Shows');
+ t.ui.render();assert(findElement(t.root,e=>e.attributes['aria-label']==='Collections'));
+});
+test('moonlit refined search sends exact server filters again after duplicate rows',async()=>{
+ const studio='44444444444444448444444444444444',collection='55555555555545558555555555555555';
+ const a={Id:'66666666666646668666666666666666',Type:'Movie',Name:'First title'},b={Id:'77777777777747778777777777777777',Type:'Movie',Name:'Next title'};
+ const t=setup({apiResponse:(u)=>{
+  if(u.searchParams.get('SearchTerm')==='ocean'&&u.pathname.endsWith('/Items')){
+   const start=Number(u.searchParams.get('StartIndex')||0);
+   return jsonReply({Items:start===0?[a,a]:start===2?[b]:[],TotalRecordCount:3});
+  }
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.startSearch('ocean',{scope:'movies',studioID:studio,tag:'Service: Acme+',collectionID:collection});
+ assert.deepEqual(Array.from(t.ui.state.search.pages[0].items,x=>x.Id),[a.Id]);
+ await t.ui.loadMoreSearch('library');
+ assert.deepEqual(Array.from(t.ui.state.search.pages[0].items,x=>x.Id),[a.Id,b.Id]);
+ const searched=t.requests.filter(r=>new URL(r.url).searchParams.get('SearchTerm')==='ocean');
+ assert.equal(searched.length,2);
+ for(const r of searched){const q=new URL(r.url).searchParams;assert.equal(q.get('StudioIds'),studio);assert.equal(q.get('Tags'),'Service: Acme+');assert.equal(q.get('ParentId'),collection);assert.equal(q.get('IncludeItemTypes'),'Movie');}
+ assert.equal(new URL(searched[1].url).searchParams.get('StartIndex'),'2');
+});
+test('moonlit home uses genuine recommendation rows and only 404 selects legacy fallback',async()=>{
+ const title={Id:'66666666666646668666666666666666',Type:'Movie',Name:'From this account'};
+ for(const status of [200,404,403]){
+  const t=setup({apiResponse:u=>{
+   if(u.pathname==='/Bluefin/Home/Recommendations')return jsonReply(status===200?{recommendations:[{id:'liked:one',title:'Because you like a favorite',reason:'liked',items:[title]}],searchHistorySupported:true,searchHistoryGeneration:0}:{},status);
+   if(u.pathname==='/Movies/Recommendations')return jsonReply([{RecommendationType:'SimilarToLikedItem',BaselineItemName:'Favorite movie',Items:[title]}]);
+  }});
+  await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+  const legacy=t.requests.filter(r=>new URL(r.url).pathname==='/Movies/Recommendations');
+  assert.equal(legacy.length,status===404?1:0);
+  assert.equal(t.ui.state.shelves.some(s=>s.items.some(i=>i.Id===title.Id)),status!==403);
+  if(status===200){assert.equal(t.ui.state.featured.Id,title.Id);assert.equal(t.ui.state.homeHistory.generation,0);}
+ }
+});
+test('moonlit search cancellation discards a delayed former route response',async()=>{
+ let finish,heldSignal;
+ const t=setup({apiResponse:async(u,o)=>{
+  if(u.searchParams.get('SearchTerm')==='old'&&u.pathname.endsWith('/Items')){
+   heldSignal=o.signal;await new Promise(r=>finish=r);
+   return jsonReply({Items:[{Id:'66666666666646668666666666666666',Type:'Movie',Name:'Private old result'}],TotalRecordCount:1});
+  }
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const pending=t.ui.startSearch('old',{scope:'movies'});await until(()=>finish);
+ const next=t.ui.navigate('Music');assert.equal(heldSignal.aborted,true);
+ finish();await Promise.all([pending,next]);t.ui.render();
+ assert.equal(t.ui.state.route.kind,'music');assert(!t.root.textContent.includes('Private old result'));
+});
+test('moonlit all media includes server artists channels and programmes',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.startSearch('match',{scope:'all'});
+ const searched=t.requests.filter(r=>new URL(r.url).searchParams.get('SearchTerm')==='match');
+ assert(searched.some(r=>new URL(r.url).pathname==='/Artists'));
+ assert(searched.some(r=>new URL(r.url).pathname==='/LiveTv/Channels'));
+ assert(searched.some(r=>new URL(r.url).pathname==='/LiveTv/Programs'));
+ assert.equal(t.requests.filter(r=>new URL(r.url).pathname==='/Bluefin/Home/Searches').length,0);
+});
+
+test('moonlit explicit search history uses the current account revision and survives a stale write rejection',async()=>{
+ let rejectOld;
+ const t=setup({apiResponse:async(u,o)=>{
+  if(u.pathname==='/Bluefin/Home/Recommendations')return jsonReply({recommendations:[],searchHistorySupported:true,searchHistoryGeneration:3});
+  if(u.pathname==='/Bluefin/Home/Searches'){
+   if(o.method==='DELETE')return jsonReply({generation:4});
+   await new Promise(resolve=>rejectOld=resolve);return jsonReply({},409);
+  }
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const pending=t.ui.recordHomeSearch('ocean');await until(()=>rejectOld);
+ const write=t.requests.find(r=>new URL(r.url).pathname==='/Bluefin/Home/Searches'&&r.options.method==='POST');
+ const payload=JSON.parse(write.options.body);
+ assert.equal(payload.query,'ocean');assert.equal(payload.generation,3);assert(!('userId' in payload));assert(payload.eventId);
+ await t.ui.clearHomeSearchHistory();rejectOld();await pending;
+ assert.equal(t.ui.state.homeHistory.generation,4);
 });

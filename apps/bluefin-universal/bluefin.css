@@ -30,3 +30,39 @@ body.video-playing #media-status:not(:empty){position:fixed;z-index:26;top:calc(
 .brand-mark .brand-fin{fill:var(--text);stroke:none}
 .brand-mark .brand-waves{fill:none;stroke:var(--brand);stroke-width:20;stroke-linecap:round}
 @media(forced-colors:active){body{background:Canvas;color:CanvasText}.brand-mark .brand-fin{fill:CanvasText}.brand-mark .brand-waves{stroke:CanvasText}:focus-visible{outline-color:Highlight}.tabbar,.group,.sheet,.capability-dialog{background:Canvas;color:CanvasText}button,input,select,textarea{border-color:ButtonText}button.primary{background:ButtonFace;color:ButtonText;border-color:ButtonText}a,.source-links{color:LinkText}}
+
+/* Shared categories and artwork overlays follow the native Bluefin presentation. */
+:root{--nav-height:72px}
+.utility-actions{display:flex;align-items:center;gap:4px}
+.utility-actions button{min-width:44px;min-height:44px}
+.tabbar{min-height:calc(var(--nav-height) + env(safe-area-inset-bottom))}
+.tabbar button{min-height:58px;white-space:normal}
+.tabbar button[aria-current=page]{background:var(--tint);border-radius:10px}
+.nav-brand{display:none}
+.mini-player{bottom:calc(var(--nav-height) + env(safe-area-inset-bottom))}
+.poster{position:relative;border-radius:12px;overflow:hidden;color:#fff}
+.poster .artwork{border-radius:12px;min-height:0}
+.poster-copy{position:absolute;inset:auto 0 0;display:block;padding:36px 12px 12px;background:linear-gradient(transparent,rgba(6,23,39,.94))}
+.poster-copy strong{color:#fff;margin:0;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.poster-copy small{color:#e1e4e8;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+.poster-progress{display:block;height:4px;border-radius:8px;margin-top:9px;background:#ccd0d355;overflow:hidden}
+.poster-progress>span{display:block;height:100%;background:#adb5d1;border-radius:inherit}
+.hero{background:linear-gradient(180deg,rgba(6,23,39,.05),rgba(6,23,39,.9)),var(--secondary)}
+.hero-copy{width:min(100%,680px)}
+.hero h2{font-size:clamp(1.5rem,3.2vw,2.5rem)}
+.hero .actions>*{flex:0 1 auto}
+.hero .actions button{display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.hero-secondary{background:#06172766;border-color:#ccd0d388;color:#fff}
+.search-tools{display:flex;align-items:flex-end;gap:16px;margin-bottom:20px}
+.search-tools>div{flex:1;max-width:400px}
+.search-refinements{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px}
+.search-results{margin-block:28px}
+.search-results>.catalog-grid{margin-bottom:20px}
+.sports-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:20px}
+.sports-card{padding:22px;background:var(--secondary);border:1px solid var(--line);border-radius:16px}
+.sports-card h2{margin-block:10px 20px}
+.score-row{display:flex;justify-content:space-between;gap:24px;margin:8px 0}
+.score-row strong{font-variant-numeric:tabular-nums}
+@media(min-width:760px){.nav-brand{display:flex;align-items:center;gap:12px;margin:4px 12px 28px;font-size:24px}.nav-brand svg{width:38px;height:38px}.tabbar{min-height:0}.tabbar button{min-height:48px}.mini-player{bottom:0}.hero .actions{margin-top:22px}}
+@media(max-width:400px){.app-main{padding-left:16px;padding-right:16px}.toolbar h1{font-size:28px}.hero{padding:18px}.hero .actions{gap:8px}.hero .actions button{padding-inline:12px}.search-tools{flex-wrap:wrap}.search-tools>div{min-width:160px}}
+@media(forced-colors:active){.poster-copy{background:Canvas;color:CanvasText}.poster-copy strong,.poster-copy small{color:CanvasText}.poster-progress>span{background:Highlight}.hero-secondary{background:ButtonFace;color:ButtonText;border-color:ButtonText}}

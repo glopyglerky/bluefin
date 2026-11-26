@@ -45,3 +45,22 @@ button { min-width: 0; }
 #now.show-controls .playbar { opacity: 1; pointer-events: auto; }
 body.playing #status { visibility: hidden; }
 @media (prefers-reduced-motion: reduce) { #now .playbar { transition: none; } }
+
+.brand{display:flex;align-items:center;gap:16px;letter-spacing:-.5px;font-size:34px}
+.brand svg{width:45px;height:45px}
+.brand-fin{fill:var(--text)}.brand-waves{fill:none;stroke:#8289a5;stroke-width:20;stroke-linecap:round}
+.utilities{display:flex;gap:12px;margin-left:auto;flex-wrap:wrap}
+.hero{min-height:360px;padding:36px;border:1px solid var(--line);border-radius:20px;background-color:var(--panel);background-size:cover;background-position:center;display:flex;flex-direction:column;justify-content:flex-end;color:#fff;margin-bottom:36px;background-image:linear-gradient(180deg,transparent,rgba(6,23,39,.92))}
+.hero h1{font-size:clamp(32px,4vw,60px);max-width:900px;margin-top:10px}
+.hero small{letter-spacing:2px}
+.hero button:not(.primary){background:#06172777;color:#fff;border-color:#ccd0d388}
+.shelf{margin:34px 0}.shelf .grid{display:flex;overflow:auto;padding:8px;gap:18px}.shelf .tile{flex:0 0 200px}
+.tile.poster{position:relative;height:300px;padding:0;overflow:hidden;border-radius:14px;background-size:cover;background-position:center}
+.poster-copy{position:absolute;bottom:0;left:0;right:0;padding:40px 18px 18px;background:linear-gradient(transparent,rgba(6,23,39,.94))}
+.poster-copy strong{font-size:23px;color:#fff;display:block}.poster-copy small{display:block;color:#ccd0d3;margin-top:8px}
+.poster-copy progress{width:100%;height:5px;accent-color:#adb5d1}
+.filters{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:26px}.filters label{flex:1;min-width:170px}
+select{font:inherit;color:var(--text);background:var(--panel);padding:15px;border:2px solid var(--control-line);border-radius:8px;width:100%;min-height:60px;margin-top:8px}
+select:focus{outline:4px solid var(--accent);outline-offset:4px}
+.sports-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px;margin:20px 0}
+@media(forced-colors:active){.poster-copy{background:Canvas}.poster-copy strong,.poster-copy small{color:CanvasText}}
