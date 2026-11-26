@@ -136,7 +136,10 @@ private struct LocalAssistanceSelection {
             let response = try await session.respond(
                 to: request.prompt,
                 generating: LocalAssistanceSelection.self,
-                options: GenerationOptions(temperature: 0.0, maximumResponseTokens: request.maximum_response_tokens)
+                // Greedy output is repeatable only for the same prompt, session
+                // state, and exact model version. Rust still checks every ID,
+                // ticket, candidate, budget, and result before presentation.
+                options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: request.maximum_response_tokens)
             )
             try Task.checkCancellation()
             guard !permit.cancellationRequested,
