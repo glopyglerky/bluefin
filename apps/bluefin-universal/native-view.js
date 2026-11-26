@@ -298,17 +298,19 @@ async function continueMesh(){
 function closeSheet(){if(state.sheet==='invite')state.pairingView++;state.capability=null;state.sheet=null;state.expanded=false;state.invitation=null;clearTimeout(state.inviteTimer);render();}
 
 function showCapability(error,retry,beforeBegin=false,mediaOnly=false) {
+  if(pageRetired)return;
   state.capability={reason:String(error.message||error),retry,beforeBegin,mediaOnly};
   state.error='';
 }
 async function meshEngine(retry,beforeBegin=false,mediaOnly=false,view=state.pairingView) {
-  const epoch=state.epoch;
-  try {return await runtime().engine();}
+  const epoch=state.epoch;assertLive(epoch);let engine;
+  try {engine=await runtime().engine();}
   catch(error) {
     if(!pageRetired&&epoch===state.epoch&&view===state.pairingView&&error.bluefinBrowserCapability)
       showCapability(error,retry,beforeBegin,mediaOnly);
     throw error;
   }
+  assertLive(epoch);return engine;
 }
 function validInvitation(code=state.code) {
   return typeof code==='string'&&/^MC1-[A-Z0-9-]+$/i.test(code)&&code.length<=2048;

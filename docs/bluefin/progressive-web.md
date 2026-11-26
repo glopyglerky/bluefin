@@ -134,8 +134,10 @@ message to leave Remember off for a temporary device. Failed database-open
 attempts can be retried after access changes. Neither failure silently changes
 the selected security or durability semantics.
 
-Page retirement fences local operations, closes media and starts best-effort
-remote revocation for temporary connected devices. JavaScript engines may stop
+Page retirement fences local operations, including a still-loading optional
+engine, closes media and starts best-effort remote revocation for temporary
+connected devices. Late capability or pairing replies cannot restore the
+cleared view. JavaScript engines may stop
 before a network acknowledgement arrives. The UI therefore tells users to use
 Sign out for an acknowledged remote revoke, and does not describe tab closure as
 a globally confirmed revoke. Temporary private keys disappear with the page;

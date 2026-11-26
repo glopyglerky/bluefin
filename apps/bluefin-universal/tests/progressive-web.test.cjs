@@ -463,3 +463,36 @@ test('unsupported HTTPS live TV does not allocate a lease or stop current librar
  assert.equal(t.requests.length,before);assert.equal(t.video.src,source);assert.equal(t.ui.state.player,player);
  await t.ui.signOut();
 });
+
+test('page retirement during optional startup prevents the later engine from claiming an invitation',async()=>{
+ let resolveEngine;const engine=new Promise(resolve=>{resolveEngine=resolve;});let claims=0;
+ const t=setup({launchCode:'MC1-EXAMPLE',engine:()=>engine});
+ const pending=t.ui.beginMesh('MC1-EXAMPLE','',false);
+ const cancelled=assert.rejects(pending,/page or account changed/);
+ t.events.pagehide();
+ resolveEngine({webMeshBegin:async()=>{claims++;return JSON.stringify({kind:'pairing'});}});
+ await cancelled;
+ assert.equal(claims,0);assert.equal(t.requests.length,0);
+ assert.equal(t.ui.state.code,'');assert.equal(t.ui.state.capability,null);
+ assert.equal(t.ui.state.session,null);
+});
+test('a late capability rejection cannot reopen its dialog after page retirement',async()=>{
+ let rejectEngine;const engine=new Promise((_resolve,reject)=>{rejectEngine=reject;});
+ const t=setup({launchCode:'MC1-EXAMPLE',engine:()=>engine});
+ const pending=t.ui.beginMesh('MC1-EXAMPLE','',false);
+ const rejected=assert.rejects(pending,/Late engine failure/);
+ t.events.pagehide();rejectEngine(browserFailure('Late engine failure'));await rejected;
+ assert.equal(t.ui.state.capability,null);assert.equal(t.ui.state.code,'');
+ assert.equal(t.requests.length,0);
+});
+test('a Begin reply arriving after page retirement cannot restore the cleared pairing view',async()=>{
+ let resolveBegin,started;const startedPromise=new Promise(resolve=>{started=resolve;});
+ const reply=new Promise(resolve=>{resolveBegin=resolve;});
+ const t=setup({engine:async()=>({webMeshBegin:()=>{started();return reply;}})});
+ const pending=t.ui.beginMesh('MC1-EXAMPLE','',false);
+ const cancelled=assert.rejects(pending,/page or account changed/);
+ await startedPromise;t.events.pagehide();
+ resolveBegin(JSON.stringify({kind:'pairing',needsBeginRetry:false}));await cancelled;
+ assert.equal(t.ui.state.pairing,null);assert.equal(t.ui.state.session,null);
+ assert.equal(t.ui.state.code,'');assert.equal(t.requests.length,0);
+});
