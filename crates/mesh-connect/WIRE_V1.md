@@ -88,3 +88,27 @@ Native passkeys require an application-associated relying-party domain. An impor
 This Bluefin crate retains the existing GPL-3.0-only license. It contains newly authored neutral transport/codec source, with no private application source imports. Other implementations can use this explicit protocol description and synthetic fixture to verify compatibility while retaining their own source/license boundaries.
 
 The inner TLS provider is rustls-provider-rustcrypto-pq 0.1.1, public upstream ctf16/rustls-provider-rustcrypto-pq at ca7acfa4d980ef70a2f3ed3eac52ae198e656609. Primitive signing uses RustCrypto ml-dsa 0.1.1. Both must be admitted and qualified by the existing build/security process; no production rollout is implied by this source change. Outer iroh currently uses its existing ring transport provider. The strict inner profile, rather than the outer endpoint key, authenticates protected application traffic.
+
+## Bluefin session revocation extension
+
+Inside a fresh authenticated PQ channel, send an envelope with version 1 and a
+body containing type `revoke_session`, the 64-character `session_id`, a random
+32-byte `request_id`, and the current connection's 32-byte exporter `binding`.
+
+Persist the request identifier before sending. After a lost response, reuse that
+identifier, the session identifier, and the protected device key. A new
+connection supplies its fresh binding. The response has version 1 and body type
+`session_revoked`, with the matching session and request identifiers.
+
+The account owner commits terminal revocation and one immutable receipt in its
+existing database. Existing SQL triggers remove the server-only bearer in that
+transaction and prohibit reminting. Exact retries recover the retained result;
+a different request identifier for the recorded revocation is refused. The
+owner retries remaining live-session cleanup before acknowledging.
+
+Local UI logout can happen immediately. An uncertain remote result retains
+protected recovery material until the operation succeeds or the user explicitly
+discards it. A public session descriptor cannot revoke authority. The original
+device may revoke an expired or disabled account's session because it only
+removes its own access. This Bluefin extension does not change generic Node
+onboarding requests.

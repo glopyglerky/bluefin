@@ -433,8 +433,9 @@ async fn invite_status(State(state):State<AppState>,RequireAuth(auth):RequireAut
     let row=sqlx::query("SELECT State,Expires,UserId,Epoch FROM BluefinMeshInvites WHERE Id=?")
         .bind(bytes).fetch_optional(service.db.pool()).await.map_err(storage)?.ok_or_else(failed)?;
     let bound:Option<String>=row.get("UserId");
-    let own=auth.user.as_ref().map(|user|user.id.as_str());
-    if !is_administrator_identity(&state,&auth).await? && bound.as_deref()!=own {return Err(failed());}
+    let bound=bound.as_deref().map(Uuid::parse_str).transpose().map_err(|_|failed())?;
+    let own=auth.user.as_ref().and_then(|user|Uuid::parse_str(&user.id).ok());
+    if !is_administrator_identity(&state,&auth).await? && (own.is_none() || bound!=own) {return Err(failed());}
     let stored:String=row.get("State");let expires:i64=row.get("Expires");
     let status=if matches!(stored.as_str(),"claimed"|"consumed") {"used"} else if stored=="revoked" || expires<=now()
         || row.get::<Vec<u8>,_>("Epoch")!=service.epoch {"expired"} else {"issued"};
@@ -454,3 +455,6 @@ mod tests;
 
 #[path = "bluefin_mesh_web.rs"]
 mod web;
+
+#[path = "bluefin_mesh_revocation.rs"]
+mod revocation;

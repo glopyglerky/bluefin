@@ -41,9 +41,14 @@ impl RelayPolicy{
         Ok(Self{allowed})
     }
     pub fn direct_only()->Self{Self::default()}
-    fn require(&self,address:&ServerAddress)->Result<()>{
-        if address.relay_urls.iter().any(|u|!self.allowed.contains(u)){return Err(Error::RelayNotAllowed);}
-        Ok(())
+    fn permitted_routes(&self,address:&ServerAddress)->Result<ServerAddress>{
+        address.validate()?;
+        let mut permitted=address.clone();
+        permitted.relay_urls.retain(|url|self.allowed.contains(url));
+        if permitted.direct_addresses.is_empty() && permitted.relay_urls.is_empty(){
+            return Err(Error::RelayNotAllowed);
+        }
+        Ok(permitted)
     }
     fn mode(&self)->Result<RelayMode>{
         if self.allowed.is_empty(){return Ok(RelayMode::Disabled);}
@@ -144,7 +149,7 @@ impl PqcEndpoint{
         self.connect_server(&invite.server_address()).await
     }
     pub async fn connect_server(&self,address:&ServerAddress)->Result<PqcConnection>{
-        address.validate()?;self.relay_policy.require(address)?;
+        let address=self.relay_policy.permitted_routes(address)?;
         let id=EndpointId::from_bytes(&address.endpoint_id).map_err(|_|Error::InvalidIdentity)?;
         let mut peer=EndpointAddr::new(id);
         for addr in &address.direct_addresses{peer=peer.with_ip_addr(*addr);}

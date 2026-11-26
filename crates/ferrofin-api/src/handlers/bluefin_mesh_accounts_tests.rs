@@ -245,6 +245,30 @@ async fn mesh_transport_real_pq_passkey_owner_router_and_no_portable_bearer(){
     other.send(&stolen).await.unwrap();
     assert!(other.receive::<Value>().await.is_err(),"a copied public session descriptor grants nothing");
     other.close().await;connection.close().await;
+    let mut revoking = client.connect_server(&address).await.unwrap();
+    let revoke_id = [77u8;32];
+    let revoke = json!({"version":1,"body":{"type":"revoke_session","session_id":session,
+        "request_id":revoke_id,"binding":revoking.binding()}});
+    let mut wrong_revoke = revoke.clone();
+    let mut invalid = revoking.binding(); invalid[0] ^= 1;
+    wrong_revoke["body"]["binding"] = json!(invalid);
+    revoking.send(&wrong_revoke).await.unwrap();
+    assert!(revoking.receive::<Value>().await.is_err());
+    revoking.close().await;
+    let mut revoking = client.connect_server(&address).await.unwrap();
+    let mut revoke = revoke; revoke["body"]["binding"] = json!(revoking.binding());
+    revoking.send(&revoke).await.unwrap();
+    let revoked: Value = revoking.receive().await.unwrap();
+    assert_eq!(revoked["body"]["type"], "session_revoked");
+    assert_eq!(revoked["body"]["request_id"], json!(revoke_id));
+    assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM Devices WHERE DeviceId=?")
+        .bind(&device_id).fetch_one(f.db.pool()).await.unwrap(), 0);
+    revoking.close().await;
+    let mut retry = client.connect_server(&address).await.unwrap();
+    revoke["body"]["binding"] = json!(retry.binding());
+    retry.send(&revoke).await.unwrap();
+    assert_eq!(retry.receive::<Value>().await.unwrap(), revoked);
+    retry.close().await;
     client.close().await;thief.close().await;
     stop.send(true).unwrap();let receipt=listener.await.unwrap().unwrap();
     assert!(receipt.endpoint_closed);assert!(receipt.joined_connections>=2);
@@ -285,4 +309,81 @@ async fn mesh_signup_uses_current_approval_policy_at_finish(){
     let completed=f.service.handle(&f.state,&device.public_key(),request).await.unwrap();
     assert_eq!(completed["body"]["session"]["state"],"pending");
     assert!(f.state.users.get_user_by_name("policyviewer").await.unwrap().is_none());
+}
+
+async fn signed_in_mesh_session(f: &Fixture, device: &DeviceIdentity) -> String {
+    let (user, mut authenticator) = f.login_account().await;
+    let start = begin(f, f.invite(InviteIntent::Login, Some(user)).await, device, 81, None).await;
+    let finish = finish_request(&start, device, 82, assertion(&mut authenticator, &start));
+    f.service.handle(&f.state, &device.public_key(), finish).await.unwrap()
+        ["body"]["session"]["id"].as_str().unwrap().to_owned()
+}
+
+async fn mesh_test_bearer(f: &Fixture, session: &str) {
+    let row = sqlx::query("SELECT UserId,DeviceId FROM BluefinMeshSessions WHERE Id=?")
+        .bind(session).fetch_one(f.db.pool()).await.unwrap();
+    let stamp = chrono::Utc::now().to_rfc3339();
+    sqlx::query("INSERT INTO Devices(AccessToken,AppName,AppVersion,DateCreated,DateLastActivity,DateModified,DeviceId,DeviceName,IsActive,UserId) VALUES(?,?,?,?,?,?,?,?,1,?)")
+        .bind("synthetic-revocation-bearer-only").bind("Bluefin").bind("1")
+        .bind(&stamp).bind(&stamp).bind(&stamp)
+        .bind(row.get::<String, _>("DeviceId")).bind("Revoke test")
+        .bind(row.get::<String, _>("UserId")).execute(f.db.writer()).await.unwrap();
+}
+
+#[tokio::test]
+async fn mesh_revoke_requires_original_device_and_retains_one_exact_receipt() {
+    let f = Fixture::new().await;
+    let device = DeviceIdentity::from_seed([71;32]).unwrap();
+    let session = signed_in_mesh_session(&f, &device).await;
+    let key = device.public_key();
+    let other = DeviceIdentity::from_seed([72;32]).unwrap().public_key();
+    assert!(f.service.revoke_session(&f.state, &other, &session, [83;32]).await.is_err());
+    let (first, retry) = tokio::join!(
+        f.service.revoke_session(&f.state, &key, &session, [83;32]),
+        f.service.revoke_session(&f.state, &key, &session, [83;32]),
+    );
+    let receipt = first.unwrap();
+    assert_eq!(receipt, retry.unwrap());
+    assert_eq!(receipt["body"]["type"], "session_revoked");
+    assert!(f.service.revoke_session(&f.state, &key, &session, [84;32]).await.is_err());
+    assert!(f.service.revoke_session(&f.state, &other, &session, [83;32]).await.is_err());
+    assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM BluefinMeshSessionRevocations")
+        .fetch_one(f.db.pool()).await.unwrap(), 1);
+    assert!(sqlx::query("UPDATE BluefinMeshSessions SET Revoked=0 WHERE Id=?")
+        .bind(&session).execute(f.db.writer()).await.is_err());
+    assert!(sqlx::query("UPDATE BluefinMeshSessionRevocations SET Response='{}' WHERE SessionId=?")
+        .bind(&session).execute(f.db.writer()).await.is_err());
+}
+
+#[tokio::test]
+async fn mesh_revoke_removes_internal_bearer_and_survives_owner_restart() {
+    let f = Fixture::new().await;
+    let device = DeviceIdentity::from_seed([73;32]).unwrap();
+    let session = signed_in_mesh_session(&f, &device).await;
+    mesh_test_bearer(&f, &session).await;
+    assert!(f.service.authorization(&f.state, &device.public_key(), &session, "test").await.is_ok());
+    let response = f.service.revoke_session(&f.state, &device.public_key(), &session, [85;32]).await.unwrap();
+    assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM Devices")
+        .fetch_one(f.db.pool()).await.unwrap(), 0);
+    assert!(f.service.authorization(&f.state, &device.public_key(), &session, "test").await.is_err());
+    let restarted = Service::new(f.db.clone(), "https://accounts.example", address()).await.unwrap();
+    assert!(f.service.revoke_session(&f.state, &device.public_key(), &session, [85;32]).await.is_err());
+    assert_eq!(restarted.revoke_session(&f.state, &device.public_key(), &session, [85;32]).await.unwrap(), response);
+    assert!(restarted.authorization(&f.state, &device.public_key(), &session, "test").await.is_err());
+}
+
+#[tokio::test]
+async fn mesh_existing_bearer_deletion_terminally_revokes_the_device_grant() {
+    let f = Fixture::new().await;
+    let device = DeviceIdentity::from_seed([74;32]).unwrap();
+    let session = signed_in_mesh_session(&f, &device).await;
+    mesh_test_bearer(&f, &session).await;
+    // SessionManager.logout deletes this Devices row through its existing owner.
+    sqlx::query("DELETE FROM Devices WHERE AccessToken=?")
+        .bind("synthetic-revocation-bearer-only").execute(f.db.writer()).await.unwrap();
+    assert_eq!(sqlx::query_scalar::<_, i64>("SELECT Revoked FROM BluefinMeshSessions WHERE Id=?")
+        .bind(&session).fetch_one(f.db.pool()).await.unwrap(), 1);
+    assert!(f.service.authorization(&f.state, &device.public_key(), &session, "test").await.is_err());
+    // A later explicit request can retain its receipt after ordinary logout.
+    assert!(f.service.revoke_session(&f.state, &device.public_key(), &session, [86;32]).await.is_ok());
 }

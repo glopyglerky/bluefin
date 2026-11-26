@@ -63,6 +63,23 @@ struct HttpRequest {
     #[serde(default)] body:Vec<u8>,
 }
 
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevokeEnvelope { version: u16, body: RevokeSession }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevokeSession {
+    #[serde(rename = "type")]
+    _kind: RevokeKind,
+    session_id: String,
+    request_id: [u8; 32],
+    binding: [u8; 32],
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RevokeKind { RevokeSession }
+
 /// Joined listener receipt, emitted only after endpoint and tasks stop.
 #[derive(Debug)]
 pub struct Receipt {pub joined_connections:u64,pub endpoint_closed:bool}
@@ -109,7 +126,21 @@ async fn serve_connection(connection:&mut PqcConnection,state:AppState,app:Route
         require_network(&state)?;
         let request:Value=connection.receive().await.map_err(transport)?;
         let kind=request.get("body").and_then(|v|v.get("type")).and_then(Value::as_str);
-        if matches!(kind,Some("control"|"media")){
+        if kind == Some("revoke_session") {
+            let request: RevokeEnvelope = serde_json::from_value(request).map_err(|_| malformed())?;
+            if request.version != 1 || request.body.binding != connection.binding() {
+                return Err(denied());
+            }
+            let response = match service.revoke_session(
+                &state, &peer, &request.body.session_id, request.body.request_id,
+            ).await {
+                Ok(response) => response,
+                Err(error) => json!({"version":1,"body":{"type":"error",
+                    "request_id":request.body.request_id,
+                    "code":if matches!(error, ApiError::ServiceUnavailable(_)) {"retry_later"} else {"denied"}}}),
+            };
+            connection.send(&response).await.map_err(transport)?;
+        } else if matches!(kind,Some("control"|"media")){
             let request:ControlEnvelope=serde_json::from_value(request).map_err(|_|malformed())?;
             if request.version!=1 || request.body.binding!=connection.binding(){return Err(denied());}
             forward(connection,&state,&service,&peer,&origin,&app,request.body).await?;

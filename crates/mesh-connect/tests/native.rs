@@ -51,9 +51,10 @@ async fn wrong_pin_wrong_service_and_unapproved_relay_never_release_application_
     assert!(task.await.unwrap().is_err());
     address=server.server_address().unwrap();
     address.relay_urls=vec!["https://relay.example/".into()];
+    address.direct_addresses.clear();
     assert!(matches!(client.connect_server(&address).await,Err(Error::RelayNotAllowed)));
     assert!(RelayPolicy::allowlist(vec!["https://user@relay.example/".into()]).is_err());
-    address.relay_urls.clear();address.service="wrong/connect/1".into();
+    address=server.server_address().unwrap();address.service="wrong/connect/1".into();
     assert!(client.connect_server(&address).await.is_err());
     client.close().await;server.close().await;
 }
@@ -86,4 +87,27 @@ async fn stalled_peer_does_not_hold_the_incoming_accept_queue() {
     assert!(tokio::time::timeout(Duration::from_secs(5), stalled).await.unwrap().unwrap().is_err());
     client_connection.close().await; authenticated.close().await;
     raw.close().await; client.close().await; server.close().await;
+}
+
+#[tokio::test]
+async fn denied_relay_hints_preserve_a_verified_direct_connection() {
+    let server = PqcEndpoint::server(&DeviceIdentity::from_seed([51;32]).unwrap(),
+        "127.0.0.1:0".parse().unwrap(), vec![], "bluefin/connect/1").await.unwrap();
+    let mut address = server.server_address().unwrap();
+    address.relay_urls = vec!["https://not-admitted.invalid/".into()];
+    let accepting = server.clone();
+    let accepted = tokio::spawn(async move {
+        let mut connection = accepting.accept().await.unwrap();
+        let request: Value = connection.receive().await.unwrap();
+        assert_eq!(request["request"], "direct-only");
+        connection.send(&json!({"accepted":true})).await.unwrap();
+        connection
+    });
+    let client = PqcEndpoint::client(&DeviceIdentity::from_seed([52;32]).unwrap()).await.unwrap();
+    let mut connection = client.connect_server(&address).await.unwrap();
+    connection.send(&json!({"request":"direct-only"})).await.unwrap();
+    assert_eq!(connection.receive::<Value>().await.unwrap()["accepted"], true);
+    let mut remote = accepted.await.unwrap();
+    connection.close().await; remote.close().await;
+    client.close().await; server.close().await;
 }
