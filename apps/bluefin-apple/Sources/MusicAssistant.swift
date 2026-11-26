@@ -499,7 +499,13 @@ struct MusicAssistantView: View {
                     if model.info?.capabilities.stop == true {
                         Button { model.control("stop") } label: { Image(systemName: "stop.fill") }.accessibilityLabel("Stop")
                     }
-                }.buttonStyle(.borderless).disabled(model.busy)
+                }
+                #if os(tvOS)
+                .buttonStyle(.automatic)
+                #else
+                .buttonStyle(.borderless)
+                #endif
+                .disabled(model.busy)
                 ForEach(queue.items) { item in
                     HStack {
                         if item.current { Image(systemName: "speaker.wave.2.fill").accessibilityLabel("Current track") }
