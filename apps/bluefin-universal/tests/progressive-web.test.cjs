@@ -66,7 +66,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  Object.defineProperty(context,'localStorage',{get(){throw Error('Default view touched localStorage');}});
  Object.defineProperty(context,'sessionStorage',{get(){throw Error('Default view touched sessionStorage');}});
  vm.runInContext(source('local-music.js'),context);
- const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle};})();');
+ const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,importInvitationImage};})();');
  vm.runInContext(script,context);
  return {context,ui:context.contract,root,video,requests,events,item,pending};
 }
@@ -248,4 +248,55 @@ test('turning shuffle off restores the original queue and keeps the current sele
  t.ui.toggleShuffle();assert.equal(t.ui.state.queue[0].Id,order[1].Id);
  t.ui.toggleShuffle();assert.deepEqual(Array.from(t.ui.state.queue,item=>item.Id),Array.from(order,item=>item.Id));
  assert.equal(t.ui.state.queueIndex,1);assert.equal(t.requests.length,0);await t.ui.signOut();
+});
+
+test('new explicit playback resets shuffled queues when crossing local and server music',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const remote=[t.item,{...t.item,Id:'44444444444444448444444444444444',Name:'Second server song'}];
+ await t.ui.playShuffled(remote);assert.equal(t.ui.state.shuffle,true);
+ t.ui.openLocalMusic();await t.ui.addLocalFiles([new File([Buffer.from('ID3local fixture')],'independent.mp3')]);
+ const local=t.ui.state.rows[0];await t.ui.play(local,[local],0);
+ assert.equal(t.ui.state.shuffle,false);assert.equal(t.ui.state.unshuffledQueue[0].Id,local.Id);
+ t.ui.toggleShuffle();t.ui.toggleShuffle();assert.equal(t.ui.state.queue[0].Id,local.Id);
+ await t.ui.playShuffled([local]);await t.ui.play(t.item,remote,0);
+ assert.equal(t.ui.state.shuffle,false);assert(t.ui.state.unshuffledQueue.every(item=>!item.LocalSource));
+ await t.ui.signOut();
+});
+test('a QR image finishing after page retirement cannot repopulate the invitation',async()=>{
+ const t=setup();let resolve,parsed=0;
+ t.context.BluefinRuntime.engine=async()=>({webMeshImage(){parsed++;return 'MC1-SECRET';}});
+ t.ui.state.sheet='invite';
+ const attempt=t.ui.importInvitationImage({size:20,arrayBuffer:()=>new Promise(r=>resolve=r)});
+ const outcome=assert.rejects(attempt,/page or account changed/);await until(()=>resolve);
+ t.events.pagehide();resolve(new ArrayBuffer(20));await outcome;
+ assert.equal(parsed,0);assert.equal(t.ui.state.code,'');assert.equal(t.requests.length,0);
+});
+
+test('mesh-to-local replacement waits for its own Rust stop receipt before acquiring playback',async()=>{
+ const t=setup();let acknowledge;
+ t.context.BluefinRuntime.ready=()=>({webMeshStop:()=>new Promise(resolve=>acknowledge=resolve)});
+ t.ui.openLocalMusic();await t.ui.addLocalFiles([new File([Buffer.from('ID3local fixture')],'after-mesh.mp3')]);
+ const item=t.ui.state.rows[0];t.ui.state.player={mode:'mesh',handle:'bluefin-mesh-v1:'+'a'.repeat(64),item:t.item};
+ t.video.src='/old-mesh';t.video.paused=false;
+ const replacement=t.ui.play(item,[item],0);await until(()=>acknowledge);
+ assert.equal(t.video.src,'');assert.equal(t.video.playCalls||0,0);assert.equal(t.ui.state.player,null);
+ acknowledge();await replacement;assert.equal(t.ui.state.player.mode,'local');assert.match(t.video.src,/^blob:/);
+ assert.equal(t.requests.length,0);await t.ui.signOut();
+});
+test('an unacknowledged mesh stop cannot be bypassed by a second local Play',async()=>{
+ const t=setup();t.context.BluefinRuntime.ready=()=>({webMeshStop:async()=>{throw Error('retirement pending');}});
+ t.ui.openLocalMusic();await t.ui.addLocalFiles([new File([Buffer.from('ID3local fixture')],'held-until-cleanup.mp3')]);
+ const item=t.ui.state.rows[0];t.ui.state.player={mode:'mesh',handle:'bluefin-mesh-v1:'+'a'.repeat(64),item:t.item};
+ await assert.rejects(t.ui.play(item,[item],0),/retirement pending/);
+ await assert.rejects(t.ui.play(item,[item],0),/retirement pending/);
+ assert.equal(t.video.src,'');assert.equal(t.video.playCalls||0,0);assert.equal(t.requests.length,0);t.events.pagehide();
+});
+test('local music exposes local search even when a server account is connected',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ t.ui.openLocalMusic();t.ui.render();assert.match(t.root.textContent,/Music on this device/);
+ // Inspect the rendered control tree, not a CSS inference.
+ function descendants(element){return [element,...element.children.flatMap(descendants)];}
+ assert(descendants(t.root).some(element=>element.tagName==='INPUT'&&element.attributes['aria-label']==='Search music on this device'));
+ const before=t.requests.length;t.ui.state.localQuery='local';t.ui.state.route={kind:'local_search'};await t.ui.loadRoute();
+ assert.equal(t.requests.length,before);await t.ui.signOut();
 });

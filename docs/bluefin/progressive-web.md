@@ -178,3 +178,12 @@ actual device validation; passing the JavaScript boundary tests does not claim i
 The visible audio timeline, HTTP progress reports and seek controls use the same
 transcode offset convention as the Rust playback service. Restoring a 30-minute
 bookmark therefore does not report zero when the new media stream starts.
+
+Playback domain changes await a command-specific Rust stop receipt. A previously
+true cleanup flag cannot satisfy that barrier. If retirement is unconfirmed,
+a second Play cannot bypass it. The browser adapter attaches an opaque owner
+token to each media source; delayed cleanup, controls, metadata callbacks and
+samples from a retired mesh owner cannot touch a local or HTTPS successor.
+The Rust service remains owned through sign-out timeout until its lifecycle
+actually finishes. Local search remains explicit inside Music even while an
+account is connected, and a new explicit selection resets prior queue ordering.

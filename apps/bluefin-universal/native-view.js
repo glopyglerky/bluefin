@@ -11,7 +11,7 @@ const state={phase:'connect',base:hostedBase(),server:null,options:{},session:nu
   code:launched,meshName:'',remember:false,pairing:null,pairingView:0,device:null,invitation:null,inviteTimer:null,
   busy:false,error:'',notice:'',epoch:0,capabilities:null,player:null,expanded:false,
   queue:[],unshuffledQueue:[],queueIndex:0,shuffle:false,repeat:'off',query:'',local:false,localQuery:'',localSnapshot:null,images:new Map(),imageEpoch:0};
-let modalWasOpen=false,focusReturn=null,pageRetired=false,authTask=false,playbackGeneration=0,leaseRenew=null,progressTimer=null,meshPoll=null,hlsPromise;
+let modalWasOpen=false,focusReturn=null,pageRetired=false,authTask=false,playbackGeneration=0,leaseRenew=null,progressTimer=null,meshPoll=null,hlsPromise,meshRetirement=null;
 let localLibrary=null;
 function isLocalItem(item){return item?.LocalSource===true&&globalThis.BluefinLocalMusic?.isLocalId(item.Id)===true;}
 function localItem(record){return {Id:record.id,Name:record.title,Type:'Audio',LocalSource:true,Source:record.source,
@@ -57,17 +57,17 @@ function localPicker(){
 async function openAccountConnection(){await stopPlayback();assertLive();state.local=false;state.phase='connect';state.route={kind:'home'};state.rows=[];state.shelves=[];state.back=[];state.query='';state.sheet=null;render();}
 function localMusicView(main){
  main.append(node('h2','Music on this device'),node('p','Temporary files · never uploaded','secondary'));
- if(state.route.kind==='local_search'){
+ if(state.route.kind==='local_music'||state.route.kind==='local_search'){
   const form=node('form',undefined,'search-form'),input=node('input');input.type='search';input.value=state.localQuery;
   input.placeholder='Search music on this device';input.setAttribute('aria-label','Search music on this device');
   const submit=node('button','Search','primary');form.append(input,submit);
   form.onsubmit=event=>{event.preventDefault();perform(async()=>{
-   state.localQuery=input.value;state.rows=localOwner().search(state.localQuery).map(localItem);
+   state.localQuery=input.value;state.rows=localOwner().search(state.localQuery).map(localItem);state.route={kind:'local_search'};
   });};main.append(form);
  }
  const actions=node('div',undefined,'actions');actions.append(localPicker());
  if(state.rows.length)actions.append(action('Play',()=>playLocal(state.rows[0],state.rows,0),'primary','play'),
-  action('Shuffle',async()=>{state.unshuffledQueue=state.rows.slice();state.shuffle=true;const queue=shuffled(state.rows);await playLocal(queue[0],queue,0);},'','shuffle'));
+  action('Shuffle',()=>playShuffled(state.rows),'','shuffle'));
  main.append(actions);
  const list=node('div',undefined,'group');
  for(const item of state.rows){
@@ -80,20 +80,39 @@ function localMusicView(main){
   'Choose up to 20 MP3, AAC, M4A, FLAC, WAV, or AIFF files. Files remain on your device; this tab keeps permission only while it stays open.'));
  main.append(node('p','Selected files are separate from server libraries, streaming subscriptions, storage donation and content-sharing grants.','secondary'));
 }
+function installQueue(queue,index,original,preserve){
+ state.queue=queue.slice(0,512);state.queueIndex=index;
+ if(original){state.unshuffledQueue=original.slice(0,512);state.shuffle=true;}
+ else if(!preserve){state.unshuffledQueue=state.queue.slice();state.shuffle=false;}
+}
+async function playShuffled(items){
+ const original=items.slice(0,512);if(!original.length)return;
+ const order=shuffled(original);await play(order[0],order,0,original);
+}
+async function importInvitationImage(file){
+ const epoch=state.epoch,view=state.pairingView;
+ const current=()=>{assertLive(epoch);if(view!==state.pairingView||state.sheet!=='invite')throw Error('The connection screen was closed.');};
+ current();if(file.size<=0||file.size>8*1024*1024)throw Error('Choose a PNG or JPEG smaller than 8 MiB.');
+ const engine=await runtime().engine();current();
+ const bytes=new Uint8Array(await file.arrayBuffer());current();
+ const code=engine.webMeshImage(bytes);current();state.code=code;state.notice='Invitation read. Continue to connect.';
+}
+
 function syncLocalQueue(){
  if(state.player?.mode==='local')localOwner().setQueue({items:state.queue.map(item=>item.Id),
   currentIndex:state.queue.length?state.queueIndex:null,repeatMode:state.repeat,shuffled:state.shuffle});
 }
-async function playLocal(item,queue=[item],index=0){
- const epoch=state.epoch;assertLive(epoch);const owner=localOwner();
- if(!isLocalItem(item)||!queue.length||queue.length>512||!queue.every(isLocalItem)||index<0||index>=queue.length)throw Error('Choose a track from this tab’s local music.');
+async function playLocal(item,queue=[item],index=0,original=null){
+ const epoch=state.epoch;assertLive(epoch);const owner=localOwner(),preserve=queue===state.queue&&state.player?.mode==='local';
+ if(!isLocalItem(item)||!queue.length||queue.length>512||!queue.every(isLocalItem)||!Number.isInteger(index)||index<0||index>=queue.length)throw Error('Choose a track from this tab’s local music.');
  await stopPlayback();assertLive(epoch);const generation=playbackGeneration;
  const current=()=>{assertLive(epoch);if(generation!==playbackGeneration)throw Error('Playback was canceled.');};
  const source=owner.acquireSource(item.Id);
  try{
   current();if(!media.canPlayType(source.mimeType))throw Error('This browser cannot play this audio format. Choose another file or use the installed app.');
-  state.queue=queue.slice();state.queueIndex=index;if(!state.shuffle)state.unshuffledQueue=state.queue.slice();
-  state.player={mode:'local',item,source,offset:0,generation};
+  installQueue(queue,index,original,preserve);
+  state.player={mode:'local',item,source,offset:0,generation,domOwner:Object.freeze({generation,kind:'local'})};
+  media.__bluefinOutputOwner=state.player.domOwner;
   source.signal.addEventListener('abort',()=>{
    if(state.player?.source!==source)return;
    stopPlayback(false).catch(()=>{}).finally(()=>{if(!pageRetired)render();});
@@ -102,7 +121,7 @@ async function playLocal(item,queue=[item],index=0){
   media.play().catch(()=>{if(!pageRetired&&state.player?.source===source)document.getElementById('media-status').textContent='Press Play to begin.';});
   document.body.classList.add('audio-playing','with-player');document.body.classList.remove('video-playing');render();
  }catch(error){
-  if(state.player?.source===source){state.player=null;clearOutput({source});}
+  if(state.player?.source===source){const previous=state.player;state.player=null;clearOutput(previous);}
   else source.release();
   throw error;
  }
@@ -354,19 +373,42 @@ function libraryView(){const main=node('main',undefined,'app-main');main.id='con
  else if(route.kind==='library'){const collections=group('Collections');for(const item of state.rows)collections.append(row(item));if(!state.rows.length&&!state.busy)collections.append(node('p','No libraries are available to this account.','secondary'));main.append(collections);}
  else if(route.kind==='music'){main.append(action('Music on this device',openLocalMusic,'','music'));const browse=node('div',undefined,'music-browse');for(const [name,type,symbol]of[['Songs','Audio','music'],['Albums','MusicAlbum','library'],['Artists','MusicArtist','account'],['Playlists','Playlist','queue']])browse.append(action(name,()=>openCollection(name,type,null),'',symbol));main.append(browse);for(const s of state.shelves)main.append(shelf(s.title,s.items));if(!state.shelves.some(s=>s.items.length)&&!state.busy)main.append(empty('Your music, in one place','Albums from your connected library will appear here. Browse Songs to find individual tracks.'));}
  else if(route.kind==='search'){const f=node('form',undefined,'search-form'),i=node('input');i.type='search';i.placeholder='Search your library';i.value=state.query;i.setAttribute('aria-label','Search your library');const b=node('button','Search');f.append(i,b);f.onsubmit=e=>{e.preventDefault();state.query=i.value.trim().slice(0,256);perform(loadRoute);};main.append(f);const results=node('div',undefined,'catalog-grid');for(const item of state.rows)results.append(poster(item));main.append(results);if(!state.rows.length&&!state.busy)main.append(empty('Search your library',state.query?'No results. Try another title, artist or album.':'Find movies, shows, artists, albums and songs.'));}
- else if(route.kind==='collection'||route.kind==='live'){const audio=route.type==='Audio';if(audio&&state.rows.length){const a=node('div',undefined,'actions');a.append(action('Play',()=>play(state.rows[0],state.rows,0),'','play'),action('Shuffle',async()=>{state.unshuffledQueue=state.rows.slice();state.shuffle=true;const order=shuffled(state.rows);await play(order[0],order,0);},'','shuffle'));main.append(a);}const list=node('div',undefined,audio||route.kind==='live'?'group':'catalog-grid');for(const item of state.rows)list.append(audio||route.kind==='live'?row(item):poster(item));main.append(list);if(!state.rows.length&&!state.busy)main.append(empty('No items to show','Try another collection or refresh your library.'));if(route.kind==='collection'){const a=node('div',undefined,'actions');if(route.start>0)a.append(action('Previous page',async()=>{route.start=Math.max(0,route.start-100);await loadRoute();}));if(route.start+state.rows.length<route.total)a.append(action('Next page',async()=>{route.start+=100;await loadRoute();}));main.append(a);}}
+ else if(route.kind==='collection'||route.kind==='live'){const audio=route.type==='Audio';if(audio&&state.rows.length){const a=node('div',undefined,'actions');a.append(action('Play',()=>play(state.rows[0],state.rows,0),'','play'),action('Shuffle',()=>playShuffled(state.rows),'','shuffle'));main.append(a);}const list=node('div',undefined,audio||route.kind==='live'?'group':'catalog-grid');for(const item of state.rows)list.append(audio||route.kind==='live'?row(item):poster(item));main.append(list);if(!state.rows.length&&!state.busy)main.append(empty('No items to show','Try another collection or refresh your library.'));if(route.kind==='collection'){const a=node('div',undefined,'actions');if(route.start>0)a.append(action('Previous page',async()=>{route.start=Math.max(0,route.start-100);await loadRoute();}));if(route.start+state.rows.length<route.total)a.append(action('Next page',async()=>{route.start+=100;await loadRoute();}));main.append(a);}}
  else if(route.kind==='detail'){const item=route.item;main.append(cover(item,item.Type==='Audio'));main.lastChild.style.maxWidth='360px';main.append(node('h2',item.Name),node('p',subtitle(item),'secondary'));if(['Movie','Episode','Audio','TvChannel'].includes(item.Type))main.append(action(resumeTicks(item)>0?'Resume':'Play',()=>play(item,[item],0),'primary','play'));main.append(node('p',item.Overview||''));}
  if(state.busy)main.append(node('p','Loading your library…','loading'));main.append(status());if(state.error)main.append(action('Try again',loadRoute));return main;}
 function tabbar(){const nav=node('nav',undefined,'tabbar');nav.setAttribute('aria-label','Library');for(const [title,symbol]of[['Home','home'],['Library','library'],['Music','music'],['Search','search'],['Live TV','live']]){const b=action(title,()=>navigate(title),'',symbol);b.setAttribute('aria-current',state.tab===title?'page':'false');nav.append(b);}return nav;}
 function sheet(){if(state.expanded)return nowPlaying();const outer=node('section',undefined,'sheet');outer.setAttribute('role','dialog');outer.setAttribute('aria-modal','true');outer.id='bluefin-dialog';outer.tabIndex=-1;outer.setAttribute('aria-label',state.sheet==='invite'?'Connect Bluefin':state.sheet==='connections'?'Connections':'Account and settings');const inner=node('div',undefined,'sheet-inner'),bar=node('div',undefined,'toolbar');bar.append(node('h2',state.sheet==='invite'?'Connect Bluefin':state.sheet==='connections'?'Connections':'Account and settings'),button('Done',closeSheet,'plain'));inner.append(bar);
  if(state.sheet==='invite'){const g=group(state.pairing?'Saved connection':'Connect with an invitation');if(state.pairing){g.append(node('p',state.remember?'This request is saved on this device.':'This request stays in this tab. Keep it open until your connection is complete.'));if(state.pairing.awaitingApproval)g.append(node('p','Your request is waiting for administrator approval.'));if(state.pairing.externalUrl){const u=new URL(state.pairing.externalUrl);if(u.protocol==='https:'&&!u.username&&!u.password){const a=node('a','Open passkey page');a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';g.append(a,node('p','After verifying, return here to finish.','secondary'));}}g.append(action(state.pairing.awaitingApproval?'Check approval':state.pairing.needsBeginRetry?'Resume connection':'Verify and finish',continueMesh,'primary'));}
- else{g.append(node('p','Scan a Bluefin QR code, open an invitation image, or paste the full connection code.'));const f=node('form'),[cw,ci]=field('Connection code','password',state.code,'mesh-code'),[nw,ni]=field('Your account name for a signup request','text',state.meshName,'mesh-name');ni.oninput=()=>{state.meshName=ni.value;};ci.autocomplete='off';ci.spellcheck=false;ci.maxLength=3072;ci.oninput=()=>{state.code=ci.value;};f.append(cw,nw);const remember=node('label',undefined,'check'),c=node('input');c.type='checkbox';c.checked=state.remember;c.onchange=()=>{state.remember=c.checked;};remember.append(c,node('span','Remember this device in protected browser storage'));f.append(remember,node('p','Temporary by default. Closing this tab removes its connection key. Use Sign out to request immediate remote revocation.','secondary'));const b=node('button','Connect securely','primary');b.disabled=state.busy;f.append(b);f.onsubmit=e=>{e.preventDefault();const code=ci.value.trim(),name=ni.value.trim(),keep=c.checked;ci.value='';perform(()=>beginMesh(code,name,keep));};g.append(f);for(const [label,capture]of[['Open QR image or screenshot',false],['Take a photo of a QR code',true]]){const l=node('label',label),input=node('input');input.type='file';input.accept='image/png,image/jpeg';if(capture)input.setAttribute('capture','environment');input.onchange=()=>{const file=input.files?.[0];input.value='';if(!file)return;perform(async()=>{if(file.size<=0||file.size>8*1024*1024)throw Error('Choose a PNG or JPEG smaller than 8 MiB.');const engine=await runtime().engine();state.code=engine.webMeshImage(new Uint8Array(await file.arrayBuffer()));state.notice='Invitation read. Continue to connect.';});};l.append(input);g.append(l);}if(/^MC1-[A-Z0-9-]+$/i.test(state.code)&&state.code.length<=2048){const a=node('a','Open in the installed Bluefin app');a.href='bluefin://connect/'+state.code;g.append(a);}}
+ else{g.append(node('p','Scan a Bluefin QR code, open an invitation image, or paste the full connection code.'));const f=node('form'),[cw,ci]=field('Connection code','password',state.code,'mesh-code'),[nw,ni]=field('Your account name for a signup request','text',state.meshName,'mesh-name');ni.oninput=()=>{state.meshName=ni.value;};ci.autocomplete='off';ci.spellcheck=false;ci.maxLength=3072;ci.oninput=()=>{state.code=ci.value;};f.append(cw,nw);const remember=node('label',undefined,'check'),c=node('input');c.type='checkbox';c.checked=state.remember;c.onchange=()=>{state.remember=c.checked;};remember.append(c,node('span','Remember this device in protected browser storage'));f.append(remember,node('p','Temporary by default. Closing this tab removes its connection key. Use Sign out to request immediate remote revocation.','secondary'));const b=node('button','Connect securely','primary');b.disabled=state.busy;f.append(b);f.onsubmit=e=>{e.preventDefault();const code=ci.value.trim(),name=ni.value.trim(),keep=c.checked;ci.value='';perform(()=>beginMesh(code,name,keep));};g.append(f);for(const [label,capture]of[['Open QR image or screenshot',false],['Take a photo of a QR code',true]]){const l=node('label',label),input=node('input');input.type='file';input.accept='image/png,image/jpeg';if(capture)input.setAttribute('capture','environment');input.onchange=()=>{const file=input.files?.[0];input.value='';if(!file)return;perform(()=>importInvitationImage(file));};l.append(input);g.append(l);}if(/^MC1-[A-Z0-9-]+$/i.test(state.code)&&state.code.length<=2048){const a=node('a','Open in the installed Bluefin app');a.href='bluefin://connect/'+state.code;g.append(a);}}
  g.append(action('Resume request in this tab',()=>resumeMesh(false)),action('Restore a remembered device',()=>resumeMesh(true)));inner.append(g,node('p','The QR verifies a device connection. Your browser still uses its normal trusted HTTPS certificate.','secondary'));
  }else if(state.sheet==='account'){const g=group(state.session?.name||'Music on this device');g.append(node('p',!state.session?'Temporary local music · no account connected':state.mode==='mesh'?'Connected through the encrypted Bluefin mesh':'Signed in through the server address'));if(state.session)g.append(button('Connections',()=>{state.sheet='connections';render();},'','qr'));else g.append(action('Connect account',openAccountConnection,'','qr'));g.append(action(state.session?'Sign out':'Close local library',signOut,'danger'));inner.append(g);}
  else if(state.sheet==='connections'){const device=group('This device');device.append(node('p',state.mode==='mesh'?'Connected through the encrypted Bluefin mesh':'Signed in through the server address'));if(state.mode==='mesh')device.append(node('p',state.remember?'Your connection key is saved in protected storage on this browser.':'Your connection key exists only in this tab.','secondary'));inner.append(device);const g=group('Connect another device to your account');g.append(node('p','Use this invitation on a device you own. Your account passkey is still required.'),action('Create one-use invitation',issueInvite));if(state.invitation){const invite=state.invitation,image=node('img',undefined,'qr');image.src=invite.image;image.alt='One-use Bluefin device invitation';g.append(image,node('p','Every copy is the same invitation. Once claimed, no copy can connect another device.','secondary'));g.append(button('Copy invitation',()=>copy(invite.webLink)),button('Copy connection code',()=>copy(invite.code)));const save=node('a','Save QR image');save.href=invite.image;save.download='bluefin-invitation.png';g.append(save);const d=node('details'),summary=node('summary','Manual connection code');d.append(summary,node('p',invite.code,'code'));g.append(d);}g.append(node('p','Sharing a library with another person requires a separate grant to that person’s own account. A device invitation does not authorize shared storage or onward sharing.','secondary'));inner.append(g);}
  if(state.sheet==='account')inner.append(sourceFooter());if(state.busy)inner.append(node('p','Connecting…','loading'));inner.append(status());outer.append(inner);return outer;}
 async function copy(value){try{await navigator.clipboard.writeText(value);state.notice='Copied.';}catch(_){state.error='Copy was not available. Open the manual code and select it.';}render();}
-async function issueInvite(){state.invitation=null;clearTimeout(state.inviteTimer);const response=await api('Bluefin/Accounts/Mesh/Invite','POST',{intent:'login',lifetimeSeconds:600});let result;if(state.mode==='mesh')result=JSON.parse((await runtime().engine()).webMeshInvitation(JSON.stringify(response)));else{const link=new URL(response.webLink||response.link),code=response.code,png=response.pngBase64;if(response.singleUse!==true||response.intent!=='login'||!/^MC1-[A-Z0-9-]+$/i.test(code||'')||code.length>2048||link.origin!==location.origin||link.protocol!=='https:'||!link.hash.startsWith('#bluefin-connect=')||typeof png!=='string'||png.length>1400000||!/^[A-Za-z0-9+/]*={0,2}$/.test(png)||!/^[a-f0-9]{64}$/.test(response.handle||''))throw Error('The server returned an invalid invitation.');result={webLink:link.href,code,image:'data:image/png;base64,'+png,handle:response.handle};}state.invitation=result;const epoch=state.epoch;const poll=async()=>{if(epoch!==state.epoch||state.sheet!=='connections'||state.invitation!==result)return;try{const status=await api('Bluefin/Accounts/Mesh/Invites/'+result.handle);if(status.state!=='issued'){state.invitation=null;state.notice='This invitation is no longer available. Create a new invitation for another device.';render();return;}}catch(_){state.invitation=null;state.notice='The invitation status could not be confirmed.';render();return;}state.inviteTimer=setTimeout(poll,3000);};state.inviteTimer=setTimeout(poll,3000);}
+async function issueInvite(){
+ const epoch=state.epoch,session=state.session,mode=state.mode;
+ const current=()=>{assertLive(epoch,session);if(state.sheet!=='connections')throw Error('The connection screen was closed.');};
+ current();state.invitation=null;clearTimeout(state.inviteTimer);
+ const response=await api('Bluefin/Accounts/Mesh/Invite','POST',{intent:'login',lifetimeSeconds:600});current();
+ let result;
+ if(mode==='mesh'){const engine=await runtime().engine();current();result=JSON.parse(engine.webMeshInvitation(JSON.stringify(response)));}
+ else{
+  const link=new URL(response.webLink||response.link),code=response.code,png=response.pngBase64;
+  if(response.singleUse!==true||response.intent!=='login'||!/^MC1-[A-Z0-9-]+$/i.test(code||'')||code.length>2048||
+   link.origin!==location.origin||link.protocol!=='https:'||link.username||link.password||link.search||link.hash!=='#bluefin-connect='+code||
+   typeof png!=='string'||png.length>1400000||!/^[A-Za-z0-9+/]*={0,2}$/.test(png)||!/^[a-f0-9]{64}$/.test(response.handle||''))throw Error('The server returned an invalid invitation.');
+  result={webLink:link.href,code,image:'data:image/png;base64,'+png,handle:response.handle};
+ }
+ current();state.invitation=result;
+ const poll=async()=>{
+  if(pageRetired||epoch!==state.epoch||state.sheet!=='connections'||state.invitation!==result)return;
+  try{const value=await api('Bluefin/Accounts/Mesh/Invites/'+result.handle);current();if(state.invitation!==result)return;
+   if(value.state!=='issued'){state.invitation=null;state.notice='This invitation is no longer available. Create a new invitation for another device.';render();return;}}
+  catch(_){if(pageRetired||epoch!==state.epoch||state.invitation!==result)return;state.invitation=null;state.notice='The invitation status could not be confirmed.';render();return;}
+  state.inviteTimer=setTimeout(poll,3000);
+ };
+ state.inviteTimer=setTimeout(poll,3000);
+}
 function shuffled(items){const values=items.slice();for(let i=values.length-1;i>0;i--){const draw=new Uint32Array(1);crypto.getRandomValues(draw);const j=draw[0]%(i+1);[values[i],values[j]]=[values[j],values[i]];}return values;}
 function time(value){if(!Number.isFinite(value)||value<0)value=0;return Math.floor(value/60)+':'+String(Math.floor(value%60)).padStart(2,'0');}
 function nativeLeasePath(raw,kind,idValue){if(typeof raw!=='string'||raw.length>256||!raw.startsWith('/Bluefin/Web/v1/')||raw.includes('%')||raw.includes('?')||raw.includes('#')||raw.includes('\\')||raw.includes('..'))throw Error('Invalid playback lease route.');const u=new URL(raw,location.origin);if(u.origin!==location.origin||u.username||u.password||u.hash||u.search)throw Error('Invalid playback lease origin.');const pattern=kind==='media'?/^\/Bluefin\/Web\/v1\/media\/([a-f0-9]{64})\/[0-9]+$/:/^\/Bluefin\/Web\/v1\/leases\/([a-f0-9]{64})$/;const match=u.pathname.match(pattern);if(!match||(idValue&&match[1]!==idValue))throw Error('Invalid playback lease scope.');return {url:u.href,id:match[1]};}
@@ -431,6 +473,7 @@ function clearOutput(previous){
  try{media.load();}catch(error){failure=failure||error;}
  try{previous?.hls?.destroy();}catch(error){failure=failure||error;}
  try{previous?.source?.release();}catch(error){failure=failure||error;}
+ if(previous?.domOwner&&media.__bluefinOutputOwner===previous.domOwner)delete media.__bluefinOutputOwner;
  document.body.classList.remove('audio-playing','video-playing','with-player');
  return failure;
 }
@@ -440,8 +483,14 @@ async function stopPlayback(remote=true){
  leaseRenew=progressTimer=meshPoll=null;playbackGeneration++;
  let failure=clearOutput(previous);
  try{
-  if(previous?.mode==='mesh'){const engine=runtime()?.ready();if(engine)engine.webMeshControl(previous.handle,'stop',0);}
-  else if(previous?.lease&&remote)await releaseLease(previous.lease,previous.session);
+  if(previous?.mode==='mesh'){
+   const engine=runtime()?.ready();
+   const pending=Promise.resolve().then(()=>{if(typeof engine?.webMeshStop!=='function')throw Error('The playback retirement module is unavailable. Reload before starting another source.');return engine.webMeshStop(previous.handle);});
+   meshRetirement=pending;await pending;if(meshRetirement===pending)meshRetirement=null;
+  }else{
+   if(meshRetirement)await meshRetirement;
+   if(previous?.lease&&remote)await releaseLease(previous.lease,previous.session);
+  }
  }catch(error){failure=failure||error;}
  document.getElementById('media-status').textContent='';
  if(failure)throw failure;
@@ -450,15 +499,15 @@ function resumeTicks(item){
  const value=item.UserData?.PlaybackPositionTicks,duration=item.RunTimeTicks;
  return Number.isSafeInteger(value)&&value>0&&Number.isSafeInteger(duration)&&value<duration?value:0;
 }
-async function play(item,queue=[item],index=0){
- if(isLocalItem(item))return playLocal(item,queue,index);
- const epoch=state.epoch,session=state.session,mode=state.mode,base=state.base;assertLive(epoch,session);
+async function play(item,queue=[item],index=0,original=null){
+ if(isLocalItem(item))return playLocal(item,queue,index,original);
+ const epoch=state.epoch,session=state.session,mode=state.mode,base=state.base,preserve=queue===state.queue&&state.player?.mode===state.mode;assertLive(epoch,session);
  if(!session)throw Error('Sign in to play your library.');
  if(!['Audio','Movie','Episode','TvChannel'].includes(item.Type))return openItem(item);
  await stopPlayback();assertLive(epoch,session);
  const generation=playbackGeneration;
  const current=()=>{assertLive(epoch,session);if(generation!==playbackGeneration)throw Error('Playback was canceled.');};
- state.queue=queue.slice(0,512);state.queueIndex=index;if(!state.shuffle)state.unshuffledQueue=state.queue.slice();
+ installQueue(queue,index,original,preserve);
  if(mode==='mesh'){
   await hlsSupport();current();
   await runtime().mediaWorker();current();
@@ -486,7 +535,8 @@ async function play(item,queue=[item],index=0){
   if(pageRetired||epoch!==state.epoch||session!==state.session||generation!==playbackGeneration){
    await releaseLease(lease,session,true).catch(()=>{});current();
   }
-  state.player={mode:'https',item,lease,session,offset:resumeTicks(item)/10000000};
+  state.player={mode:'https',item,lease,session,offset:resumeTicks(item)/10000000,domOwner:Object.freeze({generation,kind:'https'})};
+  media.__bluefinOutputOwner=state.player.domOwner;
   if(Hls){
    const hls=new Hls({enableWorker:false,maxBufferLength:20,maxMaxBufferLength:40,backBufferLength:10,maxBufferSize:32*1024*1024,
     manifestLoadingTimeOut:10000,fragLoadingTimeOut:10000,fragLoadingMaxRetry:1,manifestLoadingMaxRetry:1,
@@ -552,7 +602,7 @@ async function signOut(){
  try{await stopPlayback();}catch(error){cleanup=error;}
  try{localLibrary?.clear();}catch(error){cleanup=cleanup||error;}
  state.localSnapshot=null;
- try{if(session){if(mode==='mesh')await(await runtime().engine()).webMeshLogout(session.handle);
+ try{if(session){if(mode==='mesh'){await(await runtime().engine()).webMeshLogout(session.handle);meshRetirement=null;}
   else await http('Sessions/Logout','POST',undefined,[],session,false,true,base);}}
  catch(error){cleanup=error;}
  if(pageRetired)return;

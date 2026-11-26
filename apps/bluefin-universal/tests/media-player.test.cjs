@@ -35,7 +35,7 @@ function setup({holdReady=false,holdStart=false,foreignWorker=false}={}){
     setTimeout:(fn,ms)=>setTimeout(fn,ms===5000?50:ms),clearTimeout,
     setInterval:()=>1,clearInterval:()=>{},addEventListener:()=>{},queueMicrotask});
   const source=fs.readFileSync(path.join(__dirname,'../web-player.js'),'utf8');
-  vm.runInContext(source.replace(/\bexport /g,'')+'\nglobalThis.binding={startMedia,stopMedia,interruptMedia};',context);
+  vm.runInContext(source.replace(/\bexport /g,'')+'\nglobalThis.binding={startMedia,stopMedia,interruptMedia,sampleMedia,controlMedia};',context);
   const start=()=>context.binding.startMedia('https://server.example/', 'MediaBrowser Client="Synthetic"',
     JSON.stringify({selection:{position:0},offset:0,hls:false}),false);
   const ready=()=>{serviceWorker.controller=worker;for(const listener of listeners)listener();};
@@ -88,4 +88,25 @@ test('a throwing HLS decoder cannot block local stop or worker retirement',async
  const s=setup();await s.start();vm.runInContext('current.hls={destroy(){throw Error("decoder failure")}}',s.context);
  s.binding.interruptMedia();await s.binding.stopMedia();
  assert.equal(s.video.src,'');assert.equal(s.video.paused,true);assert(s.messages.includes('clear'));
+});
+
+test('an old owner cannot clear, sample or control a successor after acknowledged retirement',async()=>{
+ const s=setup(),owner=await s.start();await s.binding.stopMedia(owner);
+ const nativeOwner={generation:1};s.video.__bluefinOutputOwner=nativeOwner;s.video.src='blob:private-local';s.video.currentTime=37;s.video.paused=false;
+ const messages=s.messages.length;await s.binding.stopMedia(owner);
+ assert.equal(s.video.src,'blob:private-local');assert.equal(s.video.paused,false);assert.equal(s.messages.length,messages);
+ const sample=JSON.parse(s.binding.sampleMedia(owner));assert.equal(sample.loaded,false);assert.equal(sample.position,0);
+ assert.throws(()=>s.binding.controlMedia(owner,'pause',1),/no longer owns/);
+ assert.equal(s.video.paused,false);
+});
+test('a delayed media registration cannot overwrite a new output owner',async()=>{
+ const s=setup({holdStart:true}),attempt=outcome(s.start());await until(()=>s.pending.length===1);
+ s.video.__bluefinOutputOwner={generation:7};s.video.src='blob:local-successor';s.video.paused=false;
+ s.pending.shift()();const result=await attempt;
+ assert.equal(result.ok,false);assert.equal(s.plays.length,0);assert.equal(s.video.src,'blob:local-successor');assert.equal(s.video.paused,false);
+});
+test('global cancellation with no mesh owner leaves an unrelated output source intact',async()=>{
+ const s=setup();s.video.__bluefinOutputOwner={generation:8};s.video.src='blob:ordinary-player';s.video.paused=false;
+ s.binding.interruptMedia();await s.binding.stopMedia();
+ assert.equal(s.video.src,'blob:ordinary-player');assert.equal(s.video.paused,false);
 });
