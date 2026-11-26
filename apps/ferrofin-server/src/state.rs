@@ -49,7 +49,7 @@ use ferrofin_traits::system::ServerApplicationPaths as _;
 
 use crate::bootstrap::FfmpegPaths;
 use crate::config::Config;
-use crate::media_encoding::build_media_encoding;
+use crate::media_encoding::build_media_encoding_runtime;
 
 /// Starts the task that reads the network interfaces again after the
 /// operating system reports a network change ([`ferrofin_networking::network_change`]).
@@ -2812,12 +2812,14 @@ pub async fn build_app_state(
     let auth_context: Arc<dyn ferrofin_traits::net::AuthorizationContext> =
         Arc::new(auth_context_concrete);
 
-    let quick_connect: Arc<dyn ferrofin_traits::security::QuickConnect> =
-        Arc::new(FerrofinQuickConnect::with_pending_per_ip(
+    let quick_connect: Arc<dyn ferrofin_traits::security::QuickConnect> = Arc::new(
+        FerrofinQuickConnect::with_pending_per_ip(
             Arc::clone(&config_trait),
             Arc::clone(&sessions),
             config.quick_connect_pending_per_ip.unwrap_or(0) as usize,
-        ));
+        )
+        .with_managed_pairing(db.clone()),
+    );
 
     // Clone the collaborators the media-encoding pair needs before they are
     // moved into `AppState::new` below.
@@ -2882,7 +2884,9 @@ pub async fn build_app_state(
         tasks,
     );
 
-    let state = state.with_request_culture(&server_config.ui_culture)?;
+    let state = state
+        .with_request_culture(&server_config.ui_culture)?
+        .with_karaoke(ferrofin_api::karaoke::Service::from_environment().await?);
 
     // ---- media-encoding pair (real transcode/HLS + attachments) -----------
     // Replace the disabled stubs `AppState::new` installed with the
@@ -2890,8 +2894,7 @@ pub async fn build_app_state(
     // Called before the state is cloned/shared (mirrors the C# Autofac
     // registration of ITranscodeManager/IDynamicHlsPlaylistGenerator +
     // IAttachmentExtractor).
-    let (hls, attachments, subtitle_encoder) = build_media_encoding(
-        me_media_sources,
+    let media_runtime = build_media_encoding_runtime(
         me_media_encoder,
         me_config,
         Arc::clone(&paths),
@@ -2911,7 +2914,9 @@ pub async fn build_app_state(
             },
         },
     );
+    let (hls, attachments, subtitle_encoder) = media_runtime.bind(me_media_sources, false);
     let state = state
+        .with_local_source_pins(media_runtime)
         .with_media_encoding(hls, attachments)
         .with_subtitle_encoder(subtitle_encoder)
         // The playback negotiation asks the probed ffmpeg's encoders
@@ -2954,7 +2959,9 @@ pub async fn build_app_state(
     // (`.mblink` shortcuts + `options.json`). Replace the disabled stub
     // `AppState::new` installed with the real filesystem-backed manager rooted
     // there (mirrors the C# `ILibraryManager` virtual-folder methods).
-    let state = state.with_virtual_folders(Arc::clone(&virtual_folders));
+    let state = state
+        .with_virtual_folders(Arc::clone(&virtual_folders))
+        .with_bluefin_passkeys(db.clone(), config.published_url.as_deref());
 
     // Image serving runs through the real `image`-crate processor so
     // `maxWidth`/`format`/… requests resize/convert instead of serving the original.
@@ -3000,6 +3007,16 @@ pub async fn build_app_state(
     )));
 
     // ---- SyncPlay ---------------------------------------------------------
+    let state = match bluefin_discovery::DiscoveryService::open(
+        &config.config_dir.join("bluefin-discovery.json"),
+    ) {
+        Ok(discovery) => state.with_discovery(discovery),
+        Err(error) => {
+            tracing::error!(%error, "Bluefin discovery disabled: private settings require repair");
+            state
+        }
+    };
+
     // The SyncPlay manager shares the session message bus (created with the
     // session manager above) to deliver group commands to member sockets.
     let sync_play: Arc<dyn ferrofin_traits::stubs::SyncPlayManager> = Arc::new(

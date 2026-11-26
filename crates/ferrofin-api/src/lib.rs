@@ -26,6 +26,8 @@ pub mod extract;
 pub mod forwarded_headers;
 pub mod handlers;
 pub mod ip_access;
+pub mod iroh_media;
+pub mod karaoke;
 pub mod openapi;
 pub mod panic_boundary;
 mod query;

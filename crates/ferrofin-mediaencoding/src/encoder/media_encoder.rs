@@ -690,7 +690,7 @@ impl<T: Transcoder> MediaEncoder for MediaEncoderImpl<T> {
         if data.streams.is_none() && data.format.is_none() {
             return Err(MediaEncodingError::process(format!(
                 "ffprobe failed - streams and format are both null: {}",
-                ferrofin_util::source_url::redact_url(input_file)
+                crate::transcoding::retained_input::redact_inputs(input_file)
             ))
             .into());
         }

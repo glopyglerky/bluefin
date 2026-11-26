@@ -38,6 +38,7 @@ const ITEM_ID: Uuid = Uuid::from_u128(0x00B1_0001);
 struct Recorded {
     last: Mutex<Option<HlsStreamRequest>>,
     stopped: Mutex<Vec<(Option<String>, Option<String>)>>,
+    stop_authority: Mutex<Vec<(uuid::Uuid, bool)>>,
     resolved: Mutex<Vec<(String, bool)>>,
     stream_bytes: std::sync::atomic::AtomicUsize,
     stream_completed: std::sync::atomic::AtomicUsize,
@@ -176,6 +177,20 @@ impl HlsStreamManager for FakeHls {
             .unwrap()
             .push((request.device_id.clone(), request.play_session_id.clone()));
         Ok(())
+    }
+
+    async fn stop_encoding_authorized(
+        &self,
+        request: &HlsStreamRequest,
+        caller: uuid::Uuid,
+        control_others: bool,
+    ) -> Result<(), ServiceError> {
+        self.rec
+            .stop_authority
+            .lock()
+            .unwrap()
+            .push((caller, control_others));
+        self.stop_encoding(request).await
     }
 
     async fn ping_transcoding_job(
@@ -1343,6 +1358,11 @@ async fn stop_encoding_returns_204_and_records() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        rec.stop_authority.lock().unwrap().len(),
+        1,
+        "HTTP must use the authorized stop seam"
+    );
     let stopped = rec.stopped.lock().unwrap();
     assert_eq!(
         stopped[0],

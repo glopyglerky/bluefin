@@ -2,6 +2,10 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod discovery;
+pub mod sports;
+pub mod transport;
+
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_QUEUE_ITEMS: usize = 512;
 pub const MAX_QUEUE_BODY_BYTES: usize = 65_536;
@@ -13,6 +17,9 @@ pub struct Capabilities {
     pub music_queue_sync: bool,
     pub max_queue_items: usize,
     pub viewer: ViewerCapabilities,
+    /// Omitted when this viewer cannot use optional server discovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discovery: Option<discovery::DiscoveryCapabilities>,
 }
 
 /// Read-only policy projection, never accepted as preferences or authorization.

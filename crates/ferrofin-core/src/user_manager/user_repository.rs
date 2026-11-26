@@ -5,6 +5,28 @@ use ferrofin_db::enums::PermissionKind;
 use ferrofin_db::store::datetime_to_db;
 use sqlx::{SqliteExecutor, SqlitePool};
 
+/// Reads the current account directly, bypassing the user DTO cache.
+pub(crate) async fn fresh_user(
+    pool: &SqlitePool,
+    user_id: &str,
+) -> Result<Option<ferrofin_db::entities::users::UserEntity>, sqlx::Error> {
+    sqlx::query_as(r#"SELECT * FROM "Users" WHERE "Id"=?1"#)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Reads raw current permissions from the owning database, without TTL caching.
+pub(crate) async fn fresh_permissions(
+    pool: &SqlitePool,
+    user_id: &str,
+) -> Result<Vec<(i32, bool)>, sqlx::Error> {
+    sqlx::query_as(r#"SELECT "Kind", "Value" FROM "Permissions" WHERE "UserId"=?"#)
+        .bind(user_id)
+        .fetch_all(pool)
+        .await
+}
+
 /// The count of users who are not disabled, from any executor (C#
 /// `GetUsers().Count(i => !i.HasPermission(PermissionKind.IsDisabled))`, the
 /// policy guard's). A user with no `IsDisabled` row counts as enabled, as
@@ -65,8 +87,8 @@ where
 
 /// Stores a user's password hash (`None` for a password-less user), bumping
 /// `RowVersion` as an EF save of the entity does.
-pub(super) async fn set_password(
-    pool: &SqlitePool,
+pub(super) async fn set_password<'e, E: SqliteExecutor<'e>>(
+    executor: E,
     user_id: &str,
     hash: Option<&str>,
 ) -> Result<(), sqlx::Error> {
@@ -76,7 +98,7 @@ pub(super) async fn set_password(
     )
     .bind(user_id)
     .bind(hash)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }

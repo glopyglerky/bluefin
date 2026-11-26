@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::encoder::quote;
 use crate::error::MediaEncodingError;
 use crate::keyed_locks::KeyedLocks;
+use crate::transcoding::retained_input::redact_inputs as redact_urls_in;
 use async_trait::async_trait;
 use ferrofin_model::dto::MediaSourceInfo;
 use ferrofin_model::entities::MediaStreamType;
@@ -15,7 +16,6 @@ use ferrofin_traits::error::ServiceError;
 use ferrofin_traits::media_encoding::{
     AttachmentExtractor, ExtractedAttachment, MediaEncoder, MediaInfoRequest,
 };
-use ferrofin_util::source_url::redact_urls_in;
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 

@@ -14,10 +14,10 @@
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::transcoding::retained_input::redact_inputs as redact_urls_in;
 use async_trait::async_trait;
 use ferrofin_model::configuration::ProcessPriorityClass;
 use ferrofin_util::process_priority::{ProcessPriority, set_process_priority};
-use ferrofin_util::source_url::redact_urls_in;
 use tokio::io::AsyncWriteExt as _;
 
 use super::encoding_utils::split_args;

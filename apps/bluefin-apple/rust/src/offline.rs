@@ -13,6 +13,12 @@ use std::{
 const MAX: u64 = 256 * 1024 * 1024;
 const QUOTA: u64 = 2 * 1024 * 1024 * 1024;
 const ITEMS: usize = 100;
+// Android permits searching system ancestors without granting directory reads.
+// O_DIRECTORY keeps O_PATH | O_NOFOLLOW from admitting a symlink descriptor.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const WALK_ACCESS: i32 = libc::O_PATH;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+const WALK_ACCESS: i32 = libc::O_RDONLY;
 fn hash(s: &[u8]) -> String {
     format!("{:x}", Sha256::digest(s))
 }
@@ -31,26 +37,45 @@ impl Dir {
         if !p.is_absolute() {
             return Err(err("Cache root must be absolute"));
         }
-        let f = File::open("/").map_err(|_| err("Cache root unavailable"))?;
+        if p == Path::new("/") {
+            return Err(err("Cache root cannot be filesystem root"));
+        }
+        let fd = unsafe {
+            libc::open(
+                c"/".as_ptr(),
+                WALK_ACCESS | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(err("Cache root unavailable"));
+        }
         let mut d = Self {
-            file: f,
+            file: unsafe { File::from_raw_fd(fd) },
             path: "/".into(),
         };
         for c in p.components() {
             match c {
                 Component::RootDir => {}
                 Component::Normal(n) => {
-                    d = d.child(n.to_str().ok_or_else(|| err("Invalid cache path"))?, false)?;
+                    d = d.child_with_access(
+                        n.to_str().ok_or_else(|| err("Invalid cache path"))?,
+                        false,
+                        WALK_ACCESS,
+                    )?;
                 }
                 _ => return Err(err("Invalid cache path")),
             }
         }
-        if d.path == Path::new("/") {
-            return Err(err("Cache root cannot be filesystem root"));
-        }
-        Ok(d)
+        // Reopen the pinned final inode, not its absolute name. Cache operations
+        // need read access and fsync/flock, which a path-only handle cannot supply.
+        let mut readable = d.child(".", false)?;
+        readable.path = d.path;
+        Ok(readable)
     }
     fn child(&self, n: &str, create: bool) -> Result<Self> {
+        self.child_with_access(n, create, libc::O_RDONLY)
+    }
+    fn child_with_access(&self, n: &str, create: bool, access: i32) -> Result<Self> {
         let c = CString::new(n).map_err(|_| err("Invalid cache name"))?;
         if create {
             let rc = unsafe { libc::mkdirat(self.file.as_raw_fd(), c.as_ptr(), 0o700) };
@@ -64,7 +89,7 @@ impl Dir {
             libc::openat(
                 self.file.as_raw_fd(),
                 c.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                access | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
             )
         };
         if fd < 0 {
@@ -76,6 +101,10 @@ impl Dir {
         })
     }
     fn open(&self, n: &str, write: bool) -> Result<File> {
+        self.open_existing(n, write)?
+            .ok_or_else(|| err("Unsafe or unavailable cache file"))
+    }
+    fn open_existing(&self, n: &str, write: bool) -> Result<Option<File>> {
         let c = CString::new(n).map_err(|_| err("Invalid cache name"))?;
         let flags = if write {
             libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL
@@ -91,6 +120,9 @@ impl Dir {
             )
         };
         if fd < 0 {
+            if !write && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
+                return Ok(None);
+            }
             return Err(err("Unsafe or unavailable cache file"));
         }
         let f = unsafe { File::from_raw_fd(fd) };
@@ -98,7 +130,7 @@ impl Dir {
         if !m.is_file() || m.nlink() != 1 {
             return Err(err("Cache entry is not a regular file"));
         }
-        Ok(f)
+        Ok(Some(f))
     }
     fn remove(&self, n: &str) -> Result<()> {
         let c = CString::new(n).map_err(|_| err("Invalid cache name"))?;
@@ -131,15 +163,23 @@ impl Dir {
         Ok(())
     }
     fn read_json(&self, n: &str) -> Result<Value> {
+        self.read_optional_json(n)?
+            .ok_or_else(|| err("Unsafe or unavailable cache file"))
+    }
+    fn read_optional_json(&self, n: &str) -> Result<Option<Value>> {
+        let Some(file) = self.open_existing(n, false)? else {
+            return Ok(None);
+        };
         let mut b = Vec::new();
-        self.open(n, false)?
-            .take(1024 * 1024 + 1)
+        file.take(1024 * 1024 + 1)
             .read_to_end(&mut b)
             .map_err(|_| err("Cache read failed"))?;
         if b.len() > 1024 * 1024 {
             return Err(err("Cache metadata too large"));
         }
-        serde_json::from_slice(&b).map_err(|_| err("Invalid cache metadata"))
+        serde_json::from_slice(&b)
+            .map(Some)
+            .map_err(|_| err("Invalid cache metadata"))
     }
     fn save(&self, n: &str, v: &Value) -> Result<()> {
         if v.to_string().len() > 1024 * 1024 {
@@ -159,32 +199,14 @@ fn directory(v: &Value) -> Result<Dir> {
 }
 fn catalog(d: &Dir) -> Result<Vec<Value>> {
     // Fixed catalog avoids unbounded directory traversal.
-    match d.read_json("catalog.json") {
-        Ok(v) => {
-            let a = v
-                .as_array()
-                .filter(|a| a.len() <= ITEMS)
-                .ok_or_else(|| err("Invalid cache catalog"))?;
-            Ok(a.clone())
-        }
-        Err(e) => {
-            let c = CString::new("catalog.json").unwrap();
-            if unsafe {
-                libc::faccessat(
-                    d.file.as_raw_fd(),
-                    c.as_ptr(),
-                    libc::F_OK,
-                    libc::AT_SYMLINK_NOFOLLOW,
-                )
-            } != 0
-                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound
-            {
-                Ok(vec![])
-            } else {
-                Err(e)
-            }
-        }
-    }
+    let Some(v) = d.read_optional_json("catalog.json")? else {
+        return Ok(vec![]);
+    };
+    let a = v
+        .as_array()
+        .filter(|a| a.len() <= ITEMS)
+        .ok_or_else(|| err("Invalid cache catalog"))?;
+    Ok(a.clone())
 }
 #[derive(Clone, PartialEq, Eq)]
 struct FileStamp {
@@ -381,6 +403,45 @@ pub(super) fn logout(v: &Value) -> Result<()> {
         *m = None;
     }
     Ok(())
+}
+
+/// Join the account's writer before removing only this cache namespace's entries.
+pub(super) fn purge(v: &Value) -> Result<()> {
+    let account = account(v)?;
+    let mut current = manager().lock().map_err(|_| err("Cache busy"))?;
+    if let Some(job) = current.as_mut().filter(|j| j.account == account) {
+        stop(job)?;
+        *current = None;
+    }
+    let directory = directory(v)?;
+    directory.lock()?;
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(&directory.path).map_err(|_| err("Cache unavailable"))? {
+        let name = entry
+            .map_err(|_| err("Cache unavailable"))?
+            .file_name()
+            .into_string()
+            .map_err(|_| err("Unexpected cache entry"))?;
+        let owned = matches!(
+            name.as_str(),
+            "catalog.json" | "catalog.json.tmp" | "pending.json" | "pending.json.tmp"
+        ) || name.split_once('.').is_some_and(|(key, extension)| {
+            key.len() == 64
+                && key.bytes().all(|b| b.is_ascii_hexdigit())
+                && (CONTAINERS.contains(&extension) || matches!(extension, "audio" | "part"))
+        });
+        if !owned || names.len() >= 1024 {
+            return Err(err("Unexpected cache entry; local cleanup incomplete"));
+        }
+        names.push(name);
+    }
+    for name in names {
+        directory.remove(&name)?;
+    }
+    directory
+        .file
+        .sync_all()
+        .map_err(|_| err("Cache cleanup sync failed"))
 }
 pub(super) fn call(v: &Value, op: &str) -> Result<Value> {
     let a = account(v)?;
@@ -684,6 +745,35 @@ fn download(
 mod tests {
     use super::*;
     static SERIAL: Mutex<()> = Mutex::new(());
+    #[test]
+    fn purge_is_scoped_and_preserves_unknown_user_files() {
+        let _serial = SERIAL.lock().unwrap();
+        let path = root();
+        let request =
+            json!({"server":"https://example.com","userId":"purge-owner","cacheRoot":path});
+        let owned = directory(&request).unwrap();
+        owned.save("catalog.json", &json!([])).unwrap();
+        owned
+            .open(&format!("{}.part", hash(b"song")), true)
+            .unwrap()
+            .write_all(b"partial")
+            .unwrap();
+        let mut other = request.clone();
+        other["userId"] = json!("other-owner");
+        let untouched = directory(&other).unwrap();
+        untouched.save("catalog.json", &json!([])).unwrap();
+        purge(&request).unwrap();
+        assert!(owned.open("catalog.json", false).is_err());
+        assert!(untouched.open("catalog.json", false).is_ok());
+        owned
+            .open("user-note.txt", true)
+            .unwrap()
+            .write_all(b"preserve")
+            .unwrap();
+        assert!(purge(&request).is_err());
+        assert!(owned.open("user-note.txt", false).is_ok());
+        std::fs::remove_dir_all(path).unwrap();
+    }
     fn root() -> PathBuf {
         let p = PathBuf::from(
             std::env::var("BLUEFIN_TEST_CACHE")
@@ -927,6 +1017,140 @@ mod tests {
             .unwrap()
             .contains("account"));
         *manager().lock().unwrap() = None;
+        std::fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn cache_walk_accepts_search_only_ancestors_without_following_links() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        assert_ne!(
+            unsafe { libc::geteuid() },
+            0,
+            "requires an unprivileged test user"
+        );
+        let p = root();
+        let ancestor = p.join("search-only");
+        let cache = ancestor.join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        symlink(&cache, ancestor.join("linked-cache")).unwrap();
+        symlink(&ancestor, p.join("linked-ancestor")).unwrap();
+        struct Cleanup(PathBuf, PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.1, std::fs::Permissions::from_mode(0o700));
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(p.clone(), ancestor.clone());
+        std::fs::set_permissions(&ancestor, std::fs::Permissions::from_mode(0o111)).unwrap();
+        assert_eq!(
+            File::open(&ancestor).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        let d = Dir::root(cache.to_str().unwrap()).unwrap();
+        let owned = d.child("owned", true).unwrap();
+        owned.lock().unwrap();
+        owned.save("catalog.json", &json!([])).unwrap();
+        assert_eq!(owned.read_json("catalog.json").unwrap(), json!([]));
+        assert!(Dir::root(ancestor.join("linked-cache").to_str().unwrap()).is_err());
+        assert!(Dir::root(p.join("linked-ancestor/cache").to_str().unwrap()).is_err());
+        assert!(Dir::root("/").is_err());
+        assert!(Dir::root("relative/cache").is_err());
+        assert!(Dir::root(ancestor.join("../search-only/cache").to_str().unwrap()).is_err());
+    }
+    #[test]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[ignore = "requires process-scoped seccomp fault injection"]
+    fn missing_catalog_does_not_require_access_probe() {
+        if std::env::var_os("BLUEFIN_ACCESS_PROBE_CHILD").is_none() {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "offline::tests::missing_catalog_does_not_require_access_probe",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env("BLUEFIN_ACCESS_PROBE_CHILD", "1")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+        // Only this disposable test thread is constrained. Simulate an unavailable
+        // access-check syscall; this does not identify Android's actual errno.
+        let instruction = |code, jt, jf, k| libc::sock_filter { code, jt, jf, k };
+        let mut filter = [
+            instruction(0x20, 0, 0, 0), // load syscall number
+            instruction(0x15, 1, 0, libc::SYS_faccessat as u32),
+            instruction(0x15, 0, 1, libc::SYS_faccessat2 as u32),
+            instruction(0x06, 0, 0, libc::SECCOMP_RET_ERRNO | libc::ENOSYS as u32),
+            instruction(0x06, 0, 0, libc::SECCOMP_RET_ALLOW),
+        ];
+        let program = libc::sock_fprog {
+            len: filter.len() as u16,
+            filter: filter.as_mut_ptr(),
+        };
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) },
+            0
+        );
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &program) },
+            0
+        );
+        assert_eq!(
+            unsafe {
+                libc::syscall(
+                    libc::SYS_faccessat,
+                    libc::AT_FDCWD,
+                    c"/".as_ptr(),
+                    libc::F_OK,
+                )
+            },
+            -1
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ENOSYS)
+        );
+        let p = root();
+        let result = call(&input(&p), "downloads");
+        std::fs::remove_dir_all(p).unwrap();
+        assert_eq!(result.unwrap()["Items"], json!([]));
+    }
+    #[test]
+    fn missing_catalog_is_empty_but_unsafe_or_invalid_entries_are_errors() {
+        let p = root();
+        let v = input(&p);
+        let d = directory(&v).unwrap();
+        assert!(catalog(&d).unwrap().is_empty());
+        let outside = p.join("foreign.json");
+        std::fs::write(&outside, b"[]").unwrap();
+        std::os::unix::fs::symlink(p.join("absent"), d.path.join("catalog.json")).unwrap();
+        assert!(catalog(&d).is_err());
+        d.remove("catalog.json").unwrap();
+        std::fs::hard_link(&outside, d.path.join("catalog.json")).unwrap();
+        assert!(catalog(&d).is_err());
+        d.remove("catalog.json").unwrap();
+        std::fs::create_dir(d.path.join("catalog.json")).unwrap();
+        assert!(catalog(&d).is_err());
+        std::fs::remove_dir(d.path.join("catalog.json")).unwrap();
+        for invalid in ["", "invalid JSON", "null", "{}"] {
+            std::fs::write(d.path.join("catalog.json"), invalid).unwrap();
+            assert!(catalog(&d).is_err());
+            assert_eq!(
+                std::fs::read_to_string(d.path.join("catalog.json")).unwrap(),
+                invalid
+            );
+        }
+        std::fs::write(d.path.join("catalog.json"), b"[]").unwrap();
+        assert!(catalog(&d).unwrap().is_empty());
+        assert_eq!(std::fs::read(&outside).unwrap(), b"[]");
         std::fs::remove_dir_all(p).unwrap();
     }
     #[test]

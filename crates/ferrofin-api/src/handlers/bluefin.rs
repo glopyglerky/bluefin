@@ -35,18 +35,34 @@ fn viewer(auth: &AuthorizationInfo) -> Result<Uuid, ApiError> {
 }
 
 async fn capabilities(
+    State(state): State<AppState>,
     RequireAuth(auth): RequireAuth,
     Query(_): Query<NoUserSelection>,
-) -> Result<Json<Capabilities>, ApiError> {
+    request: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let user_id = viewer(&auth)?;
     let policy = auth
         .user_policy
         .as_ref()
         .ok_or_else(|| ApiError::Forbidden("user policy required".into()))?;
-    Ok(Json(Capabilities {
+    let mut capabilities = serde_json::to_value(Capabilities {
         protocol_version: PROTOCOL_VERSION,
         music_queue_sync: true,
         max_queue_items: MAX_QUEUE_ITEMS,
+        discovery: match &state.discovery {
+            Some(discovery) => {
+                discovery
+                    .capabilities(
+                        bluefin_discovery::Viewer {
+                            user_id,
+                            administrator: policy.is_administrator,
+                        },
+                        bluefin_discovery::Audience::Client,
+                    )
+                    .await
+            }
+            None => None,
+        },
         viewer: ViewerCapabilities {
             user_id,
             media_playback: policy.enable_media_playback,
@@ -54,7 +70,18 @@ async fn capabilities(
             content_downloading: policy.enable_content_downloading,
             live_tv_access: policy.enable_live_tv_access,
         },
-    }))
+    })
+    .map_err(|_| ApiError::ServiceUnavailable("capabilities unavailable".into()))?;
+    capabilities["karaokePreparation"] = serde_json::json!({
+        "enabled": state.karaoke().is_some(), "maxDurationSeconds": 300,
+        "requiresSuppliedTiming": true,
+    });
+    let (parts, _) = request.into_parts();
+    if let Some(transport) = crate::iroh_media::advertised(&state, &parts).await {
+        capabilities["irohMediaTransport"] = serde_json::to_value(transport)
+            .map_err(|_| ApiError::ServiceUnavailable("transport unavailable".into()))?;
+    }
+    Ok(Json(capabilities))
 }
 
 async fn load(state: &AppState, user_id: Uuid) -> Result<MusicQueue, ApiError> {
@@ -160,7 +187,7 @@ async fn put_queue(
 
 /// Register Bluefin extensions alongside the existing Jellyfin-compatible API.
 pub fn register(router: Router<AppState>) -> Router<AppState> {
-    router
+    super::bluefin_discovery::register(super::bluefin_karaoke::register(router))
         .route("/Bluefin/Capabilities", get(capabilities))
         .route(
             "/Bluefin/Music/Queue",

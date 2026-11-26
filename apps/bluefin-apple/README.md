@@ -53,7 +53,10 @@ xcodebuild -project Bluefin.xcodeproj -scheme Bluefin \
 ```
 
 Run the Bluefin scheme's unit tests with the same settings and the `test`
-action. Use T3 `device_list`, then `device_open`, and the command it returns for
+action. With the delivered arm64 libraries, explicitly set `ARCHS=arm64` and
+`ONLY_ACTIVE_ARCH=YES`. A Release test invocation also needs
+`ENABLE_TESTABILITY=YES`; keep retained release app bundles separate from test
+hosts and their XCTest payload. Use T3 `device_list`, then `device_open`, and the command it returns for
 all simulator interactions. tvOS must be exposed by T3 before its remote UI
 journey can be accepted.
 
@@ -73,6 +76,9 @@ sign-out methods. It holds an in-flight report, closes the player, signs out,
 and verifies captured-account cleanup completes before logout. It also checks
 that cleanup failure remains visible after dismissal. Compile each check as a
 separate executable, since each defines its own entry point.
+Run the store executable with `--vault-failure` to check that failed Keychain
+deletion preserves the saved account, reports the failure and allows sign-out
+to succeed on retry. Its Keychain adapter never accesses a real saved account.
 
 ## Development reuse
 
@@ -82,10 +88,21 @@ bounded build cache, then run it from this directory. Set `CARGO_TARGET_DIR` and
 argument selects one of the four Apple targets. This helper selects the matching
 Xcode SDK, keeps the OS 15 deployment floor and remaps source, home, toolchain and
 cache paths in Rust output. Use `CARGO_ENCODED_RUSTFLAGS` for additional flags.
+`CARGO_BUILD_JOBS` accepts 1 through 4 and defaults to 2. Use 1 on a
+memory-constrained Mac; the same limit applies to the prerequisite checks.
 Point Xcode's `BLUEFIN_RUST_LIB_DIR` at the matching retained candidate directory.
 Audit the final bundle too; compiler path remapping is not a secret-data scan.
 
-The helper first runs the [native dependency boundary check](../../gates/client-boundary/README.md).
+After generating the project, compile `tools/BuildApps.rs` into the build cache.
+Set `BLUEFIN_XCODE_DERIVED`, `BLUEFIN_APP_OUT` and `BLUEFIN_CORE_OUT` to absolute
+paths outside source, then run the helper from this directory. It builds the
+four unsigned arm64 Release applications and retains bundles outside derived
+data. Optional `ios-sim`, `ios`, `tvos-sim` or `tvos` selects one target. Existing
+candidate bundles are preserved; choose a fresh output directory for a new set.
+Use fresh derived data for retained application bundles too. The helper rejects
+stale XCTest bundles and externally staged model test fixtures in app output.
+
+`BuildCore.rs` first runs the [native dependency boundary check](../../gates/client-boundary/README.md).
 Provider discovery adapters and their administration code belong to the server
 and web administration application. Native clients may consume generic Bluefin
 results/actions only when the server enables and authorizes them. No provider
@@ -99,11 +116,8 @@ execution. It is not used as an Apple release compiler or represented as a
 measured speedup here. A future portable, dependency-free policy module can
 be checked against Lustr only after a parity benchmark proves a useful loop.
 
-The existing private infrastructure supplied a shared bounded build cache,
-NAS compilation route, T3 device integration, and deployment observations.
-Those private details are kept out of the public app. The inspected workspace
-gateway's MCP ALPN is not a media protocol and is not used to bypass media
-authorization.
+Build paths, signing configuration and runtime server addresses are supplied by
+the developer's environment. Keep deployment records outside the checkout.
 
 ## Upstream review
 
@@ -119,16 +133,24 @@ copied or that Bluefin has reached parity:
 | Reference | Useful behavior | Bluefin status |
 | --- | --- | --- |
 | [Swiftfin](https://github.com/jellyfin/Swiftfin) and its [player comparison](https://github.com/jellyfin/Swiftfin/blob/main/Documentation/players.md) | Native Apple navigation, AVPlayer integration, system AirPlay, frame-rate matching tradeoffs | Native shell implemented; physical playback/system-feature acceptance pending |
-| [Streamyfin](https://github.com/streamyfin/streamyfin) | Downloads, intro/credits skipping, trickplay, Seerr requests | Reviewed; not implemented or advertised as available |
+| [Streamyfin](https://github.com/streamyfin/streamyfin) | Downloads, intro/credits skipping, trickplay, Seerr requests | Verified audio-download implementation; intro/credits and trickplay remain gaps. Provider discovery stays server/web only; native clients consume authorized generic results. |
 | [Moonfin](https://github.com/Moonfin-Client/Moonfin-Core) | Household profiles, discovery, synchronized settings, watch together | Reviewed; server-specific integration and authorization remain unqualified |
-| [Finamp](https://github.com/jmshrv/finamp) | Gapless music, offline queue/progress, ReplayGain, CarPlay | Reviewed; dedicated music/offline/CarPlay journeys remain unqualified |
+| [Finamp](https://github.com/jmshrv/finamp) | Gapless music, offline queue/progress, ReplayGain, CarPlay | Dedicated music, verified offline audio, queue preloading and metadata gain implemented. Acoustic gapless and provisioned CarPlay journeys remain unqualified. |
 | [Apple HIG](https://developer.apple.com/design/human-interface-guidelines/) | Native navigation, focus, accessibility, motion and platform controls | System controls used; Dynamic Type, VoiceOver, remote focus and Reduce Motion require device QA |
 
-No claim is made to have audited every streaming client, copied proprietary
-clients, or combined all upstream features. Native offline HLS downloads,
-Live TV/DVR, chapters/trickplay, track switching requiring renegotiation,
-up-next autoplay, media requests, household switching, preferences sync, and
-performance budgets remain explicit qualification work.
+The source includes Live TV and guide navigation, chapters, track/quality
+renegotiation, music queue preloading, sports, trailers and authorized Sing
+packages. Each still needs the relevant connected-server and device journeys.
+Native offline HLS downloads, DVR management, trickplay, intro/credits skipping,
+video episode autoplay, household switching and full preference synchronization
+remain gaps. Premium parity and performance require measured acceptance.
+
+Audio details use the negotiated source-track index, or an unambiguous server
+default. An unknown selection never borrows the first track's quality badge.
+Hi-Res Lossless describes known 24-bit-or-higher lossless source audio above
+48 kHz. Server conversion and Sing processing are labeled separately; the
+current output route, sample rate and channel count do not prove bit-perfect
+or lossless wireless output.
 
 ## Private distribution
 
@@ -158,9 +180,9 @@ Sources: [account comparison](https://developer.apple.com/help/account/basics/ab
 
 ## Output ownership
 
-Keep source under `~/repo`, generated outputs on the bounded Mac cache or NAS
-build filesystem, and current deliverables plus one useful rollback outside
+Keep source in a checkout, generated outputs in bounded external storage,
+and current deliverables plus one useful rollback outside
 target directories. After checking source and artifacts, delete owned compiler
 intermediates and scratch outputs. Keep small logs, hashes, first failures,
 and actual available-space observations. Preserve shared caches, held work,
-user data, keys, installed services, and the reserved NAS disks.
+user data, keys and installed services.

@@ -3741,6 +3741,18 @@ fn is_remote_image_path(path: &str) -> bool {
 
 #[async_trait]
 impl ItemRepository for FerrofinItemRepository {
+    async fn capture_local_source(
+        &self,
+        item_id: Uuid,
+        source_id: Uuid,
+        expected_path: &str,
+    ) -> Result<ferrofin_db::source_pin::OpenedSourceGeneration, ServiceError> {
+        self.db
+            .capture_local_source(item_id, source_id, expected_path)
+            .await
+            .map_err(ServiceError::from)
+    }
+
     async fn filter_folder_children(
         &self,
         rows: Vec<BaseItemEntity>,

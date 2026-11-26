@@ -334,9 +334,18 @@ async fn run_lifetimes(
     // stream exists is dropped, so per-lifetime streams would lose a
     // `docker stop` that lands during the rebuild window of a restart.
     let signals = Signals::install();
+    let iroh_config = bluefin_iroh_server::Config::from_env()?;
     loop {
         let started = std::time::Instant::now();
-        match serve_once(&config, started, &mut metrics, &signals).await {
+        match serve_once(
+            &config,
+            started,
+            &mut metrics,
+            &signals,
+            iroh_config.as_ref(),
+        )
+        .await
+        {
             Ok(true) => {
                 tracing::info!("restart requested — re-creating the host in-process");
                 if let Some(reload) = reload.as_deref_mut() {
@@ -574,6 +583,7 @@ async fn serve_once(
     started: std::time::Instant,
     metrics: &mut Option<ProcessMetrics>,
     signals: &Signals,
+    iroh_config: Option<&bluefin_iroh_server::Config>,
 ) -> anyhow::Result<bool> {
     // Process-wide SQLite setup must precede every open, the restore and the
     // existing-database check below included.
@@ -768,13 +778,51 @@ async fn serve_once(
             .app_host
             .set_bound_https_port(listener.local_addr().port());
     }
+    let iroh = match iroh_config {
+        Some(config) => {
+            if let Ok(server) = bluefin_iroh_server::Server::bind(config).await {
+                Some(server)
+            } else {
+                tear_down_host(wired, None, sampler).await;
+                db.close().await;
+                anyhow::bail!("unable to initialize opted-in Iroh media transport");
+            }
+        }
+        None => None,
+    };
     let discovery = start_discovery(&wired, config.discovery_bind_addr).await;
     let discovery_abort = discovery
         .as_ref()
         .map(tokio::task::JoinHandle::abort_handle);
     // The handover: the listeners serving the startup answers serve the
     // lifetime's router from the next request on, and HTTPS starts with it.
+    let iroh_app = iroh.as_ref().map(|_| {
+        lifetime_app(
+            ferrofin_api::iroh_media::router(wired.state.clone(), router.clone()),
+            &config.base_url,
+            None,
+        )
+    });
     let app = lifetime_app(router, &config.base_url, https_redirect(config, &wired));
+    let (iroh_stop, iroh_rx) = tokio::sync::watch::channel(false);
+    let iroh_job = iroh.zip(iroh_app).map(|(server, app)| {
+        let (endpoint_id, address) = server.address();
+        wired.state.set_iroh_media_transport(Some(
+            bluefin_contract::transport::IrohMediaTransport {
+                version: 1,
+                endpoint_id,
+                direct_addresses: vec![address.to_string()],
+                alpn: "bluefin/http/1".into(),
+                direct_only: true,
+            },
+        ));
+        let state = wired.state.clone();
+        tokio::spawn(async move {
+            let result = server.run(app, iroh_rx).await;
+            state.set_iroh_media_transport(None);
+            result
+        })
+    });
     serving.serve(https_listeners, &app);
     // `ready` is this lifetime's own, so this is its only `set`.
     let _ = ready.set(app);
@@ -785,14 +833,19 @@ async fn serve_once(
         "ferrofin-server ready"
     );
 
+    let iroh_shutdown = iroh_stop.clone();
+    let shutdown = announce_shutdown(
+        shutdown_rx,
+        Arc::clone(&wired.state.sessions),
+        signals.clone(),
+        discovery_abort,
+    );
     let serve_result = serving
         .drain(
-            announce_shutdown(
-                shutdown_rx,
-                Arc::clone(&wired.state.sessions),
-                signals.clone(),
-                discovery_abort,
-            ),
+            async move {
+                shutdown.await;
+                let _ = iroh_shutdown.send(true);
+            },
             config.shutdown_timeout_secs,
         )
         .await;
@@ -800,9 +853,26 @@ async fn serve_once(
     // Tear the host down (Jellyfin: `using CoreAppHost` per iteration): stop
     // every background task, then close the pools so nothing from this lifetime
     // still holds the database file when the next one opens — or restores — it.
+    wired.state.set_iroh_media_transport(None);
+    let _ = iroh_stop.send(true);
+    let iroh_result = if let Some(job) = iroh_job {
+        job.await
+            .context("Iroh lifetime task failed")
+            .and_then(|r| r)
+            .map(|receipt| {
+                tracing::info!(
+                    joined_connections = receipt.joined_connections,
+                    endpoint_closed = receipt.endpoint_closed,
+                    "Iroh media transport stopped"
+                );
+            })
+    } else {
+        Ok(())
+    };
     let restart = wired.lifecycle.restart_requested() && !signals.fired();
     tear_down_host(wired, discovery, sampler).await;
     db.close().await;
+    iroh_result?;
     serve_result?;
     tracing::info!(
         uptime_s = started.elapsed().as_secs(),
@@ -825,6 +895,9 @@ async fn tear_down_host(
     sampler: Option<tokio::task::JoinHandle<()>>,
 ) {
     stop_background_tasks(discovery.into_iter().chain(sampler).collect()).await;
+    if let Some(karaoke) = wired.state.karaoke() {
+        karaoke.shutdown().await;
+    }
     wired.task_manager.shutdown().await;
     wired.state.library.shutdown_scans().await;
     stop_background_tasks(wired.background).await;

@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "Middle.png",
+      "idiom" : "vision",
+      "scale" : "2x"
+    }
+  ],
+  "info" : {
+    "author" : "org.glopyglerky.bluefin",
+    "version" : 1
+  }
+}

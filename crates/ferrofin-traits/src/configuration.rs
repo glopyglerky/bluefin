@@ -201,6 +201,20 @@ pub trait DisplayPreferencesManager: Send + Sync {
         custom_preferences: &HashMap<String, Option<String>>,
     ) -> Result<(), ServiceError>;
 
+    /// Atomically compares and replaces an entire scoped custom-preference map.
+    /// Implementations must serialize the comparison with database writers,
+    /// including other connections/processes. Unsupported backends fail closed.
+    async fn compare_exchange_custom_item_display_preferences(
+        &self,
+        _user_id: Uuid,
+        _item_id: Uuid,
+        _client: &str,
+        _expected: &HashMap<String, Option<String>>,
+        _replacement: &HashMap<String, Option<String>>,
+    ) -> Result<bool, ServiceError> {
+        Err(ServiceError::backend("atomic preferences unavailable"))
+    }
+
     /// Saves the changes to an existing display-preferences row, matched by its
     /// user/item/client. It creates no row (nor does upstream's
     /// `EntityState.Modified` attach), so get the row first.

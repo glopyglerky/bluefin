@@ -20,6 +20,9 @@ name = "ferrofin-server"
 path = "src/main.rs"
 
 [dependencies]
+bluefin-iroh-server = { path = "../../crates/bluefin-iroh-server" }
+bluefin-contract = { path = "../../crates/bluefin-contract" }
+bluefin-discovery = { path = "../../crates/bluefin-discovery" }
 ferrofin-util.workspace = true
 # every impl crate — this is the composition root that assembles them
 ferrofin-api.workspace = true
@@ -68,6 +71,8 @@ opentelemetry-otlp.workspace = true
 tracing-opentelemetry.workspace = true
 
 [dev-dependencies]
+iroh = { version = "=1.4.1", default-features = false, features = ["tls-ring"] }
+sha2.workspace = true
 # state.rs storage test, planner.rs label test: the virtual-folder fake that counts full listings.
 ferrofin-api = { workspace = true, features = ["test-util"] }
 # live_tv_artwork, item_visibility: date the guide fixture, whose window follows the clock.

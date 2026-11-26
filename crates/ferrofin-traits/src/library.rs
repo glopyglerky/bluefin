@@ -53,6 +53,18 @@ use crate::providers::MetadataRefreshOptions;
 /// `IProgress<double>` a scheduled task hands its work.
 pub type ScanProgressSink = std::sync::Arc<dyn Fn(f64) + Send + Sync>;
 
+/// Private current source evidence; never serialize or expose its file/path.
+pub struct LocalAudioEvidence {
+    /// Reopened current original, checked against the retained input identity.
+    pub input: std::fs::File,
+    /// Complete captured item/source/version/stream generation fingerprint.
+    pub generation: String,
+    /// Actual selected source identifier.
+    pub media_source_id: String,
+    /// Positive finite source duration, in 100 ns ticks.
+    pub duration_ticks: i64,
+}
+
 /// Why a library scan runs — the request that started it: the `trigger` field
 /// of its `library_scan` span and log lines (`docs/conventions/LOGGING.md`'s
 /// vocabulary) and the bounded `trigger` label of the library-scan metrics
@@ -1605,6 +1617,15 @@ pub trait UserManager: Send + Sync {
     /// Creates a user with the given name and returns the new row.
     async fn create_user(&self, name: &str) -> Result<UserEntity, ServiceError>;
 
+    /// Atomically creates a local account with a password and no library grants.
+    async fn create_signup_user(
+        &self,
+        _name: &str,
+        _password: &str,
+    ) -> Result<UserEntity, ServiceError> {
+        Err(ServiceError::backend("Client account creation is not available"))
+    }
+
     /// Creates a user `name` whose sign-ins belong to an outside
     /// authentication provider, set up as `setup` says, and returns the new
     /// row. Upstream's LDAP plugin calls `CreateUserAsync`, sets the provider
@@ -1744,6 +1765,20 @@ pub trait UserManager: Send + Sync {
         user: &UserEntity,
         server_id: Option<String>,
     ) -> Result<UserDto, ServiceError>;
+
+    /// Current media-playback boolean for an already resolved user. This is
+    /// independent of credential parsing and grants no authentication authority.
+    /// Persistent managers must bypass policy/DTO caches for retained streams.
+    async fn current_media_playback_allowed(
+        &self,
+        user: &UserEntity,
+    ) -> Result<bool, ServiceError> {
+        Ok(self
+            .get_user_dto(user, None)
+            .await?
+            .policy
+            .is_some_and(|policy| policy.enable_media_playback))
+    }
 
     /// The libraries `user` hides from Latest
     /// (`UserConfiguration.LatestItemsExcludes`), as [`Self::get_user_dto`]
@@ -2500,6 +2535,18 @@ pub trait UserViewManager: Send + Sync {
 
 fn _assert_object_safe_user_view_manager(_: &dyn UserViewManager) {}
 
+/// Current operation permissions of an already validated source pin's viewer.
+/// These are observations of the existing policy owner, never a new grant.
+#[derive(Debug, Clone, Copy)]
+pub struct PinnedSourcePolicy {
+    /// General playback remains enabled for the captured viewer.
+    pub enable_media_playback: bool,
+    /// Download requires its own current permission, independently of playback.
+    pub enable_content_downloading: bool,
+    /// Audio/video transcoding and remuxing remain independent operations.
+    pub playback: PlaybackPermissions,
+}
+
 /// Resolves and opens playable media sources for an item.
 ///
 /// Port of `IMediaSourceManager` (the API-facing subset). Streams and sources
@@ -2507,6 +2554,52 @@ fn _assert_object_safe_user_view_manager(_: &dyn UserViewManager) {}
 /// direct-provider internals are dropped for v1.
 #[async_trait]
 pub trait MediaSourceManager: Send + Sync {
+    /// Fresh raw operation permissions for this pin's captured viewer, after
+    /// validating the account, schedule and current/captured classification.
+    /// No caller-selected user or cached policy may substitute for that viewer.
+    /// Ordinary/unpinned managers fail closed. Authentication, network and
+    /// device policy remain the caller's responsibility.
+    async fn current_pinned_policy(&self) -> Result<PinnedSourcePolicy, ServiceError> {
+        Err(ServiceError::unavailable("pinned policy is unavailable"))
+    }
+    /// Compare and retain one finite local input for `viewer`. The returned
+    /// scoped manager is the guard: every clone retains the opened input until
+    /// the last clone drops. Its resolvers serve only the captured generation,
+    /// including known-row, planner, direct, progressive and transcode reads.
+    /// Each resolution must recheck current account and captured-input visibility.
+    ///
+    /// Bind this manager into the private playback router for BOTH planning and
+    /// every dispatch, and retain it until each reader/encoder has opened its
+    /// input. Never fall back to the unpinned manager or expose its input path.
+    /// Authentication, remote-access and device checks remain the caller's job.
+    /// This pins logical source selection/open-file identity, not file contents.
+    /// An implementation lacking this facility must fail closed.
+    async fn pin_local_source(
+        &self,
+        _item_id: Uuid,
+        _source_id: &str,
+        _expected_path: &str,
+        _viewer: Uuid,
+    ) -> Result<std::sync::Arc<dyn MediaSourceManager>, ServiceError> {
+        Err(ServiceError::unavailable(
+            "local source pins are unsupported",
+        ))
+    }
+
+    /// Current evidence for an already source-bound manager. Rechecks logical
+    /// generation, opened identity and the original classification with fresh
+    /// policy. The returned file is mutable-source evidence, not frozen bytes;
+    /// retain this manager, copy/hash the bytes and recheck before publication.
+    async fn current_local_audio(
+        &self,
+        _item_id: Uuid,
+        _viewer: Uuid,
+    ) -> Result<LocalAudioEvidence, ServiceError> {
+        Err(ServiceError::unavailable(
+            "current local audio checks unavailable",
+        ))
+    }
+
     /// Gets the media streams of an item as presentation DTOs.
     async fn get_media_streams(
         &self,

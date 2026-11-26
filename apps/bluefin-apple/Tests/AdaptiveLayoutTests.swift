@@ -7,6 +7,69 @@ import SwiftUI
 #endif
 
 @MainActor final class AdaptiveLayoutTests: XCTestCase {
+    func testGuideArtworkUsesOnlyTheProgramsAdvertisedPrimaryImage() throws {
+        let payload = """
+        {"Id":"programme","ChannelId":"channel","ImageTags":{"Primary":"version"}}
+        """
+        let program = try JSONDecoder().decode(LiveProgram.self, from: Data(payload.utf8))
+        XCTAssertEqual(program.artwork?.Id, "programme")
+        XCTAssertEqual(program.artwork?.ImageTags?["Primary"], "version")
+        XCTAssertNil(LiveProgram(Id: "missing").artwork)
+        XCTAssertNil(LiveProgram(Id: "other", ImageTags: ["Primary": ""]).artwork)
+    }
+
+    func testGuideTimelineKeepsChannelRowsAligned() {
+        let midnight = Date(timeIntervalSince1970: 0)
+        func program(_ id: String, _ start: String, _ end: String) -> LiveProgram {
+            LiveProgram(Id: id, StartDate: start, EndDate: end)
+        }
+        let guide = GuideTimeline(start: midnight, end: midnight.addingTimeInterval(7200))
+        let programmes = [
+            program("before", "1969-12-31T23:00:00Z", "1970-01-01T00:00:00Z"),
+            program("first", "1969-12-31T23:45:00Z", "1970-01-01T00:30:00Z"),
+            program("overlap", "1970-01-01T00:20:00Z", "1970-01-01T00:45:00Z"),
+            program("later", "1970-01-01T01:00:00Z", "1970-01-01T03:00:00Z"),
+            program("invalid", "1970-01-01T01:15:00Z", "1970-01-01T01:00:00Z"),
+        ]
+        let cells = guide.segments(programmes)
+        XCTAssertEqual(cells.map { $0.program?.Id }, ["first", "overlap", nil, "later"])
+        XCTAssertEqual(cells.map { guide.fraction(at: $0.start) }, [0, 0.25, 0.375, 0.5])
+        XCTAssertEqual(cells.map { guide.fraction(at: $0.end) }, [0.25, 0.375, 0.5, 1])
+        XCTAssertEqual(guide.segments([]).first?.end, guide.end)
+    }
+
+    #if os(tvOS)
+    func testTVSignInRendersAtWideAndCompactSizes() throws {
+        guard #available(tvOS 16.0, *) else { throw XCTSkip("Hosting size measurement requires tvOS 16") }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let store = LibraryStore()
+        let oldWindow = scene.windows.first(where: \.isKeyWindow)
+        for size in [CGSize(width: 1920, height: 1080), CGSize(width: 1280, height: 720)] {
+            let host = UIHostingController(rootView: TVWelcomeView().environmentObject(store).preferredColorScheme(.dark))
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(origin: .zero, size: size)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            host.view.frame = window.bounds
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            defer { window.isHidden = true; oldWindow?.makeKey() }
+
+            let fitting = host.sizeThatFits(in: size)
+            XCTAssertLessThanOrEqual(fitting.width, size.width + 0.5)
+            let attributes = UIGraphicsImageRendererFormat()
+            attributes.scale = 1
+            let captured = UIGraphicsImageRenderer(size: size, format: attributes).image { context in
+                host.view.layer.render(in: context.cgContext)
+            }
+            let attachment = XCTAttachment(image: captured)
+            attachment.name = "Bluefin sign-in \(Int(size.width))x\(Int(size.height))"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+    #endif
+
     #if os(iOS)
     func testNowPlayingFitsNarrowWindow() async throws {
         guard #available(iOS 16, tvOS 16, *) else { throw XCTSkip("Hosting size measurement requires OS 16") }

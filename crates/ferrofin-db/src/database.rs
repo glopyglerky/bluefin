@@ -80,10 +80,17 @@ pub struct ImageParentRow {
 /// the reader slots the request path depends on (the standard
 /// dedicated-writer SQLite pattern).
 ///
+/// Source-generation capture uses a lazy single-connection pool with SQLite
+/// busy waiting disabled. Its short admission transaction owns no connection
+/// after the opened input is returned.
+///
 /// Cheaply cloneable — the inner [`SqlitePool`]s are reference-counted, so
 /// clones share the same underlying pools.
 #[derive(Debug, Clone)]
 pub struct Database {
+    pub(crate) source_pins: Arc<tokio::sync::Semaphore>,
+    /// Short compare/open admissions use no busy wait on the normal writer.
+    pub(crate) source_capture: SqlitePool,
     pool: SqlitePool,
     writer: SqlitePool,
     /// One connection, opened on first use, for [`Database::snapshot_to`], so
@@ -246,6 +253,10 @@ impl Database {
         let snapshotter = pool.clone();
         let checkpointer = pool.clone();
         Ok(Self {
+            source_capture: pool.clone(),
+            source_pins: Arc::new(tokio::sync::Semaphore::new(
+                crate::source_pin::LOCAL_SOURCE_PIN_LIMIT,
+            )),
             pool,
             writer,
             snapshotter,
@@ -285,6 +296,13 @@ impl Database {
             .max_connections(max_connections)
             .connect_with(read_options)
             .await?;
+        let source_capture = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_lazy_with(
+                write_options
+                    .clone()
+                    .busy_timeout(std::time::Duration::ZERO),
+            );
         // Every writer connection hands its automatic checkpoints to the task.
         // The callback owns `checkpoints` for the pool's life, which is what
         // keeps the hook's context alive under every connection.
@@ -310,6 +328,10 @@ impl Database {
             "database pools opened"
         );
         Ok(Self {
+            source_capture,
+            source_pins: Arc::new(tokio::sync::Semaphore::new(
+                crate::source_pin::LOCAL_SOURCE_PIN_LIMIT,
+            )),
             pool,
             writer,
             snapshotter,
@@ -1102,6 +1124,7 @@ impl Database {
     pub async fn close(&self) {
         self.pool.close().await;
         self.writer.close().await;
+        self.source_capture.close().await;
         self.snapshotter.close().await;
         // After the writer, whose commits start checkpoints. It waits for a
         // running one, and the checkpoint task ends with it.

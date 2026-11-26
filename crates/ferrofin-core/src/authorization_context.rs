@@ -191,6 +191,7 @@ impl FerrofinAuthorizationContext {
         let Some(mut device) = self.device_by_token(token).await? else {
             return Ok(false);
         };
+        self.check_managed_token(&device, token).await?;
 
         info.is_authenticated = true;
         let mut update = false;
@@ -286,6 +287,21 @@ impl FerrofinAuthorizationContext {
     }
 
     /// Looks up the most-recently-active device row bearing this access token.
+    async fn check_managed_token(
+        &self,
+        device: &DeviceEntity,
+        token: &str,
+    ) -> Result<(), ServiceError> {
+        if device.device_id.starts_with("bluefin-managed:") {
+            let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM FerrofinManagedPairing p JOIN Devices d ON d.DeviceId=p.DeviceId WHERE d.AccessToken=? AND p.State IN ('authorized','exchanged') AND (p.Expires>unixepoch() OR p.State='exchanged'))")
+                .bind(token).fetch_one(self.db.pool()).await.map_err(|_|ServiceError::Backend("managed pairing persistence failed".into()))?;
+            if !valid {
+                return Err(ServiceError::unauthorized("managed session revoked"));
+            }
+        }
+        Ok(())
+    }
+
     async fn device_by_token(&self, token: &str) -> Result<Option<DeviceEntity>, ServiceError> {
         sqlx::query_as::<_, DeviceEntity>(
             r#"SELECT * FROM "Devices" WHERE "AccessToken" = ?1
@@ -378,6 +394,7 @@ impl AuthorizationContext for FerrofinAuthorizationContext {
         // effectively gives it. A token the cache knows matched no device skips
         // both reads: an api key's name, or a rejection.
         let api_key_name = if let Some((device, user, policy)) = self.auth_cache.get(token) {
+            self.check_managed_token(&device, token).await?;
             info.is_authenticated = true;
             fill_blank_client_fields(&mut info, &device);
             info.user = user;
@@ -415,6 +432,60 @@ impl AuthorizationContext for FerrofinAuthorizationContext {
 
 #[async_trait]
 impl AuthService for FerrofinAuthorizationContext {
+    async fn authenticate_current_session(
+        &self,
+        request: &RequestContext,
+    ) -> Result<AuthorizationInfo, ServiceError> {
+        // No request extension, token cache, API-key query, legacy header or
+        // caller-selected account can provide authority for prepared audio.
+        let parts = request
+            .header("Authorization")
+            .and_then(|value| parse_authorization_header(value, false))
+            .ok_or_else(|| ServiceError::unauthorized("MediaBrowser session required"))?;
+        let token = parts
+            .token
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| ServiceError::unauthorized("session token required"))?;
+        let device = self
+            .device_by_token(&token)
+            .await?
+            .ok_or_else(|| ServiceError::unauthorized("session revoked"))?;
+        if parts
+            .device_id
+            .as_ref()
+            .is_some_and(|id| id != &device.device_id)
+        {
+            return Err(ServiceError::unauthorized("session device mismatch"));
+        }
+        let user =
+            crate::user_manager::user_repository::fresh_user(self.db.pool(), &device.user_id)
+                .await
+                .map_err(db_err)?
+                .ok_or_else(|| ServiceError::unauthorized("session account absent"))?;
+        let policy = crate::user_manager::current_user_policy(&self.db, &user).await?;
+        // Visibility uses its own database policy/library caches. Refresh those
+        // too before an initial item lookup, including independent writers.
+        self.db.invalidate_user_policy(&user.id);
+        self.db.invalidate_libraries();
+        if policy.is_disabled
+            || (!policy.enable_all_devices && !policy.enabled_devices.contains(&device.device_id))
+        {
+            return Err(ServiceError::Forbidden("session is not permitted".into()));
+        }
+        Ok(AuthorizationInfo {
+            device_id: Some(device.device_id),
+            device: Some(device.device_name),
+            client: Some(device.app_name),
+            version: Some(device.app_version),
+            token: Some(token.into()),
+            user: Some(Arc::new(user)),
+            user_policy: Some(Arc::new(policy)),
+            is_authenticated: true,
+            remote_endpoint: request.remote_endpoint.clone(),
+            is_api_key: false,
+        })
+    }
+
     async fn authenticate(
         &self,
         request: &RequestContext,
@@ -449,6 +520,13 @@ impl FerrofinAuthService {
 
 #[async_trait]
 impl AuthService for FerrofinAuthService {
+    async fn authenticate_current_session(
+        &self,
+        request: &RequestContext,
+    ) -> Result<AuthorizationInfo, ServiceError> {
+        self.inner.authenticate_current_session(request).await
+    }
+
     async fn authenticate(
         &self,
         request: &RequestContext,
@@ -1410,6 +1488,37 @@ mod tests {
         cache.clear();
         let info = ctx.get_authorization_info(&token_request()).await.unwrap();
         assert!(!info.is_authenticated, "cleared cache falls through to DB");
+    }
+
+    #[tokio::test]
+    async fn managed_cancel_revokes_even_a_cached_token() {
+        let db = crate::test_support::test_db().await;
+        let uid = Uuid::from_u128(8);
+        crate::test_support::seed_user(&db, uid).await;
+        seed_device(&db, uid).await;
+        sqlx::query("INSERT INTO FerrofinManagedPairing VALUES ('cache-test','hash','bluefin-managed:cache-test','watch','app','1','Watch','loopback',unixepoch(),unixepoch()+300,'authorized',?)")
+            .bind(uid.to_string()).execute(db.writer()).await.unwrap();
+        sqlx::query("UPDATE Devices SET DeviceId='bluefin-managed:cache-test'")
+            .execute(db.writer())
+            .await
+            .unwrap();
+        let cache = Arc::new(crate::auth_cache::AuthCache::default());
+        let ctx = context(db.clone()).with_auth_cache(Arc::clone(&cache));
+        assert!(
+            ctx.get_authorization_info(&token_request())
+                .await
+                .unwrap()
+                .is_authenticated
+        );
+        assert_eq!(cache.len(), 1);
+        sqlx::query("UPDATE FerrofinManagedPairing SET State='cancelled'")
+            .execute(db.writer())
+            .await
+            .unwrap();
+        assert!(matches!(
+            ctx.get_authorization_info(&token_request()).await,
+            Err(ServiceError::Unauthorized(_))
+        ));
     }
 
     #[tokio::test]

@@ -947,7 +947,7 @@ struct StopEncodingQuery {
 /// `204 No Content`.
 async fn stop_encoding_process(
     State(state): State<AppState>,
-    RequireAuth(_auth): RequireAuth,
+    RequireAuth(auth): RequireAuth,
     Query(query): Query<StopEncodingQuery>,
 ) -> Result<StatusCode, ApiError> {
     let req = HlsStreamRequest {
@@ -955,7 +955,26 @@ async fn stop_encoding_process(
         play_session_id: Some(query.play_session_id),
         ..HlsStreamRequest::default()
     };
-    state.hls.stop_encoding(&req).await?;
+    let control_others = if auth.is_api_key {
+        // Existing API-key authority is administrative; still excludes leases.
+        true
+    } else {
+        let policy = auth
+            .user_policy
+            .clone()
+            .or(match auth.user.as_deref() {
+                Some(user) => super::users::user_policy(&state, user)
+                    .await?
+                    .map(std::sync::Arc::new),
+                None => None,
+            })
+            .ok_or_else(|| ApiError::Forbidden("user policy required".into()))?;
+        policy.is_administrator || policy.enable_remote_control_of_other_users
+    };
+    state
+        .hls
+        .stop_encoding_authorized(&req, auth.user_id(), control_others)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

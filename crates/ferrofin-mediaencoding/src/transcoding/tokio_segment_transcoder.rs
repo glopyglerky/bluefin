@@ -21,23 +21,70 @@ use tokio::sync::Mutex;
 
 use super::ffmpeg_log::{StderrPump, shown_arguments};
 use super::progress::FfmpegProgress;
+use super::retained_input::{InputProcessBinding, RetainedInputProcess};
 use super::segment_transcoder::{SegmentTranscoder, SpawnRequest, TranscodeChild};
 
 /// The production [`SegmentTranscoder`]: spawns ffmpeg with `tokio::process`.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct TokioSegmentTranscoder;
+#[derive(Clone, Default)]
+pub struct TokioSegmentTranscoder {
+    input_owner: Option<InputProcessBinding>,
+}
+
+impl std::fmt::Debug for TokioSegmentTranscoder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TokioSegmentTranscoder")
+            .field("retained_input", &self.input_owner.is_some())
+            .finish()
+    }
+}
 
 impl TokioSegmentTranscoder {
     /// Creates the production segment transcoder.
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Retains this opened generation through pending startup and actual child
+    /// exit. The owner is a lifetime only, never an authorization grant.
+    #[must_use]
+    pub fn with_input_owner(mut self, source: InputProcessBinding) -> Self {
+        self.input_owner = Some(source);
+        self
     }
 }
 
 #[async_trait]
 impl SegmentTranscoder for TokioSegmentTranscoder {
     async fn start_transcode(&self, req: &SpawnRequest) -> Result<Box<dyn TranscodeChild>, String> {
+        self.start_inner(req, None).await
+    }
+
+    async fn start_registered(
+        &self,
+        req: &SpawnRequest,
+        register: &(dyn Fn(Arc<dyn TranscodeChild>) + Send + Sync),
+    ) -> Result<(), String> {
+        self.start_inner(req, Some(register)).await.map(|_| ())
+    }
+
+    fn has_private_input(&self) -> bool {
+        self.input_owner.is_some()
+    }
+}
+
+impl TokioSegmentTranscoder {
+    async fn start_inner(
+        &self,
+        req: &SpawnRequest,
+        register: Option<&(dyn Fn(Arc<dyn TranscodeChild>) + Send + Sync)>,
+    ) -> Result<Box<dyn TranscodeChild>, String> {
+        let owner = self
+            .input_owner
+            .as_ref()
+            .map(InputProcessBinding::try_acquire)
+            .transpose()?;
         let mut command = tokio::process::Command::new(&req.program);
         command
             .args(&req.arguments)
@@ -52,9 +99,26 @@ impl SegmentTranscoder for TokioSegmentTranscoder {
             command.env(key, value);
         }
 
-        let mut child = command
+        let child = command
             .spawn()
             .map_err(|e| format!("failed to spawn ffmpeg {}: {e}", req.program))?;
+        let mut child = RetainedInputProcess::new(child, owner);
+
+        let stderr = child.stderr.take();
+        let stdin = Arc::new(Mutex::new(child.stdin.take()));
+        let progress = Arc::new(std::sync::Mutex::new(None));
+        let process = Arc::new(TokioTranscodeChild {
+            child: Arc::new(Mutex::new(child)),
+            exited: Arc::new(AtomicBool::new(false)),
+            exit_code: Arc::new(Mutex::new(None)),
+            stdin,
+            progress: Arc::clone(&progress),
+        });
+        // No await between actual spawn and registry ownership. Cancellation
+        // or a failed log open cannot hide a live child from configured caps.
+        if let Some(register) = register {
+            register(process.clone());
+        }
 
         // Open the stderr log, prefixed with the command line (mirrors the C#
         // JobLogger header) so a failed transcode is diagnosable from the log.
@@ -68,14 +132,6 @@ impl SegmentTranscoder for TokioSegmentTranscoder {
             shown_arguments(&req.arguments).join(" ")
         );
         let _ = log.write_all(header.as_bytes()).await;
-
-        let stderr = child.stderr.take();
-        let stdin = Arc::new(Mutex::new(child.stdin.take()));
-        let progress = Arc::new(std::sync::Mutex::new(None));
-
-        let exited = Arc::new(AtomicBool::new(false));
-        let exit_code = Arc::new(Mutex::new(None::<i32>));
-        let child = Arc::new(Mutex::new(child));
 
         // Pump stderr → log until EOF. Detached so it never blocks kill.
         if let Some(mut stderr) = stderr {
@@ -102,19 +158,13 @@ impl SegmentTranscoder for TokioSegmentTranscoder {
             });
         }
 
-        Ok(Box::new(TokioTranscodeChild {
-            child,
-            exited,
-            exit_code,
-            stdin,
-            progress,
-        }))
+        Ok(Box::new(process))
     }
 }
 
 /// A live handle over a spawned ffmpeg `tokio::process::Child`.
 struct TokioTranscodeChild {
-    child: Arc<Mutex<tokio::process::Child>>,
+    child: Arc<Mutex<RetainedInputProcess>>,
     exited: Arc<AtomicBool>,
     exit_code: Arc<Mutex<Option<i32>>>,
     stdin: Arc<Mutex<Option<tokio::process::ChildStdin>>>,

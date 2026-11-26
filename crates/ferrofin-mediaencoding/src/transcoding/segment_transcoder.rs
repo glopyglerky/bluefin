@@ -93,6 +93,28 @@ pub trait TranscodeChild: Send + Sync {
     async fn kill(&self) -> Result<(), String>;
 }
 
+#[async_trait]
+impl<T: TranscodeChild + ?Sized> TranscodeChild for Arc<T> {
+    fn has_exited(&self) -> bool {
+        (**self).has_exited()
+    }
+    fn exit_code(&self) -> Option<i32> {
+        (**self).exit_code()
+    }
+    async fn wait(&self) -> i32 {
+        (**self).wait().await
+    }
+    fn progress(&self) -> Option<super::progress::FfmpegProgress> {
+        (**self).progress()
+    }
+    async fn write_stdin(&self, bytes: &[u8]) -> Result<(), String> {
+        (**self).write_stdin(bytes).await
+    }
+    async fn kill(&self) -> Result<(), String> {
+        (**self).kill().await
+    }
+}
+
 /// Compile-time assertion that [`TranscodeChild`] is object-safe.
 fn _assert_object_safe_transcode_child(_: &dyn TranscodeChild) {}
 
@@ -109,6 +131,24 @@ pub trait SegmentTranscoder: Send + Sync {
     ///
     /// Returns an error string if the process cannot be spawned.
     async fn start_transcode(&self, req: &SpawnRequest) -> Result<Box<dyn TranscodeChild>, String>;
+
+    /// Publish process ownership before any post-spawn suspension or failure.
+    /// Implementors that suspend after spawning must override this method and
+    /// call `register` immediately after acquiring the actual child. The default
+    /// covers synchronous/fake spawns without a post-spawn await.
+    async fn start_registered(
+        &self,
+        req: &SpawnRequest,
+        register: &(dyn Fn(Arc<dyn TranscodeChild>) + Send + Sync),
+    ) -> Result<(), String> {
+        register(Arc::from(self.start_transcode(req).await?));
+        Ok(())
+    }
+
+    /// A private source binding cannot be controlled through generic legacy stop.
+    fn has_private_input(&self) -> bool {
+        false
+    }
 }
 
 /// Compile-time assertion that [`SegmentTranscoder`] is object-safe.

@@ -5,7 +5,10 @@ use serde::Deserialize;
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -333,8 +336,9 @@ pub async fn run_adapter(ep: Endpoint, origin: Origin, mut stop: oneshot::Receiv
                         let conn=tokio::time::timeout(Duration::from_secs(5),incoming).await??;
                         let (mut send,mut recv)=tokio::time::timeout(Duration::from_secs(5),conn.accept_bi()).await??;
                         let served = tokio::select! {_ = conn.closed()=>false, result = origin.serve(&mut send,&mut recv)=>result.is_ok()};
-                        // Keep the response alive until delivery is acknowledged or reset.
-                        if served { let _=tokio::time::timeout(IDLE,send.stopped()).await; }
+                        // QUIC acknowledgements do not prove application delivery. The receiver
+                        // closes after draining the response; an early sender close drops unread data.
+                        if served { let _=tokio::time::timeout(IDLE,conn.closed()).await; }
                         conn.close(0u32.into(),b"complete");Ok::<_,anyhow::Error>(())
                     }).await;
                 });
@@ -398,6 +402,20 @@ async fn forward(
 struct Tunnel {
     stop: oneshot::Sender<()>,
     join: std::thread::JoinHandle<()>,
+    drained: Arc<AtomicBool>,
+}
+impl Tunnel {
+    fn shutdown(self) -> Result<()> {
+        let _ = self.stop.send(());
+        self.join
+            .join()
+            .map_err(|_| anyhow!("tunnel thread failed"))?;
+        ensure!(
+            self.drained.load(Ordering::Acquire),
+            "tunnel drain unconfirmed"
+        );
+        Ok(())
+    }
 }
 static TUNNELS: OnceLock<Mutex<HashMap<u64, Tunnel>>> = OnceLock::new();
 fn tunnels() -> &'static Mutex<HashMap<u64, Tunnel>> {
@@ -428,6 +446,8 @@ pub fn start(config: ClientConfig) -> Result<(u64, String)> {
     }
     let (stop, mut rx) = oneshot::channel();
     let (ready, wait) = std::sync::mpsc::sync_channel(1);
+    let drained = Arc::new(AtomicBool::new(false));
+    let complete = drained.clone();
     let join = std::thread::spawn(move || {
         let Ok(rt) = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
@@ -449,12 +469,25 @@ pub fn start(config: ClientConfig) -> Result<(u64, String)> {
                     let (ep,host,cap,auth)=(ep.clone(),host.clone(),cap.clone(),auth.clone());
                     jobs.spawn(async move {let _permit=permit;let _=tokio::time::timeout(TOTAL,forward(ep,peer,addr,local,host,cap,auth)).await;});
                 }
-            }}jobs.abort_all();while jobs.join_next().await.is_some(){} let _ = tokio::time::timeout(Duration::from_secs(1), ep.close()).await;
+            }}jobs.abort_all();
+            let mut jobs_drained = true;
+            while let Some(result) = jobs.join_next().await {
+                if result.is_err_and(|e| !e.is_cancelled()) { jobs_drained = false; }
+            }
+            let endpoint_closed = tokio::time::timeout(Duration::from_secs(1), ep.close()).await.is_ok();
+            complete.store(jobs_drained && endpoint_closed, Ordering::Release);
         });
     });
     match wait.recv_timeout(Duration::from_secs(10)) {
         Ok(url) => {
-            registry.insert(id, Tunnel { stop, join });
+            registry.insert(
+                id,
+                Tunnel {
+                    stop,
+                    join,
+                    drained,
+                },
+            );
             Ok((id, url))
         }
         Err(_) => {
@@ -464,18 +497,22 @@ pub fn start(config: ClientConfig) -> Result<(u64, String)> {
         }
     }
 }
-/// Abort and drain all owned streams, then join the tunnel thread. Idempotent.
-/// Call off the UI thread.
+/// Best-effort compatibility stop. Call off the UI thread.
+/// Use [`stop_with_receipt`] when subsequent playback requires confirmed cleanup.
 pub fn stop(id: u64) {
+    let _ = stop_with_receipt(id);
+}
+/// Abort owned streams, await their cancellation and endpoint closure, then join
+/// the tunnel thread. Missing ids are already retired. Call off the UI thread.
+/// Errors preserve unconfirmed cleanup rather than reporting a successful drain.
+pub fn stop_with_receipt(id: u64) -> Result<()> {
     // Keep the admission lock until shutdown joins: a concurrent start must
     // not replace the lease while its endpoint and sockets are still live.
-    let Ok(mut registry) = tunnels().lock() else {
-        return;
-    };
+    let mut registry = tunnels().lock().map_err(|_| anyhow!("registry"))?;
     if let Some(t) = registry.remove(&id) {
-        let _ = t.stop.send(());
-        let _ = t.join.join();
+        t.shutdown()?;
     }
+    Ok(())
 }
 /// # Safety
 /// `input` must point to `len` readable bytes. Returns an owned UTF-8 JSON C string.

@@ -1,5 +1,29 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
+// Synthetic peers bind only IPv4 loopback. Production endpoint binding is unchanged.
+async fn endpoint() -> Result<Endpoint> {
+    let transport = iroh::endpoint::QuicTransportConfig::builder()
+        .max_concurrent_bidi_streams(1u32.into())
+        .max_concurrent_uni_streams(0u32.into())
+        .stream_receive_window(STREAM_WINDOW.into())
+        .receive_window(CONNECTION_WINDOW.into())
+        .send_window(SEND_WINDOW)
+        .build();
+    let ep = Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .transport_config(transport)
+        .portmapper_config(iroh::endpoint::PortmapperConfig::Disabled)
+        .relay_mode(RelayMode::Disabled)
+        .alpns(vec![ALPN.to_vec()])
+        .clear_ip_transports()
+        .bind_addr("127.0.0.1:0")?
+        .bind()
+        .await?;
+    assert_eq!(ep.bound_sockets().len(), 1);
+    assert!(ep.bound_sockets()[0].ip().is_loopback());
+    assert!(ep.addr().ip_addrs().all(|addr| addr.ip().is_loopback()));
+    Ok(ep)
+}
+
 async fn fixture() -> (Origin, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let key =
@@ -79,11 +103,52 @@ async fn request(
     result
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completed_response_remains_readable_until_receiver_drains() {
+    let (origin, fixture, _) = fixture().await;
+    let server = endpoint().await.unwrap();
+    let peer = server.id();
+    let address = server.bound_sockets()[0];
+    let (stop, shutdown) = oneshot::channel();
+    let adapter = tokio::spawn(run_adapter(server, origin, shutdown));
+    let client = endpoint().await.unwrap();
+    let connection = client
+        .connect(EndpointAddr::new(peer).with_ip_addr(address), ALPN)
+        .await
+        .unwrap();
+    let (mut send, mut recv) = connection.open_bi().await.unwrap();
+    send.write_all(&encode(&Request {
+        method: "GET".into(),
+        path: "/Videos/test/file".into(),
+        auth: Some("Bearer synthetic-viewer".into()),
+        range: None,
+    }))
+    .await
+    .unwrap();
+    send.finish().unwrap();
+    let head = headers(&mut recv).await.unwrap();
+    assert!(head.starts_with(b"HTTP/1.1 200"));
+    // Transport acknowledgements can arrive while the application leaves its body unread.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), connection.closed())
+            .await
+            .is_err(),
+        "sender closed before the receiver drained its response"
+    );
+    let body = recv.read_to_end(1024).await.unwrap();
+    assert_eq!(body, b"0123456789");
+    connection.close(0u32.into(), b"response drained");
+    client.close().await;
+    stop.send(()).unwrap();
+    adapter.await.unwrap();
+    fixture.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_tls_origin_over_pinned_iroh() {
     let (origin, fixture, active) = fixture().await;
     let ep = endpoint().await.unwrap();
     let peer = ep.id();
-    let port = ep.addr().ip_addrs().next().unwrap().port();
+    let port = ep.bound_sockets()[0].port();
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let (stop, rx) = oneshot::channel();
     let adapter = tokio::spawn(run_adapter(ep, origin, rx));
@@ -234,9 +299,12 @@ async fn real_tls_origin_over_pinned_iroh() {
         .unwrap()
         .is_err()
     );
-    tokio::task::spawn_blocking(move || bluefin_iroh_stop(second))
-        .await
-        .unwrap();
+    tokio::task::spawn_blocking(move || {
+        stop_with_receipt(second).unwrap();
+        stop_with_receipt(second).unwrap();
+    })
+    .await
+    .unwrap();
     let stalled = tokio::spawn({
         let c = client.clone();
         let url = url.clone();
@@ -299,6 +367,45 @@ async fn real_tls_origin_over_pinned_iroh() {
     let _ = fixture.await;
 }
 #[test]
+fn stop_receipt_requires_drain_and_reports_thread_failure() {
+    for acknowledge in [false, true] {
+        let (stop, rx) = oneshot::channel();
+        let drained = Arc::new(AtomicBool::new(false));
+        let complete = drained.clone();
+        let join = std::thread::spawn(move || {
+            rx.blocking_recv().unwrap();
+            complete.store(acknowledge, Ordering::Release);
+        });
+        assert_eq!(
+            Tunnel {
+                stop,
+                join,
+                drained
+            }
+            .shutdown()
+            .is_ok(),
+            acknowledge
+        );
+    }
+    let (stop, rx) = oneshot::channel();
+    let join = std::thread::spawn(move || {
+        let _ = rx.blocking_recv();
+        panic!("synthetic tunnel thread failure");
+    });
+    let tunnel = Tunnel {
+        stop,
+        join,
+        drained: Arc::new(AtomicBool::new(true)),
+    };
+    assert!(
+        tunnel
+            .shutdown()
+            .unwrap_err()
+            .to_string()
+            .contains("thread failed")
+    );
+}
+#[test]
 fn validation() {
     for p in [
         "https://evil/",
@@ -344,3 +451,5 @@ fn strict_range_decimal_grammar() {
         assert!(range_valid(r), "{r}");
     }
 }
+
+mod robustness;

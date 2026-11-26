@@ -114,15 +114,15 @@ version = "0.33"
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies.netlink-sys]
 version = "0.9"
 
-[target.'cfg(any(target_os = "macos", any(target_os = "ios", target_os = "tvos")))'.dependencies.objc2-core-foundation]
+[target.'cfg(any(target_os = "macos", any(target_os = "ios", target_os = "tvos", target_os = "visionos")))'.dependencies.objc2-core-foundation]
 version = "0.3"
 
-[target.'cfg(any(target_os = "macos", any(target_os = "ios", target_os = "tvos")))'.dependencies.objc2-system-configuration]
+[target.'cfg(any(target_os = "macos", any(target_os = "ios", target_os = "tvos", target_os = "visionos")))'.dependencies.objc2-system-configuration]
 version = "0.3"
 features = ["SCNetworkConfiguration"]
 default-features = false
 
-[target.'cfg(any(target_os = "macos", any(target_os = "ios", target_os = "tvos")))'.dependencies.plist]
+[target.'cfg(any(target_os = "macos", any(target_os = "ios", target_os = "tvos", target_os = "visionos")))'.dependencies.plist]
 version = "1.10"
 
 [target.'cfg(target_os = "android")'.dependencies.dlopen2]
@@ -140,10 +140,10 @@ optional = true
 [target.'cfg(target_os = "android")'.dependencies.once_cell]
 version = "1"
 
-[target.'cfg(any(target_os = "ios", target_os = "tvos"))'.dependencies.block2]
+[target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))'.dependencies.block2]
 version = "0.6"
 
-[target.'cfg(any(target_os = "ios", target_os = "tvos"))'.dependencies.dispatch2]
+[target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))'.dependencies.dispatch2]
 version = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2]

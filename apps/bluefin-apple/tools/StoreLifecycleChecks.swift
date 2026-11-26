@@ -32,9 +32,14 @@ actor StoreEvents {
 @MainActor enum SessionVault {
     static var clearCount = 0
     static var current: AccountSession?
+    static var failDeletion = false
     static func load() -> AccountSession? { current }
     static func save(_ session: AccountSession) throws { current = session }
-    static func clear() { clearCount += 1; current = nil }
+    static func clear() throws {
+        clearCount += 1
+        guard !failDeletion else { throw BluefinError.message("Your saved sign-in could not be removed. Try signing out again.") }
+        current = nil
+    }
 }
 
 struct EmptyValue: Decodable {}
@@ -138,6 +143,22 @@ struct VideoDeviceCapabilities {
         let plan = PlaybackPlan(url: "http://127.0.0.1:1234/cap", playSessionId: "play", mediaSourceId: "media", playMethod: "Transcode", source: .init(LiveStreamId: "live"), proxyId: "cap")
         let store = LibraryStore()
         store.session = account
+        if CommandLine.arguments.contains("--vault-failure") {
+            SessionVault.current = account
+            SessionVault.failDeletion = true
+            await store.signOut()
+            precondition(store.session?.token == account.token && SessionVault.current?.token == account.token)
+            precondition(store.error?.contains("saved sign-in") == true)
+            let beforeRetry = await RustBridge.events.snapshot()
+            precondition(beforeRetry.isEmpty, "A failed local sign-out invalidated the still-saved account")
+            SessionVault.failDeletion = false
+            await store.signOut()
+            precondition(store.session == nil && SessionVault.current == nil && store.error == nil)
+            let afterRetry = await RustBridge.events.snapshot()
+            precondition(afterRetry == ["logout"], "Retry did not log out the captured account exactly once")
+            print("PASS: failed Keychain deletion retains the saved account, reports a retry, and succeeds on retry")
+            return
+        }
         let player = try PlaybackController(item: .preview[0], url: URL(string: plan.url)!, plan: plan, session: account)
         store.playback = player
         let events = RustBridge.events

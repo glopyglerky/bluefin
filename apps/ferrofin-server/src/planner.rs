@@ -1294,6 +1294,19 @@ impl StreamStatePlanner for FerrofinStreamStatePlanner {
                 .get_subtitle_file_path(sub, &media_source)
                 .await
                 .ok();
+            // Embedded extraction reports failures diagnostically and can
+            // still return its intended cache path. Only use an actual file;
+            // otherwise retain the existing original-input subtitle fallback.
+            let path = match path {
+                Some(path)
+                    if tokio::fs::metadata(&path)
+                        .await
+                        .is_ok_and(|meta| meta.is_file()) =>
+                {
+                    Some(path)
+                }
+                _ => None,
+            };
             // Read only for an ffmpeg that will run: a playlist build's
             // arguments are never started.
             let charset = if starts_ffmpeg {
@@ -4532,6 +4545,7 @@ mod tests {
     /// counting the detections.
     struct FakeSubtitles {
         path: Option<String>,
+        resolved_file: Option<tempfile::NamedTempFile>,
         charset: String,
         detections: std::sync::atomic::AtomicUsize,
     }
@@ -4635,8 +4649,18 @@ mod tests {
     }
 
     fn fake_subtitles(path: Option<&str>, charset: &str) -> FakeSubtitles {
+        // A successful extraction must supply a real cache file. Keep it owned
+        // by the fixture through planning, rather than invent a readable path.
+        let file = path
+            .filter(|path| path.starts_with("/data/subtitles/"))
+            .map(|_| tempfile::NamedTempFile::new().unwrap());
+        let path = file
+            .as_ref()
+            .map(|file| file.path().to_string_lossy().into_owned())
+            .or_else(|| path.map(str::to_owned));
         FakeSubtitles {
-            path: path.map(str::to_owned),
+            path,
+            resolved_file: file,
             charset: charset.to_owned(),
             detections: std::sync::atomic::AtomicUsize::new(0),
         }
@@ -4670,6 +4694,10 @@ mod tests {
         "subtitles=f='/data/subtitles/ab/track.ass':fontsdir='"
     )]
     #[case::from_the_media(None, "subtitles=f='/media/movie.mkv':si=0:fontsdir='")]
+    #[case::missing_cache(
+        Some("/missing-cache/track.ass"),
+        "subtitles=f='/media/movie.mkv':si=0:fontsdir='"
+    )]
     #[tokio::test]
     async fn a_burned_text_subtitle_reads_the_fonts_its_file_ships(
         #[case] extracted: Option<&str>,
@@ -4692,6 +4720,14 @@ mod tests {
             .unwrap();
 
         let vf = video_graph(&plan.arguments);
+        let filter = if subtitles.resolved_file.is_some() {
+            format!(
+                "subtitles=f='{}':fontsdir='",
+                subtitles.path.as_deref().unwrap()
+            )
+        } else {
+            filter.to_owned()
+        };
         assert!(vf.contains(&format!("{filter}{GUID_FONTS}'")), "{vf}");
         // An embedded track gets no character set: only an external file can
         // be in a legacy encoding.
@@ -4718,7 +4754,9 @@ mod tests {
                 subtitle_stream("ass", 2),
             ],
         )]);
-        p.subtitles = Arc::new(fake_subtitles(Some("/data/subtitles/ab/track.ass"), ""));
+        let subtitles = fake_subtitles(Some("/data/subtitles/ab/track.ass"), "");
+        let extracted = subtitles.path.clone().unwrap();
+        p.subtitles = Arc::new(subtitles);
         let p = with_fake_attachments(p, Arc::clone(&attachments));
 
         let plan = p
@@ -4729,7 +4767,7 @@ mod tests {
         let graph = video_graph(&plan.arguments);
         assert!(
             graph.contains(&format!(
-                "subtitles=f='/data/subtitles/ab/track.ass':alpha=1:sub2video=1:fontsdir='{GUID_FONTS}'"
+                "subtitles=f='{extracted}':alpha=1:sub2video=1:fontsdir='{GUID_FONTS}'"
             )),
             "{graph}"
         );
@@ -4782,7 +4820,7 @@ mod tests {
             .unwrap();
 
         let vf = video_graph(&plan.arguments);
-        let read = resolved.unwrap_or("/media/movie.ru.srt");
+        let read = subtitles.path.as_deref().unwrap_or("/media/movie.ru.srt");
         let expected = match charenc {
             Some(charset) => format!("subtitles=f='{read}':charenc={charset}:fontsdir="),
             None => format!("subtitles=f='{read}':fontsdir="),

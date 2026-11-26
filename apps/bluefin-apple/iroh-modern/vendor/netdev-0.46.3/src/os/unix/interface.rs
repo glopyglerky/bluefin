@@ -190,7 +190,7 @@ fn unix_interfaces_inner(
 
         #[cfg(any(
             target_os = "macos",
-            any(target_os = "ios", target_os = "tvos"),
+            any(target_os = "ios", target_os = "tvos", target_os = "visionos"),
             target_os = "freebsd",
             target_os = "openbsd",
             target_os = "netbsd"

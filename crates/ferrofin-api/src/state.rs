@@ -103,6 +103,7 @@ pub(crate) fn parse_forwarded_entry(entry: &str) -> Option<std::net::IpAddr> {
 /// One field per `ferrofin-traits` manager the API layer calls. Each is a trait
 /// object so the concrete type is chosen at the composition root, not baked into
 /// this crate.
+#[derive(Clone)]
 pub struct Inner {
     /// Serializes named saves through validation, persistence and live updates,
     /// and with the Live TV manager's own write of `livetv`.
@@ -135,6 +136,8 @@ pub struct Inner {
     pub user_data: Arc<dyn UserDataManager>,
     /// Playable media sources and stream selection for an item.
     pub media_sources: Arc<dyn MediaSourceManager>,
+    /// Optional source-bound TV playback factory over the shared media runtime.
+    pub tv_playback_pins: Option<Arc<dyn crate::handlers::bluefin_tv_playback::LocalSourcePins>>,
     /// Active client sessions and playback reporting.
     pub sessions: Arc<dyn SessionManager>,
     /// System information, restart/shutdown, and logs.
@@ -252,6 +255,9 @@ pub struct Inner {
     /// [`AppState::with_server_settings`].
     pub server_settings: Arc<dyn ServerSettingsManager>,
 
+    /// Optional server-owned discovery adapter. Absent means unavailable.
+    pub discovery: Option<Arc<bluefin_discovery::DiscoveryService>>,
+
     /// Synchronized group playback (`/SyncPlay/*`). `None` until the composition
     /// root wires a manager via [`AppState::with_sync_play`]; the SyncPlay routes
     /// return `501` while unset.
@@ -315,9 +321,38 @@ pub struct AppState {
     inner: Arc<Inner>,
     request_culture: Arc<crate::request_culture::RequestCultureOptions>,
     file_system_calls: Arc<tokio::sync::Semaphore>,
+    pub(crate) account_gate: Arc<tokio::sync::Mutex<crate::handlers::bluefin_accounts::SignupBudget>>,
+    pub(crate) passkeys: Option<Arc<crate::handlers::bluefin_passkeys::Service>>,
+    scoped_media: bool,
+    karaoke: Option<crate::karaoke::Service>,
+    iroh_media: Arc<std::sync::RwLock<Option<bluefin_contract::transport::IrohMediaTransport>>>,
 }
 
 impl AppState {
+    /// Enables passkeys only for an explicitly configured HTTPS public URL.
+    #[must_use]
+    pub fn with_bluefin_passkeys(mut self, db: ferrofin_db::Database, published_url: Option<&str>) -> Self {
+        self.passkeys = published_url.and_then(|url| {
+            crate::handlers::bluefin_passkeys::Service::new(db, url).map(Arc::new)
+        });
+        self
+    }
+
+    /// Updates only the process-owned running transport projection. No API setter exists.
+    pub fn set_iroh_media_transport(
+        &self,
+        transport: Option<bluefin_contract::transport::IrohMediaTransport>,
+    ) {
+        if let Ok(mut current) = self.iroh_media.write() {
+            *current = transport;
+        }
+    }
+
+    /// Snapshot of the running transport; callers must separately authorize disclosure.
+    #[must_use]
+    pub fn iroh_media_transport(&self) -> Option<bluefin_contract::transport::IrohMediaTransport> {
+        self.iroh_media.read().ok().and_then(|v| v.clone())
+    }
     /// Wraps an already-assembled [`Inner`] set of managers.
     #[must_use]
     ///
@@ -335,6 +370,11 @@ impl AppState {
             file_system_calls: Arc::new(tokio::sync::Semaphore::new(
                 MAX_BLOCKING_FILE_SYSTEM_CALLS,
             )),
+            account_gate: Arc::new(tokio::sync::Mutex::new(Default::default())),
+            passkeys: None,
+            scoped_media: false,
+            karaoke: None,
+            iroh_media: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -450,6 +490,7 @@ impl AppState {
             user_views,
             user_data,
             media_sources,
+            tv_playback_pins: None,
             sessions,
             system,
             app_host,
@@ -464,6 +505,7 @@ impl AppState {
             playback_metrics: None,
             merge_versions: None,
             ldap: None,
+            discovery: None,
             music,
             similar_items,
             search,
@@ -538,6 +580,55 @@ impl AppState {
         inner.hls = hls;
         inner.attachments = attachments;
         self
+    }
+
+    /// Binds only source-consuming services, retaining all shared policy,
+    /// configuration, request culture and filesystem admission. Works after
+    /// sharing the ordinary state. The manager itself owns the opened input.
+    #[must_use]
+    pub fn scoped_media_view(
+        &self,
+        media_sources: Arc<dyn MediaSourceManager>,
+        hls: Arc<dyn HlsStreamManager>,
+        attachments: Arc<dyn AttachmentExtractor>,
+        subtitle_encoder: Arc<dyn SubtitleEncoder>,
+    ) -> Self {
+        let mut view = self.clone();
+        let inner = Arc::make_mut(&mut view.inner);
+        inner.media_sources = media_sources;
+        inner.hls = hls;
+        inner.attachments = attachments;
+        inner.subtitle_encoder = subtitle_encoder;
+        inner.tv_playback_pins = None;
+        view.scoped_media = true;
+        view
+    }
+
+    /// Installs the shared runtime's fail-closed TV source binding factory.
+    #[must_use]
+    pub fn with_local_source_pins(
+        mut self,
+        pins: Arc<dyn crate::handlers::bluefin_tv_playback::LocalSourcePins>,
+    ) -> Self {
+        Arc::make_mut(&mut self.inner).tv_playback_pins = Some(pins);
+        self
+    }
+
+    pub(crate) fn has_scoped_media(&self) -> bool {
+        self.scoped_media
+    }
+
+    /// Install the one optional startup-owned karaoke engine and lifecycle.
+    #[must_use]
+    pub fn with_karaoke(mut self, service: Option<crate::karaoke::Service>) -> Self {
+        self.karaoke = service;
+        self
+    }
+
+    /// Disabled by default; no model or generated cache is required.
+    #[must_use]
+    pub fn karaoke(&self) -> Option<&crate::karaoke::Service> {
+        self.karaoke.as_ref()
     }
 
     /// Replaces the subtitle encoder with a concrete implementation.
@@ -717,6 +808,18 @@ impl AppState {
         self
     }
 
+    /// Wires optional server discovery before sharing this state.
+    ///
+    /// # Panics
+    /// Panics if this state was already shared.
+    #[must_use]
+    pub fn with_discovery(mut self, discovery: Arc<bluefin_discovery::DiscoveryService>) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("with_discovery must be called before the state is shared")
+            .discovery = Some(discovery);
+        self
+    }
+
     /// Wires the on-the-fly image processor used by the image-serving routes.
     ///
     /// [`new`](Self::new) leaves it `None` (image routes serve the stored original
@@ -851,6 +954,9 @@ impl AppState {
         extensions: &axum::http::Extensions,
         headers: &axum::http::HeaderMap,
     ) -> std::net::IpAddr {
+        if let Some(peer) = extensions.get::<bluefin_iroh_server::DirectPeer>() {
+            return normalize_ip(peer.remote.ip());
+        }
         if let Some(resolved) = extensions.get::<crate::ip_access::ResolvedClientAddress>() {
             return resolved.0;
         }
@@ -1108,5 +1214,41 @@ impl std::ops::Deref for AppState {
 
     fn deref(&self) -> &Self::Target {
         &self.inner
+    }
+}
+
+#[cfg(test)]
+mod scoped_media_tests {
+    use super::*;
+    use futures_util::FutureExt as _;
+
+    #[tokio::test]
+    async fn shared_view_retains_the_existing_filesystem_budget_and_culture() {
+        let ordinary = crate::test_support::fake_state();
+        let _shared = ordinary.clone();
+        let view = ordinary.scoped_media_view(
+            ordinary.media_sources.clone(),
+            ordinary.hls.clone(),
+            ordinary.attachments.clone(),
+            ordinary.subtitle_encoder.clone(),
+        );
+        assert!(Arc::ptr_eq(
+            &ordinary.request_culture,
+            &view.request_culture
+        ));
+        assert!(Arc::ptr_eq(&ordinary.auth_service, &view.auth_service));
+        let permits = ordinary
+            .file_system_calls
+            .clone()
+            .acquire_many_owned(u32::try_from(MAX_BLOCKING_FILE_SYSTEM_CALLS).unwrap())
+            .await
+            .unwrap();
+        let mut blocked = Box::pin(view.blocking_file_system(|_| 42));
+        assert!(
+            blocked.as_mut().now_or_never().is_none(),
+            "scoped state must share exhausted ordinary budget"
+        );
+        drop(permits);
+        assert_eq!(blocked.await.unwrap(), 42);
     }
 }

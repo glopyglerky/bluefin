@@ -68,6 +68,9 @@ pub fn create_router(state: AppState) -> Router {
     }
     // Mount the real First-Light handlers over the (now-skipped) stub slots.
     api = handlers::register(api);
+    if let Some(pins) = state.tv_playback_pins.clone() {
+        api = handlers::bluefin_tv_playback::register(api, state.clone(), pins);
+    }
 
     // `/health` is behind the IP filter, as `MapHealthChecks` is upstream. The
     // probes are Ferrofin's own and are not: an orchestrator's address need not
@@ -164,6 +167,25 @@ fn make_request_span(req: &Request) -> Span {
     build_request_span(req, otlp_export_configured())
 }
 
+/// Diagnostic paths omit opaque playback grants, including malformed requests.
+pub(crate) fn logged_path(path: &str) -> &str {
+    for (prefix, template) in [
+        (
+            "/Bluefin/TV/v1/media/",
+            "/Bluefin/TV/v1/media/{grant}/{resource}",
+        ),
+        ("/Bluefin/TV/v1/leases/", "/Bluefin/TV/v1/leases/{grant}"),
+    ] {
+        if path
+            .get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+        {
+            return template;
+        }
+    }
+    path
+}
+
 /// [`make_request_span`] with the OTLP decision passed in, so both branches are
 /// reachable from a test without touching the process environment.
 ///
@@ -199,7 +221,7 @@ fn build_request_span(req: &Request, otlp: bool) -> Span {
             otel.name = %format!("{} {route}", req.method()),
             http.request.method = %req.method(),
             http.route = route,
-            url.path = %req.uri().path(),
+            url.path = %logged_path(req.uri().path()),
             http.response.status_code = tracing::field::Empty,
             trace_id = tracing::field::Empty,
         );
@@ -208,7 +230,7 @@ fn build_request_span(req: &Request, otlp: bool) -> Span {
         "http_request",
         http.request.method = %req.method(),
         http.route = route,
-        url.path = %req.uri().path(),
+        url.path = %logged_path(req.uri().path()),
         trace_id = tracing::field::Empty,
     )
 }
@@ -262,7 +284,9 @@ mod tests {
     use crate::test_support::fake_state;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use axum::{Router, middleware};
     use tower::ServiceExt;
+    use tower_http::trace::TraceLayer;
 
     #[tokio::test]
     async fn repeated_array_params_do_not_400() {
@@ -502,6 +526,10 @@ mod tests {
     /// Builds a request span under a field-capturing subscriber and returns the
     /// `(field, value)` pairs the span was created with.
     fn span_fields(otlp: bool) -> Vec<(String, String)> {
+        span_fields_for("/Items?limit=1", otlp)
+    }
+
+    fn span_fields_for(uri: &str, otlp: bool) -> Vec<(String, String)> {
         use tracing_subscriber::layer::SubscriberExt as _;
         let spy = FieldSpy::default();
         let subscriber = tracing_subscriber::registry().with(spy.clone());
@@ -510,13 +538,73 @@ mod tests {
             // route template renders as the `"unmatched"` fallback — which is
             // itself the branch worth pinning (an unrouted request must still
             // produce a well-formed span, not panic or leak the raw URL).
-            let req = Request::builder()
-                .uri("/Items?limit=1")
-                .body(Body::empty())
-                .unwrap();
+            let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
             let _span = super::build_request_span(&req, otlp);
         });
         spy.0.lock().expect("spy lock").clone()
+    }
+
+    #[test]
+    fn request_spans_redact_playback_capabilities() {
+        for otlp in [false, true] {
+            for path in [
+                "/Bluefin/TV/v1/media/synthetic-private-grant/0",
+                "/Bluefin/TV/v1/leases/synthetic-private-grant",
+                "/bluefin/tv/v1/media/synthetic-private-grant/invalid",
+            ] {
+                let fields = span_fields_for(path, otlp);
+                assert!(
+                    !fields
+                        .iter()
+                        .any(|(_, value)| value.contains("synthetic-private-grant")),
+                    "{fields:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn capability_panic_logs_keep_only_the_route_template() {
+        async fn explode() -> &'static str {
+            panic!("synthetic playback failure")
+        }
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let router = Router::new()
+            .route(
+                "/Bluefin/TV/v1/media/{grant}/{resource}",
+                axum::routing::get(explode),
+            )
+            .layer(middleware::from_fn(
+                crate::panic_boundary::panic_boundary_layer,
+            ))
+            .layer(
+                TraceLayer::new_for_http().make_span_with(|request: &Request<Body>| {
+                    super::build_request_span(request, false)
+                }),
+            );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/Bluefin/TV/v1/media/synthetic-private-grant/0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let log = String::from_utf8(captured.0.lock().expect("log").clone()).unwrap();
+        assert!(log.contains("Error processing request"), "{log}");
+        assert!(
+            log.contains("/Bluefin/TV/v1/media/{grant}/{resource}"),
+            "{log}"
+        );
+        assert!(!log.contains("synthetic-private-grant"), "{log}");
     }
 
     #[test]

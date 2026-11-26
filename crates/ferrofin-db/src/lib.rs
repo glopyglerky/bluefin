@@ -18,6 +18,7 @@ pub mod normalized_usernames;
 mod placeholders;
 pub mod presentation_key;
 pub mod row_cache;
+pub mod source_pin;
 mod sqlite_casing;
 pub mod sqlite_random;
 pub mod store;

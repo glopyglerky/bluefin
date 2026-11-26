@@ -1011,6 +1011,34 @@ pub trait HlsStreamManager: Send + Sync {
     /// Returns a [`ServiceError`] if the kill cannot be dispatched.
     async fn stop_encoding(&self, request: &HlsStreamRequest) -> Result<(), ServiceError>;
 
+    /// Authenticated legacy control: only the caller's ordinary jobs, unless
+    /// existing administrator/controller privilege explicitly allows others.
+    /// Private leases always require their exact dedicated ownership tuple.
+    async fn stop_encoding_authorized(
+        &self,
+        _request: &HlsStreamRequest,
+        _caller: uuid::Uuid,
+        _control_others: bool,
+    ) -> Result<(), ServiceError> {
+        Err(ServiceError::unavailable(
+            "authorized encoding stop is unavailable",
+        ))
+    }
+
+    /// Retires only jobs matching this authenticated user AND server-generated
+    /// device AND play session. A general kill-by-session implementation cannot
+    /// safely implement a private lease's teardown. Defaults to unavailable.
+    async fn stop_owned_encoding(
+        &self,
+        _user: uuid::Uuid,
+        _device: &str,
+        _play_session: &str,
+    ) -> Result<(), ServiceError> {
+        Err(ServiceError::unavailable(
+            "owned encoding teardown is unavailable",
+        ))
+    }
+
     /// Refreshes the keep-alive timer for the transcoding job(s) of a play
     /// session so an active-but-paused transcode is not reaped.
     ///

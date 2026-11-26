@@ -56,6 +56,16 @@ use crate::dynamic_hls_playlist_generator::{
 };
 use crate::master_playlist::{MasterPlaylistContext, TrickplayResolution, build_master_playlist};
 
+/// Start/seek exclusion and restart budget shared by every binding of one
+/// transcode runtime. Rebinding a source must not create independent writers
+/// for the same playlist or reset its restart circuit breaker.
+#[derive(Default)]
+pub struct HlsCoordination {
+    segment_locks: Arc<KeyedLocks>,
+    restart_failures:
+        Arc<std::sync::Mutex<std::collections::HashMap<String, (u32, std::time::Instant)>>>,
+}
+
 /// A concrete transcode plan for one request: everything the runtime needs that
 /// [`HlsStreamRequest`] alone does not carry.
 ///
@@ -309,6 +319,14 @@ where
     #[must_use]
     pub fn with_trickplay(mut self, trickplay: Arc<dyn TrickplayManager>) -> Self {
         self.trickplay = Some(trickplay);
+        self
+    }
+
+    /// Uses the owning runtime's existing start/seek coordination.
+    #[must_use]
+    pub fn with_coordination(mut self, coordination: &HlsCoordination) -> Self {
+        self.segment_locks = Arc::clone(&coordination.segment_locks);
+        self.restart_failures = Arc::clone(&coordination.restart_failures);
         self
     }
 
@@ -1206,6 +1224,33 @@ where
             .await
     }
 
+    async fn stop_owned_encoding(
+        &self,
+        user: uuid::Uuid,
+        device: &str,
+        play_session: &str,
+    ) -> Result<(), ServiceError> {
+        self.manager
+            .kill_owned_encoding(user, device, play_session)
+            .await
+    }
+
+    async fn stop_encoding_authorized(
+        &self,
+        request: &HlsStreamRequest,
+        caller: uuid::Uuid,
+        control_others: bool,
+    ) -> Result<(), ServiceError> {
+        self.manager
+            .kill_authorized_encoding(
+                caller,
+                control_others,
+                request.device_id.as_deref().unwrap_or_default(),
+                request.play_session_id.as_deref(),
+            )
+            .await
+    }
+
     async fn ping_transcoding_job(
         &self,
         play_session_id: &str,
@@ -1609,7 +1654,10 @@ mod tests {
             String::new()
         }
         fn log_directory_path(&self) -> String {
-            String::new()
+            Path::new(&self.transcode)
+                .join("logs")
+                .to_string_lossy()
+                .into_owned()
         }
         fn transcode_path(&self) -> String {
             self.transcode.clone()
@@ -1748,6 +1796,168 @@ mod tests {
     /// A non-`PATH` binary path: the spawn must carry exactly this, never a
     /// bare `ffmpeg` (see [`HlsStreamManagerImpl::ffmpeg_path`]).
     const TEST_FFMPEG_PATH: &str = "/opt/jellyfin-ffmpeg/ffmpeg";
+
+    /// Exercise the real seek coordinator and process runtime. The synthetic
+    /// Rust encoder writes segment files and waits at graceful stop; codec
+    /// correctness is established separately by the normal FFmpeg fixtures.
+    #[rstest::rstest]
+    #[case::global_same_user(1, 0, 1)]
+    #[case::global_other_user(1, 0, 2)]
+    #[case::per_user(0, 1, 1)]
+    #[tokio::test]
+    async fn real_hls_seek_does_not_lend_a_slow_stopping_childs_slot(
+        #[case] server: u32,
+        #[case] per_user: u32,
+        #[case] second_user: u128,
+    ) {
+        struct Planner(FakePlanner);
+        #[async_trait]
+        impl StreamStatePlanner for Planner {
+            async fn plan(
+                &self,
+                request: &HlsStreamRequest,
+                audio: bool,
+                segment: Option<i32>,
+                kind: PlaylistKind,
+            ) -> Result<TranscodePlan, ServiceError> {
+                let mut plan = self.0.plan(request, audio, segment, kind).await?;
+                plan.state.play_session_id = request.play_session_id.clone();
+                plan.arguments = vec![
+                    self.0.dir.to_string_lossy().into_owned(),
+                    segment.unwrap_or(0).to_string(),
+                    "-start_number".into(),
+                    segment.unwrap_or(0).to_string(),
+                ];
+                Ok(plan)
+            }
+            async fn hls_output(
+                &self,
+                request: &HlsStreamRequest,
+                audio: bool,
+            ) -> Result<(PathBuf, String), ServiceError> {
+                self.0.hls_output(request, audio).await
+            }
+        }
+        async fn until(mut condition: impl FnMut() -> bool) {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while !condition() {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("encoder.rs");
+        let program = root.path().join("encoder");
+        std::fs::write(&source, r##"
+use std::{io::Read, path::Path, time::Duration};
+fn main() {
+    let args: Vec<_> = std::env::args().collect(); let root = Path::new(&args[1]); let index = &args[2];
+    std::fs::write(root.join(format!("pid-{index}")), std::process::id().to_string()).unwrap();
+    std::fs::write(root.join(format!("out{index}.ts")), b"real process segment").unwrap();
+    std::fs::write(root.join("out.m3u8"), b"#EXTM3U\n").unwrap();
+    let _ = std::io::stdin().read_exact(&mut [0;2]);
+    std::fs::write(root.join(format!("stopping-{index}")), b"stopping").unwrap();
+    while !root.join(format!("exit-{index}")).exists() { std::thread::sleep(Duration::from_millis(5)); }
+}
+"##).unwrap();
+        assert!(
+            std::process::Command::new("rustc")
+                .args(["--edition=2024", "-C", "debuginfo=0"])
+                .arg(&source)
+                .arg("-o")
+                .arg(&program)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let runtime = Arc::new(
+            TranscodeManagerImpl::new(NoopSessionReporter)
+                .with_transcode_limits(TranscodeLimits { server, per_user }),
+        );
+        let binding = |dir: PathBuf| {
+            std::fs::create_dir_all(&dir).unwrap();
+            HlsStreamManagerImpl::new(
+                Planner(FakePlanner {
+                    dir: dir.clone(),
+                    segment_container: "ts".into(),
+                    requests: Arc::default(),
+                    remux: false,
+                    runtime_ticks: Arc::default(),
+                    labels: std::sync::atomic::AtomicUsize::new(0),
+                }),
+                ferrofin_mediaencoding::TokioSegmentTranscoder::new(),
+                Arc::clone(&runtime),
+                generator(),
+                Arc::new(FakePaths {
+                    transcode: dir.to_string_lossy().into_owned(),
+                }),
+                program.to_str().unwrap(),
+            )
+        };
+        let first_dir = root.path().join("first");
+        let second_dir = root.path().join("second");
+        let first = Arc::new(binding(first_dir.clone()));
+        let second = binding(second_dir.clone());
+        let request = HlsStreamRequest {
+            user_id: Some(uuid::Uuid::from_u128(1)),
+            device_id: Some("first".into()),
+            play_session_id: Some("first".into()),
+            ..Default::default()
+        };
+        let other = HlsStreamRequest {
+            user_id: Some(uuid::Uuid::from_u128(second_user)),
+            device_id: Some("second".into()),
+            play_session_id: Some("second".into()),
+            ..Default::default()
+        };
+        drop(first.dynamic_segment(&request, 0, false).await.unwrap());
+        let pid = |dir: &Path, index: i32| -> u32 {
+            std::fs::read_to_string(dir.join(format!("pid-{index}")))
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+        let alive = |pid: u32| Path::new(&format!("/proc/{pid}")).exists();
+        let original = pid(&first_dir, 0);
+        assert!(alive(original));
+        let seeking = Arc::clone(&first);
+        let seek_request = request.clone();
+        let seek =
+            tokio::spawn(async move { seeking.dynamic_segment(&seek_request, 5, false).await });
+        until(|| first_dir.join("stopping-0").exists()).await;
+        assert!(alive(original));
+        assert_eq!(runtime.active_job_count(), 1);
+        assert!(
+            second.dynamic_segment(&other, 0, false).await.is_err(),
+            "another playlist cannot borrow a stopping child's configured slot"
+        );
+        assert!(!second_dir.join("pid-0").exists());
+        std::fs::write(first_dir.join("exit-0"), b"exit").unwrap();
+        drop(seek.await.unwrap().unwrap());
+        let replacement = pid(&first_dir, 5);
+        assert!(
+            !alive(original) && alive(replacement),
+            "seek restart follows observed actual exit"
+        );
+        std::fs::write(first_dir.join("exit-5"), b"exit").unwrap();
+        first
+            .stop_encoding_authorized(&request, request.user_id.unwrap(), false)
+            .await
+            .unwrap();
+        until(|| !alive(replacement)).await;
+        drop(second.dynamic_segment(&other, 0, false).await.unwrap());
+        let admitted = pid(&second_dir, 0);
+        assert!(alive(admitted));
+        std::fs::write(second_dir.join("exit-0"), b"exit").unwrap();
+        second
+            .stop_encoding_authorized(&other, other.user_id.unwrap(), false)
+            .await
+            .unwrap();
+        until(|| !alive(admitted)).await;
+        assert_eq!(runtime.active_job_count(), 0);
+    }
 
     fn manager_full(
         dir: &Path,

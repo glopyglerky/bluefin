@@ -1,19 +1,56 @@
 //! Packaging boundary check. This tool is never linked into a client.
 use std::{env, error::Error, fs, path::Path, process::Command};
 
+const REVIEWED_NOQ_MANIFEST: &str =
+    "apps/bluefin-apple/iroh-modern/vendor/noq-proto-1.4.0/Cargo.toml";
 const LOCAL_MANIFESTS: &[&str] = &[
     "apps/bluefin-apple/rust/Cargo.toml",
     "apps/bluefin-apple/iroh-modern/Cargo.toml",
     "apps/bluefin-apple/iroh-modern/vendor/netdev-0.46.3/Cargo.toml",
     "apps/bluefin-apple/iroh-modern/vendor/netwatch-0.19.3/Cargo.toml",
+    REVIEWED_NOQ_MANIFEST,
     "crates/bluefin-contract/Cargo.toml",
+    "apps/bluefin-android/rust/Cargo.toml",
+    "apps/bluefin-universal/Cargo.toml",
 ];
-const SOURCE_ROOTS: &[&str] = &[
-    "apps/bluefin-apple/Sources",
-    "apps/bluefin-apple/include",
+const SHARED_SOURCE_ROOTS: &[&str] = &[
     "apps/bluefin-apple/rust/src",
     "apps/bluefin-apple/iroh-modern/src",
     "crates/bluefin-contract/src",
+];
+struct Client {
+    name: &'static str,
+    manifest: &'static str,
+    sources: &'static [&'static str],
+}
+const CLIENTS: &[Client] = &[
+    Client {
+        name: "apple",
+        manifest: "apps/bluefin-apple/rust/Cargo.toml",
+        sources: &["apps/bluefin-apple/Sources", "apps/bluefin-apple/include"],
+    },
+    Client {
+        name: "android",
+        manifest: "apps/bluefin-android/rust/Cargo.toml",
+        sources: &[
+            "apps/bluefin-android/app/src/main/java",
+            "apps/bluefin-android/app/src/debug/java",
+            "apps/bluefin-android/app/src/release/java",
+            "apps/bluefin-android/app/src/main/AndroidManifest.xml",
+            "apps/bluefin-android/rust/src",
+        ],
+    },
+    Client {
+        name: "universal",
+        manifest: "apps/bluefin-universal/Cargo.toml",
+        sources: &[
+            "apps/bluefin-universal/src",
+            "apps/bluefin-universal/media-worker.js",
+            "apps/bluefin-universal/web-player.js",
+            "apps/bluefin-universal/vendor",
+            "apps/bluefin-universal/index.html",
+        ],
+    },
 ];
 const FORBIDDEN: &[&str] = &[
     "x-api-key",
@@ -79,6 +116,9 @@ fn check_packages(repo: &Path, metadata: &serde_json::Value) -> Result<usize, Bo
         if has_service_name(name) {
             return Err(format!("Server integration package in native graph: {name}").into());
         }
+        if name == "noq-proto" && !package["source"].is_null() {
+            return Err("Native Iroh must select the reviewed local Noq source".into());
+        }
         if package["source"].is_null() {
             let manifest = Path::new(
                 package["manifest_path"]
@@ -86,6 +126,9 @@ fn check_packages(repo: &Path, metadata: &serde_json::Value) -> Result<usize, Bo
                     .ok_or("Manifest missing")?,
             )
             .canonicalize()?;
+            if name == "noq-proto" && manifest != repo.join(REVIEWED_NOQ_MANIFEST).canonicalize()? {
+                return Err("Native Iroh selected an unreviewed local Noq source".into());
+            }
             let allowed = LOCAL_MANIFESTS.iter().any(|relative| {
                 repo.join(relative)
                     .canonicalize()
@@ -102,32 +145,47 @@ fn check_packages(repo: &Path, metadata: &serde_json::Value) -> Result<usize, Bo
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
     let repo = args.next().ok_or("Supply the repository root")?;
+    let selection = args.next().unwrap_or_else(|| "apple".into());
     if args.next().is_some() {
-        return Err("Supply only the repository root".into());
+        return Err("Supply repository root and optional apple/android/universal/all".into());
     }
     let repo = Path::new(&repo).canonicalize()?;
-    let output = Command::new("cargo")
-        .args([
-            "metadata",
-            "--locked",
-            "--all-features",
-            "--format-version",
-            "1",
-            "--manifest-path",
-        ])
-        .arg(repo.join(LOCAL_MANIFESTS[0]))
-        .output()?;
-    if !output.status.success() {
-        return Err("Native Cargo graph resolution failed; inspect cargo metadata locally".into());
+    if selection != "all" && !CLIENTS.iter().any(|client| selection == client.name) {
+        return Err("Unknown client; select apple/android/universal/all".into());
     }
-    let packages = check_packages(&repo, &serde_json::from_slice(&output.stdout)?)?;
-    let mut sources = 0;
-    for root in SOURCE_ROOTS {
-        sources += check_sources(&repo.join(root))?;
+    for client in CLIENTS
+        .iter()
+        .filter(|client| selection == "all" || selection == client.name)
+    {
+        let output = Command::new("cargo")
+            .args([
+                "metadata",
+                "--locked",
+                "--all-features",
+                "--format-version",
+                "1",
+                "--manifest-path",
+            ])
+            .arg(repo.join(client.manifest))
+            .output()?;
+        if !output.status.success() {
+            return Err(
+                "Native Cargo graph resolution failed; inspect cargo metadata locally".into(),
+            );
+        }
+        let packages = check_packages(&repo, &serde_json::from_slice(&output.stdout)?)?;
+        let mut sources = 0;
+        for root in SHARED_SOURCE_ROOTS.iter().chain(client.sources) {
+            let path = repo.join(root);
+            sources += check_sources(&path).map_err(|error| {
+                format!("Cannot inspect native source {}: {error}", path.display())
+            })?;
+        }
+        println!(
+            "Native {} boundary passed: {packages} resolved packages, {sources} source files; no server connector dependency or direct service markers.",
+            client.name
+        );
     }
-    println!(
-        "Native boundary passed: {packages} resolved packages, {sources} source files; no server connector dependency or direct service markers."
-    );
     Ok(())
 }
 
@@ -153,6 +211,36 @@ mod tests {
             "manifest_path":repo.join("crates/ferrofin-api/Cargo.toml")
         }]});
         assert!(check_packages(repo, &graph).is_err());
+    }
+
+    #[test]
+    fn exact_vendored_noq_manifest_is_admitted() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap();
+        let graph = json!({"resolve":{"nodes":[]}, "packages":[{
+            "name":"noq-proto", "source":null,
+            "manifest_path":repo.join("apps/bluefin-apple/iroh-modern/vendor/noq-proto-1.4.0/Cargo.toml")
+        }]});
+        assert_eq!(check_packages(repo, &graph).unwrap(), 1);
+    }
+
+    #[test]
+    fn registry_or_alternate_local_noq_is_rejected() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap();
+        let registry = json!({"resolve":{"nodes":[]}, "packages":[{
+            "name":"noq-proto", "source":"registry+https://github.com/rust-lang/crates.io-index"
+        }]});
+        assert!(check_packages(repo, &registry).is_err());
+        let alternate = json!({"resolve":{"nodes":[]}, "packages":[{
+            "name":"noq-proto", "source":null,
+            "manifest_path":repo.join("apps/bluefin-apple/rust/Cargo.toml")
+        }]});
+        assert!(check_packages(repo, &alternate).is_err());
     }
 
     #[test]

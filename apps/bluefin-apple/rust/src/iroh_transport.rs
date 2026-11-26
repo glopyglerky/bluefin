@@ -11,8 +11,10 @@ use super::{err, Api, Result};
 use bluefin_iroh_transport::ClientConfig;
 use url::Url;
 pub(super) struct Tunnel {
-    id: u64,
+    id: Option<u64>,
     base: String,
+    #[cfg(test)]
+    drain: Option<fn(u64) -> Result<()>>,
 }
 impl Tunnel {
     pub(super) fn from_request(api: &Api<'_>) -> Result<Option<Self>> {
@@ -40,7 +42,20 @@ impl Tunnel {
         };
         let (id, base) =
             bluefin_iroh_transport::start(config).map_err(|_| err("Iroh tunnel unavailable"))?;
-        Ok(Some(Self { id, base }))
+        Ok(Some(Self {
+            id: Some(id),
+            base,
+            #[cfg(test)]
+            drain: None,
+        }))
+    }
+    #[cfg(test)]
+    pub(super) fn failed_drain() -> Self {
+        Self {
+            id: Some(0),
+            base: "http://127.0.0.1:1".into(),
+            drain: Some(|_| Err(err("Iroh tunnel cleanup unconfirmed"))),
+        }
     }
     pub(super) fn fetch_url(&self, canonical: &Url) -> Result<Url> {
         Url::parse(&format!(
@@ -55,8 +70,22 @@ impl Tunnel {
         .map_err(|_| err("Invalid Iroh media route"))
     }
 }
+impl Tunnel {
+    pub(super) fn stop(&mut self) -> Result<()> {
+        let Some(id) = self.id.take() else {
+            return Ok(());
+        };
+        #[cfg(test)]
+        if let Some(drain) = self.drain {
+            return drain(id);
+        }
+        bluefin_iroh_transport::stop_with_receipt(id)
+            .map_err(|_| err("Iroh tunnel cleanup unconfirmed"))
+    }
+}
 impl Drop for Tunnel {
     fn drop(&mut self) {
-        bluefin_iroh_transport::stop(self.id);
+        // Startup failure and unwind fallback. Only explicit stop produces a receipt.
+        let _ = self.stop();
     }
 }

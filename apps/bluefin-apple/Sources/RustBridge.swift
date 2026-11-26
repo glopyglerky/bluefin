@@ -4,8 +4,8 @@ import Security
 enum RustBridge {
     /// Rust owns protocol validation, device profiles, playback planning, and API requests.
     /// A detached task keeps synchronous FFI off the main actor.
-    static func call<T: Decodable>(_ operation: String, session: AccountSession? = nil, fields: [String: Any] = [:], as type: T.Type = T.self) async throws -> T {
-        let cleanup = ["releasePlayback", "stopPlaybackProxy", "downloadCancel"].contains(operation)
+    static func call<T: Decodable & Sendable>(_ operation: String, session: AccountSession? = nil, fields: [String: Any] = [:], as type: T.Type = T.self) async throws -> T {
+        let cleanup = ["releasePlayback", "stopPlaybackProxy", "downloadCancel", "cancelKaraokePreparation"].contains(operation)
         let permit: UUID?
         if cleanup { permit = nil } else { permit = try await CoreAdmission.shared.acquire() }
         defer { if let permit { Task { await CoreAdmission.shared.release(permit) } } }
@@ -24,7 +24,7 @@ enum RustBridge {
         }
         if let allowHttp = request.removeValue(forKey: "allowHttp") { request["allowLocalHttp"] = allowHttp }
         let data = try JSONSerialization.data(withJSONObject: request)
-        let response = try await Task.detached(priority: .userInitiated) {
+        let (response, decoded) = try await Task.detached(priority: .userInitiated) { () -> (Data, Result<T, Error>) in
             guard let json = String(data: data, encoding: .utf8) else { throw BluefinError.message("The request could not be encoded.") }
             return try json.withCString { input in
                 let deadline = Date().addingTimeInterval(60)
@@ -44,7 +44,8 @@ enum RustBridge {
                 guard envelope["ok"] as? Bool == true else {
                     throw BluefinError.message(envelope["error"] as? String ?? "The request failed.")
                 }
-                return try JSONSerialization.data(withJSONObject: envelope["value"] ?? NSNull(), options: [.fragmentsAllowed])
+                let response = try JSONSerialization.data(withJSONObject: envelope["value"] ?? NSNull(), options: [.fragmentsAllowed])
+                return (response, Result { try JSONDecoder().decode(T.self, from: response) })
                 }
             }
         }.value
@@ -52,7 +53,7 @@ enum RustBridge {
             if operation == "playback" { try await cleanupPlaybackResponse(response, session: session) }
             throw CancellationError()
         }
-        do { return try JSONDecoder().decode(T.self, from: response) }
+        do { return try decoded.get() }
         catch {
             if operation == "playback" { try await cleanupPlaybackResponse(response, session: session) }
             throw BluefinError.message("The server returned an unexpected response.")
@@ -93,13 +94,16 @@ struct EmptyValue: Decodable { init(from decoder: Decoder) throws {} }
 
 enum SessionVault {
     private static let service = "org.glopyglerky.bluefin.session"
-    static func load() -> AccountSession? {
+    static func load() -> AccountSession? { try? loadChecked() }
+    static func loadChecked() throws -> AccountSession? {
         var query = baseQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
-        return try? JSONDecoder().decode(AccountSession.self, from: data)
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data else { throw BluefinError.message("Saved sign-in is unavailable. Unlock and retry.") }
+        return try JSONDecoder().decode(AccountSession.self, from: data)
     }
     static func save(_ session: AccountSession) throws {
         let data = try JSONEncoder().encode(session)
@@ -112,7 +116,12 @@ enum SessionVault {
             guard SecItemAdd(query as CFDictionary, nil) == errSecSuccess else { throw BluefinError.message("Your sign-in could not be saved in Keychain.") }
         } else if status != errSecSuccess { throw BluefinError.message("Keychain could not update your sign-in.") }
     }
-    static func clear() { SecItemDelete(baseQuery as CFDictionary) }
+    static func clear() throws {
+        let status = SecItemDelete(baseQuery as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw BluefinError.message("Your saved sign-in could not be removed. Try signing out again.")
+        }
+    }
     private static var baseQuery: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "current"]
     }

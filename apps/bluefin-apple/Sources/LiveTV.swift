@@ -13,15 +13,21 @@ struct LiveTVView: View {
     var body: some View {
         List {
             Section {
-                NavigationLink(destination: LiveGuideView()) { Label("Channel guide", systemImage: "rectangle.grid.1x2") }
-                if store.sports.available { NavigationLink(destination: NativeSportsGuide(sports: store.sports)) { Label("Sports", systemImage: "sportscourt") } }
+                #if !os(tvOS)
+                MediaNavigationLink(destination: .guide) { Label("Channel guide", systemImage: "rectangle.grid.1x2") }
+                #endif
+                if store.sports.available {
+                    NavigationLink(destination: NativeSportsGuide(sports: store.sports).bluefinBackNavigation()) {
+                        Label("Sports", systemImage: "sportscourt")
+                    }
+                }
             }
             Section {
                 Toggle("Favorites", isOn: $favorites)
             }
             Section("On now") {
                 ForEach(channels) { channel in
-                    NavigationLink(destination: LiveChannelView(channel: channel)) {
+                    MediaNavigationLink(destination: .channel(channel)) {
                         HStack(spacing: 16) {
                             Artwork(item: channel).frame(width: 96, height: 64).clipShape(RoundedRectangle(cornerRadius: 9))
                             VStack(alignment: .leading, spacing: 6) {
@@ -69,32 +75,7 @@ struct LiveTVView: View {
 struct NativeSportsGuide: View {
     @ObservedObject var sports: SportsStore
     var body: some View {
-        List {
-            if let feed = sports.feed {
-                Section("Your games") {
-                    ForEach(feed.games) { SportsBroadcastRow(option: $0).listRowInsets(EdgeInsets()) }
-                    if feed.games.isEmpty { Text("No games match your current selections.").foregroundStyle(.secondary) }
-                }
-                if !feed.local_broadcasts.isEmpty {
-                    Section("Sports on your channels") {
-                        Text("Guide coverage can include sports shows rather than a verified game.").font(.footnote).foregroundStyle(.secondary)
-                        ForEach(feed.local_broadcasts) { SportsBroadcastRow(option: $0).listRowInsets(EdgeInsets()) }
-                    }
-                }
-                if let providers = feed.providers, !providers.isEmpty {
-                    Section {
-                        ForEach(providers.filter { $0.kind == "STARTING_POINT" && $0.action == "CHECK_ACCESS" }) { provider in
-                            if let destination = ProviderDestination.validated(name: provider.name, rawURL: provider.url) {
-                                ProviderHandoffButton(destination: destination, label: "Check \(provider.name) access")
-                            }
-                        }
-                    } header: { Text("Where to watch") } footer: {
-                        Text("Provider starting points do not confirm access to a particular game. Your subscription, region and blackout rules still apply.")
-                    }
-                }
-            }
-        }.navigationTitle("Sports")
-            .toolbar { ToolbarItem(placement: .primaryAction) { NavigationLink(destination: SportsSettingsView(sports: sports)) { Image(systemName: "line.3.horizontal.decrease.circle") }.accessibilityLabel("Sports preferences") } }
+        SportsDashboard(sports: sports)
     }
 }
 
@@ -114,12 +95,19 @@ struct LiveChannelView: View {
             }
             Section("Schedule") {
                 ForEach(programmes) { programme in
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let start = programme.start, let end = programme.end { Text("\(start.formatted(date: .omitted, time: .shortened)) – \(end.formatted(date: .omitted, time: .shortened))").font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
-                        Text(programme.title).font(.headline)
-                        if programme.IsSports == true { Label("Sports", systemImage: "sportscourt").font(.caption).foregroundStyle(.secondary) }
-                        if let episode = programme.EpisodeTitle { Text(episode).font(.subheadline) }
-                        if let overview = programme.Overview { Text(overview).font(.callout).foregroundStyle(.secondary) }
+                    HStack(alignment: .top, spacing: 12) {
+                        if let item = programme.artwork {
+                            Artwork(item: item, thumbnailWidth: 320)
+                                .frame(width: 104, height: 68)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let start = programme.start, let end = programme.end { Text("\(start.formatted(date: .omitted, time: .shortened)) – \(end.formatted(date: .omitted, time: .shortened))").font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
+                            Text(programme.title).font(.headline)
+                            if programme.IsSports == true { Label("Sports", systemImage: "sportscourt").font(.caption).foregroundStyle(.secondary) }
+                            if let episode = programme.EpisodeTitle { Text(episode).font(.subheadline) }
+                            if let overview = programme.Overview { Text(overview).font(.callout).foregroundStyle(.secondary) }
+                        }
                     }.padding(.vertical, 8)
                 }
                 if programmes.isEmpty && failure == nil { Text("No programme information is available.").foregroundStyle(.secondary) }

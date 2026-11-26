@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "processing": "modelSeparatedStems",
+  "publisher": "deezer/spleeter",
+  "release": "v1.4.0",
+  "releaseCommit": "556ef2121492d72398a988af1b38b55176f5973a",
+  "modelAsset": "https://github.com/deezer/spleeter/releases/download/v1.4.0/2stems.tar.gz",
+  "archiveSha256": "f3a90b39dd2874269e8b05a48a86745df897b848c61f3958efc80a39152bd692",
+  "members": {
+    "model.data-00000-of-00001": "7747f9fd2c782306dbec1504360fbb645a097a48446f23486c3ff9c89bc11788",
+    "model.index": "55661a09f79c86071fc7077b44b4cf1f01b6d82bbbb83ed94cb68a2f9944e378",
+    "model.meta": "6e1f6d86a22bb452a58cb20e3de87b416f8a79e626ca223e20f763ab2d21ec95",
+    "checkpoint": "011c96b970c1f56137037924fe1a0f0851369b0ee6692e120aea798615326f48"
+  },
+  "permissionEvidence": {
+    "license": "MIT",
+    "notice": "spleeter-LICENSE",
+    "noticeSha256": "b15e40c921ec6fe997e0d88ddab9c26fb915bebbbb9496530d3f98f317d4325a",
+    "explicitSourceAndModelLicense": "https://github.com/deezer/spleeter/blob/6f2c8a2e283914faa544631430f65b793f1b1218/paper.md",
+    "paperSha256": "32fd4a4d55bc454f9fe5340d426819436da0c9f0151b7b8ebee0a37d95759983",
+    "parentProvenanceSha256": "0e96a64ab0678fa12fde3ee86d92c7f2141f25fe123810dc0ba9c81f3a6dd48d"
+  },
+  "inference": {
+    "runtime": "candle-core",
+    "version": "0.11.1",
+    "runtimeSourceCommit": "59f8e903ca80a32ea7f8514b39748fc979e69e82",
+    "fft": "rustfft-6.4.1",
+    "target": "x86_64-unknown-linux-gnu",
+    "device": "cpu",
+    "checkpointConversion": "none; original F32 TensorBundle values read directly in Rust",
+    "tensorLayout": "TF HWIO/HWOI permuted to Candle OIHW/IOHW; NHWC to NCHW",
+    "sampleRate": 44100,
+    "channels": 2,
+    "window": 4096,
+    "hop": 1024,
+    "patchFrames": 512,
+    "trainedBins": 1024,
+    "maskExtension": "zeros",
+    "exponent": 2,
+    "epsilon": 1e-10,
+    "maxDurationSeconds": 300,
+    "maxInFlightJobsPerProcess": 1,
+    "startupEnvironment": ["RAYON_NUM_THREADS=Config.cpu_threads", "CANDLE_NUM_THREADS=Config.cpu_threads"],
+    "requiredDefaultFeatures": []
+  },
+  "offlineReference": {
+    "tensorflowVersion": "2.21.0",
+    "wheel": "tensorflow-2.21.0-cp313-cp313-manylinux_2_27_x86_64.whl",
+    "wheelSha256": "e9d8da8dcab9650efb45f032ba70af2f016f907e6e0c6bda29dd101bba945406",
+    "libtensorflowCcSha256": "2889ecc99d7641620f41a4bea538f4dd4b626f75aa3e12623161ae939054191c",
+    "libtensorflowFrameworkSha256": "98847c6f0448308159f6d3ff55e13a9e92978598c7fbb34cde63aadf35c6fe84",
+    "productRuntime": false
+  }
+}

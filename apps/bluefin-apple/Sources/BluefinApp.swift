@@ -6,10 +6,24 @@ import CoreSpotlight
 @main struct BluefinApp: App {
     @StateObject private var store = LibraryStore()
     @AppStorage("bluefin.appearance") private var appearance = 0
+    init() {
+        let initialStore = LibraryStore()
+        _store = StateObject(wrappedValue: initialStore)
+        NativeIntegrations.attach(to: initialStore)
+    }
     var body: some Scene {
         WindowGroup {
             RootView().environmentObject(store).tint(BluefinStyle.accent).preferredColorScheme(appearance == 1 ? .light : appearance == 2 ? .dark : nil)
+                #if targetEnvironment(macCatalyst)
+                .frame(minWidth: 680, minHeight: 480)
+                #endif
         }
+        #if targetEnvironment(macCatalyst)
+        .commands { BluefinMacCommands(store: store) }
+        #elseif os(visionOS)
+        .defaultSize(width: 1100, height: 760)
+        .windowResizability(.contentMinSize)
+        #endif
     }
 }
 
@@ -18,11 +32,21 @@ struct RootView: View {
     var body: some View {
         Group {
             if store.signedIn { LibraryTabs() }
-            else { WelcomeView() }
+            else { TVWelcomeView() }
         }
-        .fullScreenCover(item: Binding(get: { store.playback?.item.Type == "Audio" ? nil : store.playback }, set: { if $0 == nil && store.playback?.item.Type != "Audio" { store.dismissPlayback() } }), onDismiss: { Task { await store.refresh() } }) { PlaybackScreen(playback: $0) }
+        #if os(iOS) || os(visionOS)
+        .background {
+            NativeVideoPresentation(playback: store.playback.flatMap { $0.item.Type == "Audio" ? nil : $0 }) { playback in
+                guard store.playback === playback else { return }
+                store.dismissPlayback()
+                Task { await store.refresh() }
+            }.frame(width: 0, height: 0)
+        }
+        #else
+        .fullScreenCover(item: Binding(get: { store.playback?.item.Type == "Audio" ? nil : store.playback }, set: { if $0 == nil && store.playback?.item.Type != "Audio" { store.dismissPlayback() } }), onDismiss: { Task { await store.refresh() } }) { PlaybackScreen(playback: $0).environmentObject(store) }
+        #endif
         .sheet(isPresented: $store.musicExpanded) {
-            if let playback = store.playback, playback.item.Type == "Audio" { MusicPlayer(playback: playback).id(playback.id) }
+            if let playback = store.playback, playback.item.Type == "Audio" { MusicPlayer(playback: playback).environmentObject(store).id(playback.id) }
         }
         .task {
             NativeIntegrations.attach(to: store)
@@ -46,86 +70,6 @@ struct RootView: View {
     }
 }
 
-struct WelcomeView: View {
-    @EnvironmentObject private var store: LibraryStore
-    @State private var server = ""
-    @State private var username = ""
-    @State private var password = ""
-    @State private var allowHttp = false
-    @State private var busy = false
-    @State private var problem: String?
-    @State private var serverName: String?
-    @State private var quickConnect = false
-    @FocusState private var focus: Field?
-    private enum Field: Hashable { case server, username, password }
-    var body: some View {
-        NavigationView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 30) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Image(systemName: "water.waves").font(.system(size: 50, weight: .light)).foregroundColor(.cyan).accessibilityHidden(true)
-                        Text("Bluefin").font(.system(.largeTitle, design: .rounded).bold())
-                        Text("Your library.\nRight at home.").font(.largeTitle.bold()).fixedSize(horizontal: false, vertical: true)
-                        Text("Movies, shows, music, and live TV from your own server. Made for your Apple devices.")
-                            .font(.body).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                    VStack(alignment: .leading, spacing: 18) {
-                        Text("Connect your server").font(.headline)
-                        TextField("https://media.example.com", text: $server).bluefinAddressInput().textContentType(.URL).focused($focus, equals: .server).submitLabel(.next).onSubmit { focus = .username }
-                            .accessibilityIdentifier("serverAddress")
-                        TextField("Username", text: $username).bluefinAddressInput().textContentType(.username).focused($focus, equals: .username).submitLabel(.next).onSubmit { focus = .password }
-                            .accessibilityIdentifier("username")
-                        SecureField("Password", text: $password).textContentType(.password).focused($focus, equals: .password).submitLabel(.go).onSubmit { Task { await signIn() } }
-                            .accessibilityIdentifier("password")
-                        if server.lowercased().hasPrefix("http:") {
-                            Toggle("Allow HTTP on my local network", isOn: $allowHttp)
-                            Text("HTTP sends your sign-in and media without transport encryption. Use HTTPS when available.").font(.footnote).foregroundStyle(.secondary)
-                        }
-                        if let problem { Label(problem, systemImage: "exclamationmark.circle").font(.callout).foregroundColor(.red).accessibilityIdentifier("signInError") }
-                        if let serverName { Label(serverName, systemImage: "checkmark.circle").foregroundColor(.green) }
-                        Button { Task { await signIn() } } label: {
-                            HStack { Spacer(); if busy { ProgressView() }; Text(busy ? "Connecting…" : "Connect").font(.body.weight(.semibold)); Spacer() }.padding(.vertical, 8)
-                        }.buttonStyle(.borderedProminent).disabled(busy || server.isEmpty || username.isEmpty).accessibilityIdentifier("connectServer")
-                        Button("Check server connection") { Task { await checkServer() } }.disabled(busy || server.isEmpty)
-                        Button("Sign in with Quick Connect") { focus = nil; quickConnect = true }.disabled(busy || server.isEmpty)
-                    }
-                    .bluefinTextFields()
-                    Divider()
-                    Button { store.explore() } label: { Label("Explore the preview", systemImage: "play.rectangle.on.rectangle") }
-                        .accessibilityIdentifier("explorePreview")
-                    Text("Preview uses sample titles. Your server address and sign-in stay on this device, protected by Keychain.").font(.footnote).foregroundStyle(.secondary)
-                    Text(BluefinAuthorizedUse.connectionNotice).font(.footnote).foregroundStyle(.secondary)
-                    NavigationLink("Libraries and rights", destination: AuthorizedUseView()).font(.footnote)
-                }
-                .padding(28).frame(maxWidth: 520).frame(maxWidth: .infinity)
-            }
-            .background {
-                LinearGradient(colors: [.cyan.opacity(0.09), .clear, .clear], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
-            }
-            .navigationTitle("")
-        }.navigationViewStyle(.stack)
-        #if os(iOS)
-        .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Done") { focus = nil } } }
-        #endif
-        .sheet(isPresented: $quickConnect) { QuickConnectView(server: server.trimmingCharacters(in: .whitespacesAndNewlines), allowHttp: allowHttp) }
-    }
-    private func signIn() async {
-        guard !busy else { return }
-        busy = true; problem = nil; focus = nil
-        defer { busy = false; password = "" }
-        do { try await store.signIn(server: server.trimmingCharacters(in: .whitespacesAndNewlines), username: username, password: password, allowHttp: allowHttp) }
-        catch { problem = error.localizedDescription }
-    }
-    private func checkServer() async {
-        busy = true; problem = nil; serverName = nil
-        defer { busy = false }
-        do {
-            let info: PublicInfo = try await RustBridge.call("info", fields: ["server": server.trimmingCharacters(in: .whitespacesAndNewlines), "allowHttp": allowHttp, "deviceId": store.deviceId])
-            serverName = info.ServerName ?? "Server is reachable"
-        } catch { problem = error.localizedDescription }
-    }
-}
-
 struct QuickConnectView: View {
     let server: String
     let allowHttp: Bool
@@ -138,16 +82,23 @@ struct QuickConnectView: View {
         NavigationView {
             VStack(spacing: 24) {
                 Image(systemName: "key.viewfinder").font(.system(size: 50, weight: .light)).foregroundColor(.cyan).accessibilityHidden(true)
-                Text("Sign in on your own terms").font(.title2.bold()).multilineTextAlignment(.center)
-                Text("Open Quick Connect in another signed-in client for your server and enter this code.").multilineTextAlignment(.center).foregroundStyle(.secondary)
+                Text("Quick Connect").font(.title2.bold())
+                Text("Enter this code in another client signed in to your server.").multilineTextAlignment(.center).foregroundStyle(.secondary)
                 if let code { Text(code).font(.system(size: 42, weight: .semibold, design: .monospaced)).tracking(6).accessibilityLabel("Quick Connect code, \(code.map(String.init).joined(separator: ", "))").accessibilityIdentifier("quickConnectCode") }
                 if let problem { Text(problem).foregroundColor(.red).multilineTextAlignment(.center); Button("Try again") { retry = UUID() } }
                 else { ProgressView(code == nil ? "Getting a code" : "Waiting for your approval") }
                 Button("Cancel") { dismiss() }
-            }.padding(32).frame(maxWidth: 550).frame(maxWidth: .infinity, maxHeight: .infinity)
+            }.padding(32).frame(maxWidth: quickConnectWidth).frame(maxWidth: .infinity, maxHeight: .infinity)
                 .navigationTitle("Quick Connect")
         }.navigationViewStyle(.stack)
         .task(id: retry) { await connect() }
+    }
+    private var quickConnectWidth: CGFloat {
+        #if os(tvOS)
+        920
+        #else
+        550
+        #endif
     }
     private func connect() async {
         problem = nil; code = nil
@@ -175,6 +126,12 @@ struct QuickConnectView: View {
 struct LibraryTabs: View {
     @EnvironmentObject private var store: LibraryStore
     @State private var selectedTab = 0
+    #if os(tvOS)
+    @State private var topShelfItem: MediaItem?
+    @State private var topShelfRequest: URL?
+    @State private var homeVisit = UUID()
+    @State private var previousTab = 0
+    #endif
     var body: some View {
         Group {
             #if os(iOS)
@@ -192,10 +149,40 @@ struct LibraryTabs: View {
             #else
             legacyPlayerTabs
             #endif
-        }.task {
+        }
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        .onOpenURL { url in
+            guard let route = WidgetRoute.admitted(url, authenticated: store.session != nil, preview: store.preview) else { return }
+            selectedTab = route.tab
+        }
+        #elseif os(tvOS)
+        .background { TVTopShelfSync(sports: store.sports) }
+        .onChange(of: selectedTab) { next in
+            if previousTab == 0 && next != 0 {
+                topShelfItem = nil
+                homeVisit = UUID()
+            }
+            previousTab = next
+        }
+        .onOpenURL { topShelfRequest = $0 }
+        .task(id: topShelfRequest) {
+            guard let url = topShelfRequest, store.session != nil, !store.preview,
+                  let id = TopShelfSnapshot.itemID(for: url) else { return }
+            defer { if topShelfRequest == url { topShelfRequest = nil } }
+            do {
+                let item = try await store.detail(MediaItem(Id: id))
+                try Task.checkCancellation()
+                selectedTab = 0
+                topShelfItem = item
+            } catch is CancellationError {} catch {
+                store.error = "This title is no longer available."
+            }
+        }
+        #endif
+        .task {
             NativeIntegrations.attach(to: store)
             NativeIntegrations.shared.openLibrary = { selectedTab = 1 }
-            await store.refresh()
+            if !store.loading { await store.refresh() }
         }
     }
     private var legacyPlayerTabs: some View {
@@ -214,6 +201,22 @@ struct LibraryTabs: View {
                 Tab("Live TV", systemImage: "dot.radiowaves.left.and.right", value: 4) { BluefinNavigation { LiveTVView() } }
             }.tabViewStyle(.sidebarAdaptable)
         } else { legacyTabs }
+        #elseif os(tvOS)
+        TabView(selection: $selectedTab) {
+            BluefinNavigation { TVHomeView(shelfItem: $topShelfItem, sports: store.sports) }
+                .id(homeVisit)
+                .tabItem { Label("Home", systemImage: "house") }.tag(0)
+            BluefinNavigation { TVVideoLibrary(kind: .movies) }
+                .tabItem { Label("Movies", systemImage: "film") }.tag(1)
+            BluefinNavigation { TVVideoLibrary(kind: .shows) }
+                .tabItem { Label("TV Shows", systemImage: "tv") }.tag(5)
+            BluefinNavigation { LiveGuideView() }
+                .tabItem { Label("Live TV", systemImage: "dot.radiowaves.left.and.right") }.tag(4)
+            BluefinNavigation { MusicLibraryView() }
+                .tabItem { Label("Music", systemImage: "music.note") }.tag(2)
+            BluefinNavigation { SearchView() }
+                .tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(3)
+        }
         #else
         legacyTabs
         #endif
@@ -240,7 +243,7 @@ struct HomeView: View {
                     if let featured = store.home.resume.first ?? store.home.latest.first { FeaturedItem(item: featured) }
                     if !store.home.resume.isEmpty { MediaShelf(title: "Continue watching", items: store.home.resume) }
                     if !store.home.nextUp.isEmpty { MediaShelf(title: "Up next", items: store.home.nextUp) }
-                    if !store.home.latest.isEmpty { MediaShelf(title: "Recently added", items: store.home.latest) }
+                    if !store.home.latest.isEmpty { MediaShelf(title: store.homeFromCatalog ? "Browse your library" : "Recently added", items: store.home.latest) }
                 }
                 SportsHomeSection(sports: sports)
                 if sports.loading && sports.saved?.preferences.sports_only == true { ProgressView("Loading sports").padding(24) }
@@ -251,9 +254,18 @@ struct HomeView: View {
                         Button("Try again") { Task { await sports.connect(store.session) } }
                     }.padding(.horizontal, 24)
                 }
-                if store.loading { ProgressView("Loading your library").frame(maxWidth: .infinity).padding(40) }
-                if !store.loading && store.home.latest.isEmpty && store.home.resume.isEmpty && sports.saved?.preferences.sports_only != true {
-                    EmptyLibrary(title: "Your library is ready", message: "Open Library to browse your server's collections.", symbol: "square.stack")
+                if let issue = store.libraryProblem {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(issue).font(.callout).foregroundStyle(.secondary)
+                        Button("Refresh library") { Task { await store.refresh() } }.disabled(store.loading)
+                    }.padding(.horizontal, 24)
+                }
+                if store.home.latest.isEmpty && store.home.resume.isEmpty && store.home.nextUp.isEmpty
+                    && sports.saved?.preferences.sports_only != true {
+                    if store.loading { ProgressView("Loading your library").frame(maxWidth: .infinity).padding(40) }
+                    else if store.libraryProblem == nil {
+                        EmptyLibrary(title: "Browse your library", message: "Open Library to see your collections.", symbol: "square.stack")
+                    }
                 }
             }.padding(.vertical, 16)
         }
@@ -276,7 +288,8 @@ struct FeaturedItem: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             ZStack(alignment: .bottomLeading) {
-                Artwork(item: item, backdrop: true)
+                Artwork(item: item, backdrop: true,
+                        thumbnailWidth: sizeClass == .compact ? 1200 : nil)
                 LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .center, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(item.progress > 0 ? "PICK UP WHERE YOU LEFT OFF" : "IN YOUR LIBRARY").font(.caption.weight(.semibold)).tracking(1.5)
@@ -287,9 +300,11 @@ struct FeaturedItem: View {
             .frame(height: dynamicType.isAccessibilitySize ? 390 : sizeClass == .compact ? 310 : 430)
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             HStack(spacing: 16) {
-                Button { Task { await store.play(item) } } label: { Label(item.progress > 0 ? "Resume" : "Play", systemImage: "play.fill").font(.body.weight(.semibold)).padding(.horizontal, 20).padding(.vertical, 6) }
-                    .buttonStyle(.borderedProminent).disabled(store.startingPlayback)
-                NavigationLink(destination: DetailView(item: item)) { Label("Details", systemImage: "info.circle") }.buttonStyle(.bordered)
+                if !item.isContainer {
+                    Button { Task { await store.play(item) } } label: { Label(item.resumeTicks > 0 ? "Resume" : "Play", systemImage: "play.fill").font(.body.weight(.semibold)).padding(.horizontal, 20).padding(.vertical, 6) }
+                        .buttonStyle(.borderedProminent).disabled(store.startingPlayback)
+                }
+                MediaNavigationLink(destination: .detail(item)) { Label("Details", systemImage: "info.circle") }.buttonStyle(.bordered)
                 if store.startingPlayback { ProgressView() }
             }
         }.padding(.horizontal, 24)
@@ -304,7 +319,10 @@ struct MediaShelf: View {
             Text(title).font(.title2.bold()).padding(.horizontal, 24).accessibilityAddTraits(.isHeader)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 16) {
-                    ForEach(items) { item in NavigationLink(destination: DetailView(item: item)) { Poster(item: item).frame(width: posterWidth) }.bluefinPosterButton() }
+                    ForEach(items) { item in
+                        MediaNavigationLink(destination: .detail(item)) { Poster(item: item).frame(width: posterWidth) }
+                            .buttonStyle(.plain)
+                    }
                 }.padding(.horizontal, 24).padding(.vertical, 8)
             }
         }
@@ -320,10 +338,20 @@ struct MediaShelf: View {
 
 struct Poster: View {
     let item: MediaItem
+    #if os(tvOS)
+    @Environment(\.isFocused) private var focused
+    #endif
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             Artwork(item: item).aspectRatio(item.Type == "MusicAlbum" ? 1 : 2 / 3, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(alignment: .bottom) { if item.progress > 0 { ProgressView(value: item.progress).tint(.cyan).padding(8).accessibilityHidden(true) } }
+                #if os(tvOS)
+                .overlay {
+                    if focused {
+                        RoundedRectangle(cornerRadius: 12).strokeBorder(.white, lineWidth: 3)
+                    }
+                }
+                #endif
             Text(item.title).font(.subheadline.weight(.semibold)).lineLimit(2).foregroundStyle(.primary)
             if !item.subtitle.isEmpty { Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
         }.accessibilityElement(children: .ignore).accessibilityLabel(item.title + (item.subtitle.isEmpty ? "" : ", " + item.subtitle))
@@ -334,20 +362,33 @@ struct LibrariesView: View {
     @EnvironmentObject private var store: LibraryStore
     var body: some View {
         List {
-            NavigationLink(destination: DownloadsView(offline: store.offline)) { Label("Downloads", systemImage: "arrow.down.circle") }
-            NavigationLink(destination: ConnectedAppsView()) { Label("Connected apps", systemImage: "arrow.up.forward.app") }
-            if !store.preview {
-                NavigationLink(destination: LiveTVView()) { Label("Live TV", systemImage: "dot.radiowaves.left.and.right").padding(.vertical, 12) }
-            }
-            if store.preview {
-                NavigationLink(destination: ItemGrid(title: "Sample movies", parent: nil)) { Label("Sample movies", systemImage: "film") }
-            }
-            ForEach(store.libraries) { library in
-                NavigationLink(destination: ItemGrid(title: library.title, parent: library)) {
-                    Label(library.title, systemImage: symbol(library.CollectionType)).padding(.vertical, 12)
+            Section("Collections") {
+                if store.preview {
+                    MediaNavigationLink(destination: .collection(title: "Sample movies", parent: nil, types: "Movie")) {
+                        Label("Sample movies", systemImage: "film")
+                    }
+                }
+                ForEach(store.libraries) { library in
+                    MediaNavigationLink(destination: .collection(title: library.title, parent: library, types: nil)) {
+                        Label(library.title, systemImage: symbol(library.CollectionType)).padding(.vertical, 12)
+                    }
+                }
+                if !store.preview && store.libraries.isEmpty {
+                    if store.loading { ProgressView("Loading collections") }
+                    else if let problem = store.libraryProblem {
+                        Text(problem).foregroundStyle(.secondary)
+                        Button("Refresh library") { Task { await store.refresh() } }
+                    } else { Text("No libraries are available to this account.").foregroundStyle(.secondary) }
                 }
             }
-            if !store.preview && store.libraries.isEmpty { Text("No libraries are available to this account.").foregroundStyle(.secondary) }
+            Section("More") {
+                NavigationLink(destination: DownloadsView(offline: store.offline).bluefinBackNavigation()) { Label("Downloads", systemImage: "arrow.down.circle") }
+                NavigationLink(destination: ConnectedAppsView().bluefinBackNavigation()) { Label("Connected apps", systemImage: "arrow.up.forward.app") }
+                if !store.preview {
+                    MediaNavigationLink(destination: .trailerCatalog) { Label("Trailers", systemImage: "film.stack") }
+                    MediaNavigationLink(destination: .channels) { Label("Live TV", systemImage: "dot.radiowaves.left.and.right") }
+                }
+            }
         }.navigationTitle("Library")
     }
     private func symbol(_ collection: String?) -> String {
@@ -359,8 +400,11 @@ struct ItemGrid: View {
     let title: String
     let parent: MediaItem?
     var query: String = ""
+    var includeItemTypes: String? = nil
     @EnvironmentObject private var store: LibraryStore
     @State private var items: [MediaItem] = []
+    @State private var offset = 0
+    @State private var requestID: UUID?
     @State private var total = 0
     @State private var loading = false
     @State private var problem: String?
@@ -373,27 +417,42 @@ struct ItemGrid: View {
     }
     var body: some View {
         ScrollView {
+            #if os(tvOS)
+            Text(title).font(.largeTitle.bold()).frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 24).accessibilityAddTraits(.isHeader)
+            #endif
             LazyVGrid(columns: columns, alignment: .leading, spacing: 26) {
-                ForEach(items) { item in NavigationLink(destination: DetailView(item: item)) { Poster(item: item) }.bluefinPosterButton() }
+                ForEach(items) { item in MediaNavigationLink(destination: .detail(item)) { Poster(item: item) }.buttonStyle(.plain) }
             }.padding(24)
             if loading { ProgressView().padding(30) }
             if let problem { EmptyLibrary(title: "Couldn't load this library", message: problem, symbol: "wifi.exclamationmark"); Button("Try again") { Task { await load(reset: items.isEmpty) } } }
             if !loading && problem == nil && items.isEmpty { EmptyLibrary(title: "Nothing here yet", message: query.isEmpty ? "This collection has no items available to your account." : "Try another title, artist, or show.", symbol: "magnifyingglass") }
-            if items.count < total && !loading { Button("Load more") { Task { await load(reset: false) } }.padding(30) }
-        }.navigationTitle(title).task(id: query) { await load(reset: true) }
+            if offset < total && !loading && problem == nil { Button("Load more") { Task { await load(reset: false) } }.padding(30) }
+        }
+        #if !os(tvOS)
+        .navigationTitle(title)
+        #endif
+        .task(id: store.accountContext) { await load(reset: true) }
+            .onChange(of: query) { _ in Task { await load(reset: true) } }
     }
     private func load(reset: Bool) async {
-        guard !loading else { return }
+        guard reset || !loading else { return }
+        let id = UUID()
+        requestID = id
         loading = true; problem = nil
-        defer { loading = false }
+        if reset { items = []; offset = 0; total = 0 }
+        defer { if requestID == id { loading = false } }
         do {
-            let page = try await store.items(parent: parent, query: query, start: reset ? 0 : items.count)
+            let page = try await store.items(parent: parent, query: query, start: offset, includeItemTypes: includeItemTypes)
             try Task.checkCancellation()
-            if reset { items = page.Items } else {
-                let existing = Set(items.map(\.Id)); items.append(contentsOf: page.Items.filter { !existing.contains($0.Id) })
-            }
-            total = page.TotalRecordCount ?? items.count
-        } catch is CancellationError {} catch { problem = error.localizedDescription }
+            guard requestID == id else { return }
+            var existing = Set(items.map(\.Id))
+            items.append(contentsOf: page.Items.filter { existing.insert($0.Id).inserted })
+            offset += page.Items.count
+            total = page.Items.isEmpty ? offset : page.TotalRecordCount ?? offset
+        } catch is CancellationError {} catch {
+            if requestID == id { problem = error.localizedDescription }
+        }
     }
 }
 
@@ -414,31 +473,75 @@ struct SearchView: View {
 
 struct DetailView: View {
     let item: MediaItem
+    var onBack: (() -> Void)? = nil
     @EnvironmentObject private var store: LibraryStore
+    #if os(iOS) || os(visionOS)
+    @State private var videoOptionsVisible = false
+    @State private var videoSelection = VideoOptionSelection()
+    @State private var startAtTicks: Int64?
+    #endif
+    #if os(tvOS)
+    @Namespace private var detailFocus
+    #endif
     @State private var detail: MediaItem?
     @State private var problem: String?
     @State private var favorite = false
     @State private var favoriteBusy = false
     private var current: MediaItem { detail ?? item }
+    private var resumeTicks: Int64 { current.resumeTicks > 0 ? current.resumeTicks : item.resumeTicks }
+    private var overview: String? {
+        [current.Overview, item.Overview].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                #if os(tvOS)
+                HStack(alignment: .center, spacing: 52) {
+                    Artwork(item: current, backdrop: true).aspectRatio(16 / 9, contentMode: .fit)
+                        .frame(maxWidth: 640).clipShape(RoundedRectangle(cornerRadius: 20))
+                    VStack(alignment: .leading, spacing: 18) {
+                        Text(current.title).font(.largeTitle.bold()).lineLimit(3).accessibilityAddTraits(.isHeader)
+                        if !current.subtitle.isEmpty { Text(current.subtitle).foregroundStyle(.secondary) }
+                        if let overview { Text(overview).lineLimit(3).foregroundStyle(.secondary) }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                HStack(spacing: 22) {
+                    if !current.isContainer { playActions }
+                    if let overview {
+                        MediaNavigationLink(destination: .description(title: current.title, text: overview)) {
+                            TVDetailAction(title: "Full description", symbol: "text.alignleft")
+                        }.buttonStyle(.plain)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading).focusSection()
+                if current.Type == "Series" || current.Type == "Season" {
+                    TVEpisodeShelf(parent: current)
+                } else if current.isContainer {
+                    MediaNavigationLink(destination: .collection(title: current.title, parent: current, types: nil)) {
+                        TVDetailAction(title: "Browse collection", symbol: "square.grid.2x2")
+                    }.buttonStyle(.plain)
+                }
+                #else
                 Artwork(item: current, backdrop: true).aspectRatio(16 / 9, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 20))
                 Text(current.title).font(.largeTitle.bold()).accessibilityAddTraits(.isHeader)
                 if !current.subtitle.isEmpty { Text(current.subtitle).foregroundStyle(.secondary) }
                 if current.isContainer {
-                    NavigationLink(destination: ItemGrid(title: current.title, parent: current)) { Label("Browse \(current.Type == "Series" ? "episodes" : "collection")", systemImage: "square.grid.2x2") }.buttonStyle(.borderedProminent)
-                } else {
-                    HStack(spacing: 20) {
-                        Button { Task { await store.play(current) } } label: { Label(current.progress > 0 ? "Resume" : "Play", systemImage: "play.fill").padding(6) }.buttonStyle(.borderedProminent).disabled(store.startingPlayback)
-                        if current.progress > 0 { Button("Start over") { Task { await store.play(current, fromBeginning: true) } }.disabled(store.startingPlayback) }
-                        if store.startingPlayback { ProgressView() }
-                    }
-                }
-                if let overview = current.Overview, !overview.isEmpty { Text(overview).font(.body).lineSpacing(5).fixedSize(horizontal: false, vertical: true) }
+                    MediaNavigationLink(destination: .collection(title: current.title, parent: current, types: nil)) { Label("Browse \(current.Type == "Series" ? "episodes" : "collection")", systemImage: "square.grid.2x2") }.buttonStyle(.borderedProminent)
+                } else { playActions }
+                if let overview { Text(overview).font(.body).lineSpacing(5).fixedSize(horizontal: false, vertical: true) }
+                #endif
                 NativeIntegrationActions(item: current)
+                if !store.preview && ["Movie", "Series"].contains(current.Type ?? "") {
+                    #if os(tvOS)
+                    MediaNavigationLink(destination: .trailers(current.Id)) {
+                        TVDetailAction(title: "Trailers", symbol: "play.rectangle")
+                    }.buttonStyle(.plain)
+                    #else
+                    MediaNavigationLink(destination: .trailers(current.Id)) { Label("Trailers", systemImage: "play.rectangle") }.buttonStyle(.bordered)
+                    #endif
+                }
                 if let problem { Label(problem, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.secondary) }
-            }.padding(24).frame(maxWidth: 1100).frame(maxWidth: .infinity)
+            }.padding(24).frame(maxWidth: detailWidth).frame(maxWidth: .infinity)
         }
         .task {
             favorite = item.UserData?.IsFavorite == true
@@ -458,11 +561,77 @@ struct DetailView: View {
             }
         }
         .navigationTitle("")
+        #if os(tvOS)
+        .focusScope(detailFocus)
+        #endif
+        .bluefinBackNavigation(onBack)
+    }
+
+    private var detailWidth: CGFloat {
+        #if os(tvOS)
+        1600
+        #else
+        1100
+        #endif
+    }
+
+    @ViewBuilder private var playActions: some View {
+        HStack(spacing: 20) {
+            #if os(tvOS)
+            Button { playDetail() } label: {
+                TVDetailAction(title: resumeTicks > 0 ? "Resume" : "Play", symbol: "play.fill", prominent: true)
+            }.buttonStyle(.plain).disabled(store.startingPlayback).prefersDefaultFocus(in: detailFocus)
+            if resumeTicks > 0 {
+                Button { playDetail(fromBeginning: true) } label: {
+                    TVDetailAction(title: "Start over", symbol: "arrow.counterclockwise")
+                }.buttonStyle(.plain).disabled(store.startingPlayback)
+            }
+            #else
+            Button { playDetail() } label: {
+                Label(resumeTicks > 0 ? "Resume" : "Play", systemImage: "play.fill")
+            }.buttonStyle(.borderedProminent).disabled(store.startingPlayback)
+            if resumeTicks > 0 {
+                Button("Start over") { playDetail(fromBeginning: true) }.disabled(store.startingPlayback)
+            }
+            #endif
+            if store.startingPlayback { ProgressView() }
+        }
+        #if os(iOS) || os(visionOS)
+        if current.Type != "Audio" && !store.preview {
+            Button("Video options") { videoOptionsVisible = true }.buttonStyle(.bordered)
+                .sheet(isPresented: $videoOptionsVisible) {
+                    BluefinNavigation {
+                        VideoOptionsView(chapters: current.Chapters ?? [], source: current.MediaSources?.first,
+                            selection: videoSelection, isRenegotiating: false, supportedRates: [], presentationRate: 1,
+                            nextEpisodeTitle: nil, onSeek: { seconds in
+                                startAtTicks = Int64(exactly: (seconds * 10_000_000).rounded())
+                                videoOptionsVisible = false
+                            }, onRenegotiate: { videoSelection = $0 }, onPresentationRate: { _ in }, onNextEpisode: {})
+                            .toolbar { ToolbarItem(placement: .primaryAction) { Button("Done") { videoOptionsVisible = false } } }
+                    }
+                }
+        }
+        #endif
+    }
+
+    private func playDetail(fromBeginning: Bool = false) {
+        Task {
+            #if os(iOS) || os(visionOS)
+            let ticks = fromBeginning ? 0 : startAtTicks ?? resumeTicks
+            startAtTicks = nil
+            await store.play(current, fromBeginning: fromBeginning, startAtTicks: ticks, videoOptions: videoSelection)
+            #else
+            await store.play(current, fromBeginning: fromBeginning, startAtTicks: fromBeginning ? 0 : resumeTicks)
+            #endif
+        }
     }
 }
 
 struct SettingsView: View {
     @AppStorage("bluefin.appearance") private var appearance = 0
+    #if os(tvOS)
+    @AppStorage(TopShelfSnapshot.preference) private var showTopShelf = true
+    #endif
     @EnvironmentObject private var store: LibraryStore
     var body: some View {
         Form {
@@ -485,6 +654,11 @@ struct SettingsView: View {
                 Text("AirPlay, audio and subtitle menus, accessibility controls, and supported Picture in Picture use the system player. Available formats depend on your device and server.").font(.footnote).foregroundStyle(.secondary)
             }
             Section("Home integrations") {
+                #if os(tvOS)
+                if TopShelfSnapshot.directory != nil {
+                    Toggle("Show recently added titles on the Apple TV Home Screen", isOn: $showTopShelf)
+                }
+                #endif
                 if store.sports.available { NavigationLink(destination: SportsSettingsView(sports: store.sports)) { Label("Sports preferences", systemImage: "sportscourt") } }
                 NavigationLink(destination: HomeAssistantView()) { Label("Home Assistant", systemImage: "house") }
             }
@@ -492,7 +666,8 @@ struct SettingsView: View {
                 NavigationLink(destination: AuthorizedUseView()) { Label("Libraries and rights", systemImage: "checkmark.shield") }
                 LabeledContentCompat("Version", value: "0.1.0 · Development")
                 Text("Development build. No analytics or advertising. Bluefin is an independent client for Bluefin, Ferrofin and Jellyfin servers.").font(.footnote).foregroundStyle(.secondary)
-                Link("Source and licenses", destination: URL(string: "https://github.com/glopyglerky/bluefin")!)
+                NavigationLink("Software licenses", destination: SoftwareLicensesView())
+                Link("Project source", destination: URL(string: "https://github.com/glopyglerky/bluefin")!)
             }
         }.navigationTitle("Settings")
     }
@@ -531,13 +706,6 @@ extension View {
         self.textInputAutocapitalization(.never).disableAutocorrection(true).keyboardType(.URL)
         #else
         self
-        #endif
-    }
-    @ViewBuilder func bluefinPosterButton() -> some View {
-        #if os(tvOS)
-        self.buttonStyle(.card)
-        #else
-        self.buttonStyle(.plain)
         #endif
     }
     @ViewBuilder func bluefinRefresh(_ action: @escaping () async -> Void) -> some View {

@@ -6,8 +6,10 @@ import CryptoKit
     @Published var session = SessionVault.load()
     @Published var preview = false
     @Published var home = HomePage(resume: [], latest: [], nextUp: [])
+    @Published private(set) var homeFromCatalog = false
     @Published var libraries: [MediaItem] = []
     @Published var loading = false
+    @Published private(set) var libraryProblem: String?
     @Published var error: String?
     @Published var playback: PlaybackController?
     @Published var startingPlayback = false
@@ -22,11 +24,23 @@ import CryptoKit
     let audio = AudioPreferences()
     let sports = SportsStore()
     private var accountGeneration = UUID()
+    private var refreshID: UUID?
     private var pendingPreparation: PendingPlayback?
     private let playbackTeardowns = PlaybackTeardowns()
-    init() { restoreMusicQueue() }
+    init() {
+        if var restored = session, restored.companionGeneration == nil {
+            restored.companionGeneration = UUID()
+            do { try SessionVault.save(restored); session = restored }
+            catch { self.error = "Watch setup could not save its session identity. Reopen Bluefin to retry." }
+        }
+        restoreMusicQueue()
+    }
 
     var signedIn: Bool { session != nil || preview }
+    /// Identifies this signed-in lifetime without exposing credentials to draft identities.
+    var accountContext: UUID { accountGeneration }
+    /// Survives process eviction, but rotates with each newly saved sign-in.
+    var companionContext: UUID? { preview ? nil : session?.companionGeneration }
     func saveIrohPeer(id: String?, address: String?) throws {
         guard var updated = session, !preview else { throw BluefinError.message("Sign in before configuring your server's transport.") }
         updated.irohPeerId = id; updated.irohPeerAddress = address
@@ -49,7 +63,15 @@ import CryptoKit
 
     func acceptLogin(_ result: LoginResult, server: String, allowHttp: Bool) async throws {
         let newSession = AccountSession(server: server, token: result.AccessToken, userId: result.User.Id, username: result.User.Name ?? "Your account", deviceId: deviceId, allowHttp: allowHttp)
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        try await WatchCompanion.shared.beginAccountChange()
+        defer { WatchCompanion.shared.endAccountChange() }
+        #endif
         try SessionVault.save(newSession)
+        #if os(tvOS)
+        TopShelfSnapshot.clear()
+        home = .init(resume: [], latest: [], nextUp: [])
+        #endif
         accountGeneration = UUID()
         session = newSession
         preview = false
@@ -61,39 +83,89 @@ import CryptoKit
         accountGeneration = UUID()
         preview = true
         error = nil
+        libraryProblem = nil
         home = .init(resume: [], latest: MediaItem.preview, nextUp: [])
+        homeFromCatalog = false
         libraries = []
     }
 
     func refresh() async {
         guard let session, !preview else { return }
         let generation = accountGeneration
+        let request = UUID()
+        refreshID = request
         loading = true
-        defer { loading = false }
-        do {
-            async let homeRequest: HomePage = RustBridge.call("home", session: session)
-            async let libraryRequest: ItemPage = RustBridge.call("libraries", session: session)
-            let (newHome, newLibraries) = try await (homeRequest, libraryRequest)
-            try Task.checkCancellation()
-            guard accountGeneration == generation else { return }
-            home = newHome
-            libraries = newLibraries.Items
-            error = nil
-        } catch is CancellationError {} catch { if accountGeneration == generation { self.error = error.localizedDescription } }
+        libraryProblem = nil
+        defer { if refreshID == request { loading = false } }
+
+        func current() -> Bool {
+            accountGeneration == generation && refreshID == request && !Task.isCancelled
+        }
+
+        let sections = ["homeResume", "homeLatest", "homeNextUp", "libraries"]
+        var problems: [String] = []
+        var homeFailed = false
+        await withTaskGroup(of: (String, Result<ItemPage, Error>).self) { group in
+            for section in sections {
+                group.addTask {
+                    do {
+                        let page: ItemPage = try await RustBridge.call(section, session: session)
+                        return (section, .success(page))
+                    } catch {
+                        return (section, .failure(error))
+                    }
+                }
+            }
+            for await (section, result) in group {
+                guard current() else { group.cancelAll(); return }
+                switch result {
+                case .success(let page):
+                    switch section {
+                    case "homeResume": home.resume = page.Items
+                    case "homeLatest": home.latest = page.Items; homeFromCatalog = false
+                    case "homeNextUp": home.nextUp = page.Items
+                    default: libraries = page.Items
+                    }
+                case .failure(let error):
+                    if error is CancellationError { continue }
+                    if section != "libraries" { homeFailed = true }
+                    let title: String
+                    switch section {
+                    case "homeResume": title = "Continue Watching"
+                    case "homeLatest": title = "Recently Added"
+                    case "homeNextUp": title = "Up Next"
+                    default: title = "Collections"
+                    }
+                    problems.append("\(title) couldn't refresh. " + error.localizedDescription)
+                }
+            }
+        }
+        if homeFailed, home.latest.isEmpty, home.resume.isEmpty, current(),
+           let page = try? await items(includeItemTypes: "Movie,Series,Episode"), current() {
+            home.latest = page.Items
+            homeFromCatalog = true
+        }
+        if current() { libraryProblem = problems.isEmpty ? nil : problems.joined(separator: "\n") }
     }
 
-    func items(parent: MediaItem? = nil, query: String = "", start: Int = 0) async throws -> ItemPage {
+    func items(parent: MediaItem? = nil, query: String = "", start: Int = 0, includeItemTypes: String? = nil) async throws -> ItemPage {
         if preview {
             let source = query.isEmpty ? MediaItem.preview : MediaItem.preview + [.previewAudio, .previewAlbum, .previewArtist]
-            let values = source.filter { query.isEmpty || [$0.title, $0.Album, $0.AlbumArtist, $0.Artists?.joined(separator: " ")].compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(query) } }
+            let kinds = includeItemTypes.map { Set($0.split(separator: ",").map(String.init)) }
+            let values = source.filter { item in
+                (kinds?.contains(item.Type ?? "") ?? true) &&
+                (query.isEmpty || [item.title, item.Album, item.AlbumArtist, item.Artists?.joined(separator: " ")].compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(query) })
+            }
             return .init(Items: start == 0 ? values : [], TotalRecordCount: values.count)
         }
         guard let session else { throw BluefinError.message("Sign in to browse your library.") }
         let generation = accountGeneration
         var fields: [String: Any] = ["startIndex": start, "limit": 60]
         if let parent { fields["parentId"] = parent.Id }
+        if let includeItemTypes { fields["includeItemTypes"] = includeItemTypes }
         if !query.isEmpty { fields["searchTerm"] = query }
         let page: ItemPage = try await RustBridge.call("items", session: session, fields: fields)
+        try Task.checkCancellation()
         guard accountGeneration == generation else { throw CancellationError() }
         return page
     }
@@ -129,7 +201,7 @@ import CryptoKit
         return page
     }
 
-    func authenticated<T: Decodable>(_ operation: String, fields: [String: Any] = [:]) async throws -> T {
+    func authenticated<T: Decodable & Sendable>(_ operation: String, fields: [String: Any] = [:]) async throws -> T {
         guard let session, !preview else { throw BluefinError.message("Connect your library to use this feature.") }
         let generation = accountGeneration
         let value: T = try await RustBridge.call(operation, session: session, fields: fields)
@@ -200,9 +272,12 @@ import CryptoKit
                 playback = controller
                 configureMusic(controller, item: item, queueIndex: queueIndex)
             } else if let session {
-                let ticks: Int64 = startAtTicks ?? (fromBeginning ? 0 : item.UserData?.PlaybackPositionTicks ?? 0)
+                let ticks: Int64 = startAtTicks ?? (fromBeginning ? 0 : item.resumeTicks)
                 var fields: [String: Any] = ["itemId": item.Id, "startTicks": ticks, "mediaType": item.Type == "Audio" ? "Audio" : "Video"]
                 if item.Type != "Audio" {
+                    // VOD seeks in the native item timeline. A served manifest's query
+                    // string alone cannot prove that its media begins at that position.
+                    fields["fullVideoTimeline"] = item.Type != "TvChannel"
                     fields.merge((videoOptions ?? .init()).plannerFields) { _, new in new }
                     fields["videoCapabilities"] = try VideoDeviceCapabilities.current().jsonDictionary()
                 }
@@ -241,6 +316,7 @@ import CryptoKit
                 let controller = try PlaybackController(item: item, url: url, plan: plan, session: session)
                 try pending.transfer()
                 playback = controller
+                controller.loadSkipSegments(for: session)
                 controller.videoSelection = videoOptions ?? .init(mediaSourceID: plan.mediaSourceId, audioStreamIndex: plan.audioStreamIndex, subtitleStreamIndex: (plan.subtitleStreamIndex ?? -1) < 0 ? nil : plan.subtitleStreamIndex)
                 controller.onSeekOutsideWindow = { [weak self, weak controller] position in Task { await self?.play(item, startAtTicks: position, videoOptions: controller?.videoSelection) } }
                 if item.Type == "Audio" { configureMusic(controller, item: item, queueIndex: queueIndex) }
@@ -482,6 +558,19 @@ import CryptoKit
     }
 
     func signOut() async {
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        do { try await WatchCompanion.shared.beginAccountChange() }
+        catch { self.error = "Watch cleanup is unresolved. Retry sign-out when the server is reachable."; return }
+        defer { WatchCompanion.shared.endAccountChange() }
+        #endif
+        do { try SessionVault.clear() }
+        catch {
+            self.error = error.localizedDescription
+            return
+        }
+        #if os(tvOS)
+        TopShelfSnapshot.clear()
+        #endif
         accountGeneration = UUID()
         let generation = accountGeneration
         let previousSession = session
@@ -491,7 +580,6 @@ import CryptoKit
         let teardown = playbackTeardowns.drain()
         offline.disconnect()
         sports.disconnect()
-        SessionVault.clear()
         session = nil
         preview = false
         home = .init(resume: [], latest: [], nextUp: [])

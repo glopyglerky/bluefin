@@ -271,103 +271,115 @@ fn spawn_pause_key_probe(
     ));
 }
 
-/// Builds the concrete media-encoding pair injected via
-/// [`AppState::with_media_encoding`](ferrofin_api::AppState::with_media_encoding).
-///
-/// Returns `(hls, attachments)`:
-/// - `hls` — the [`HlsStreamManagerImpl`] wiring the
-///   [`FerrofinStreamStatePlanner`](crate::planner::FerrofinStreamStatePlanner) →
-///   [`TokioSegmentTranscoder`] → [`TranscodeManagerImpl`] →
-///   [`DynamicHlsPlaylistGenerator`] chain (the real transcode runtime, not the
-///   `DisabledHlsStreamManager` stub);
-/// - `attachments` — the [`AttachmentExtractorImpl`] over the real ffmpeg/
-///   filesystem [`AttachmentIo`] and a [`MediaSourceResolver`] adapting the
-///   [`MediaSourceManager`] (not the `DisabledAttachmentExtractor` stub).
-///
-/// The `NoopSessionReporter` stands in only when no session manager was
-/// injected. With one, [`LiveStreamReleasingReporter`] publishes a starting
-/// job to the session layer and releases its live stream on teardown;
-/// killed-job partial-file cleanup is the manager's `FsFileCleaner`.
-///
-/// `ffmpeg` carries the startup capability probes, which the planner reads for
-/// every encoding decision: the `-filters` list gates the jellyfin-ffmpeg-only
-/// `tonemapx` software tonemap (the planner falls back to the vanilla zscale
-/// chain without it), the `-encoders` list lets the audio path prefer
-/// `aac_at`/`libfdk_aac` over native `aac`, and the hardware lists and version
-/// gates drive the whole hardware-acceleration matrix.
+/// Source-independent runtime. Startup owns one transcode manager, admission
+/// budget, registry, controls and reapers. Binding creates only source resolvers
+/// and planners and retains the existing start/seek coordination and paths.
+pub struct MediaEncodingRuntime {
+    encoder: Arc<dyn MediaEncoder>,
+    config: Arc<dyn ServerConfigurationManager>,
+    paths: Arc<FerrofinServerApplicationPaths>,
+    path_manager: Arc<dyn PathManager>,
+    ffmpeg: FfmpegPaths,
+    manager: Arc<TranscodeManagerImpl<Arc<dyn ferrofin_mediaencoding::SessionReporter>>>,
+    generator: Arc<DynamicHlsPlaylistGenerator<GeneratorEncodingOptions>>,
+    coordination: ferrofin_hls::hls_stream_manager::HlsCoordination,
+    input_process_slots: Arc<tokio::sync::Semaphore>,
+    library: Option<Arc<dyn ferrofin_traits::library::LibraryManager>>,
+    virtual_folders: Option<Arc<dyn ferrofin_traits::library::VirtualFolderManager>>,
+    trickplay: Option<Arc<dyn ferrofin_traits::trickplay::TrickplayManager>>,
+}
+
+/// A captured generation must not consume a replacement's existing extracted
+/// font/subtitle cache, even when ordinary playback uses the same source id.
+struct ScopedExtractionPaths {
+    inner: Arc<dyn PathManager>,
+    generation: String,
+    input_owner: Arc<dyn MediaSourceManager>,
+}
+
+impl Drop for ScopedExtractionPaths {
+    fn drop(&mut self) {
+        let directories: Vec<_> = [
+            self.inner.subtitle_folder_path(&self.generation),
+            self.inner.attachment_folder_path(&self.generation),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        // Holding the existing bounded input permit also bounds queued cleanup.
+        // These two random generation folders contain only this binding's output.
+        let owner = Arc::clone(&self.input_owner);
+        let cleanup = move || {
+            let _owner = owner;
+            for directory in directories {
+                match std::fs::remove_dir_all(directory) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => tracing::warn!(%error, "scoped extraction cache cleanup failed"),
+                }
+            }
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            drop(runtime.spawn_blocking(cleanup));
+        } else {
+            cleanup();
+        }
+    }
+}
+
+impl PathManager for ScopedExtractionPaths {
+    fn subtitle_path(&self, _source: &str, index: i32, extension: &str) -> Option<String> {
+        self.inner.subtitle_path(&self.generation, index, extension)
+    }
+    fn subtitle_folder_path(&self, _source: &str) -> Option<String> {
+        self.inner.subtitle_folder_path(&self.generation)
+    }
+    fn attachment_path(&self, _source: &str, filename: &str) -> Option<String> {
+        self.inner.attachment_path(&self.generation, filename)
+    }
+    fn attachment_folder_path(&self, _source: &str) -> Option<String> {
+        self.inner.attachment_folder_path(&self.generation)
+    }
+    fn trickplay_directory(
+        &self,
+        item: Uuid,
+        media: ferrofin_traits::system::MediaLocation<'_>,
+        save: bool,
+    ) -> String {
+        self.inner.trickplay_directory(item, media, save)
+    }
+    fn chapter_image_folder_path(&self, item: Uuid, media: &str) -> String {
+        self.inner.chapter_image_folder_path(item, media)
+    }
+    fn item_metadata_folder(&self, item: Uuid) -> Option<String> {
+        self.inner.item_metadata_folder(item)
+    }
+    fn chapter_image_path(&self, item: Uuid, media: &str, position: i64, modified: i64) -> String {
+        self.inner
+            .chapter_image_path(item, media, position, modified)
+    }
+    fn extracted_data_paths(
+        &self,
+        item: Uuid,
+        media: ferrofin_traits::system::MediaLocation<'_>,
+    ) -> Vec<String> {
+        self.inner.extracted_data_paths(item, media)
+    }
+}
+
+/// Starts the one shared media runtime, once at server startup.
 #[must_use]
-pub fn build_media_encoding(
-    media_sources: Arc<dyn MediaSourceManager>,
+pub fn build_media_encoding_runtime(
     encoder: Arc<dyn MediaEncoder>,
     config: Arc<dyn ServerConfigurationManager>,
     paths: Arc<FerrofinServerApplicationPaths>,
     path_manager: Arc<dyn PathManager>,
     ffmpeg: &FfmpegPaths,
     extras: MediaEncodingExtras,
-) -> (
-    Arc<dyn HlsStreamManager>,
-    Arc<dyn AttachmentExtractor>,
-    Arc<dyn SubtitleEncoder>,
-) {
-    let library = extras.library;
-    let generator = playlist_generator(&config, &encoder, extras.keyframes);
-    // ---- subtitle encoder (real ffmpeg extraction + charset/format conv) ---
-    // Built first: the planner also consumes it, resolving a burned text
-    // subtitle to its cached extracted file so the `subtitles` filter doesn't
-    // re-demux the whole source on every ffmpeg start.
-    let sub_resolver = Arc::new(MediaSourceManagerResolver {
-        media_sources: Arc::clone(&media_sources),
-    });
-    let sub_io = FfmpegSubtitleIo {
-        path_manager: Arc::clone(&path_manager),
-        ffmpeg_path: encoder.encoder_path(),
-        config: Arc::clone(&config),
-        encoding_reader: EncodingOptionsReader::new("subtitle extraction"),
-    };
-    let pure_encoder = Arc::new(PureSubtitleEncoder::new(SubtitleEditParser::new(), sub_io));
-    let subtitles: Arc<dyn SubtitleEncoder> =
-        Arc::new(SubtitleEncoderImpl::new(pure_encoder, sub_resolver));
-
-    // ---- attachment extractor (real ffmpeg + filesystem) ------------------
-    // Built before the planner, which extracts a file's fonts before a
-    // subtitle burn-in that may need them (`TranscodeManager.StartFfMpeg`).
-    let resolver = Arc::new(MediaSourceManagerResolver {
-        media_sources: Arc::clone(&media_sources),
-    });
-    let io = Arc::new(FfmpegAttachmentIo {
-        path_manager: Arc::clone(&path_manager),
-    });
-    // `AttachmentExtractorImpl<E, …>` holds an `Arc<E>` with `E: Sized`, so the
-    // trait-object encoder is wrapped in the sized [`DynMediaEncoder`] newtype.
-    let attachments: Arc<dyn AttachmentExtractor> = Arc::new(AttachmentExtractorImpl::new(
-        Arc::new(DynMediaEncoder(Arc::clone(&encoder))),
-        resolver,
-        io,
-    ));
-
-    // ---- HLS transcode chain (below the planner seam) ---------------------
-    let ffmpeg_path = encoder.encoder_path();
-    let planner = FerrofinStreamStatePlanner::new(
-        media_sources,
-        encoder,
-        EncodingHelper::new(ffmpeg.capabilities.clone()),
-        Arc::clone(&config),
-        Arc::clone(&paths),
-        Arc::clone(&subtitles),
-        ffmpeg.supports_filter("tonemapx"),
-    )
-    .with_attachments(Arc::clone(&attachments), path_manager);
-    let planner = match library {
-        Some(library) => planner.with_library(library),
-        None => planner,
-    };
-    let planner = match extras.virtual_folders.clone() {
-        Some(folders) => planner.with_virtual_folders(folders),
-        None => planner,
-    };
-    let transcoder = TokioSegmentTranscoder::new();
+) -> Arc<MediaEncodingRuntime> {
+    let generator = playlist_generator(&config, &encoder, extras.keyframes.clone());
     // A live transcode holds a tuner: the reporter releases it when the job dies.
-    let reporter: Arc<dyn ferrofin_mediaencoding::SessionReporter> = match extras.sessions {
+    let reporter: Arc<dyn ferrofin_mediaencoding::SessionReporter> = match extras.sessions.clone() {
         Some(sessions) => Arc::new(LiveStreamReleasingReporter { releaser: sessions }),
         None => Arc::new(NoopSessionReporter),
     };
@@ -379,7 +391,7 @@ pub fn build_media_encoding(
     }
     let manager = Arc::new(
         TranscodeManagerImpl::new(reporter)
-            .with_encoding_configuration(config)
+            .with_encoding_configuration(Arc::clone(&config))
             .with_transcode_limits(extras.transcode_limits),
     );
     // The idle reaper kills any transcode whose consumers vanished without a
@@ -397,22 +409,166 @@ pub fn build_media_encoding(
                 .run_idle_reaper(std::time::Duration::from_secs(IDLE_REAPER_SWEEP_SECS)),
         );
     }
-    let mut hls_impl = HlsStreamManagerImpl::new(
-        planner,
-        transcoder,
+    Arc::new(MediaEncodingRuntime {
+        encoder,
+        config,
+        paths,
+        path_manager,
+        ffmpeg: ffmpeg.clone(),
         manager,
         generator,
-        paths as Arc<dyn ferrofin_traits::system::ServerApplicationPaths>,
-        ffmpeg_path,
-    );
-    // Without this the master playlist lists no `#EXT-X-IMAGE-STREAM-INF`, so a
-    // client sees no trickplay tiles however many the library holds.
-    if let Some(trickplay) = extras.trickplay {
-        hls_impl = hls_impl.with_trickplay(trickplay);
-    }
-    let hls: Arc<dyn HlsStreamManager> = Arc::new(hls_impl);
+        coordination: ferrofin_hls::hls_stream_manager::HlsCoordination::default(),
+        input_process_slots: Arc::new(tokio::sync::Semaphore::new(32)),
+        library: extras.library,
+        virtual_folders: extras.virtual_folders,
+        trickplay: extras.trickplay,
+    })
+}
 
-    (hls, attachments, subtitles)
+/// Builds an ordinary binding for callers that do not need scoped playback.
+#[must_use]
+pub fn build_media_encoding(
+    media_sources: Arc<dyn MediaSourceManager>,
+    encoder: Arc<dyn MediaEncoder>,
+    config: Arc<dyn ServerConfigurationManager>,
+    paths: Arc<FerrofinServerApplicationPaths>,
+    path_manager: Arc<dyn PathManager>,
+    ffmpeg: &FfmpegPaths,
+    extras: MediaEncodingExtras,
+) -> (
+    Arc<dyn HlsStreamManager>,
+    Arc<dyn AttachmentExtractor>,
+    Arc<dyn SubtitleEncoder>,
+) {
+    build_media_encoding_runtime(encoder, config, paths, path_manager, ffmpeg, extras)
+        .bind(media_sources, false)
+}
+
+impl MediaEncodingRuntime {
+    /// Binds only the planner and source resolvers. All runtime limits and
+    /// start/seek ownership remain shared with ordinary playback.
+    #[must_use]
+    pub fn bind(
+        &self,
+        media_sources: Arc<dyn MediaSourceManager>,
+        retained: bool,
+    ) -> (
+        Arc<dyn HlsStreamManager>,
+        Arc<dyn AttachmentExtractor>,
+        Arc<dyn SubtitleEncoder>,
+    ) {
+        let input_owner = retained.then(|| {
+            ferrofin_mediaencoding::transcoding::retained_input::InputProcessBinding::new(
+                Arc::clone(&media_sources),
+                Arc::clone(&self.input_process_slots),
+            )
+        });
+        let encoder = Arc::clone(&self.encoder);
+        let config = Arc::clone(&self.config);
+        let paths = Arc::clone(&self.paths);
+        let path_manager: Arc<dyn PathManager> = if retained {
+            Arc::new(ScopedExtractionPaths {
+                inner: Arc::clone(&self.path_manager),
+                generation: Uuid::new_v4().simple().to_string(),
+                input_owner: Arc::clone(&media_sources),
+            })
+        } else {
+            Arc::clone(&self.path_manager)
+        };
+        // ---- subtitle encoder (real ffmpeg extraction + charset/format conv) ---
+        // Built first: the planner also consumes it, resolving a burned text
+        // subtitle to its cached extracted file so the `subtitles` filter doesn't
+        // re-demux the whole source on every ffmpeg start.
+        let sub_resolver = Arc::new(MediaSourceManagerResolver {
+            media_sources: Arc::clone(&media_sources),
+        });
+        let sub_io = FfmpegSubtitleIo {
+            path_manager: Arc::clone(&path_manager),
+            ffmpeg_path: encoder.encoder_path(),
+            config: Arc::clone(&config),
+            encoding_reader: EncodingOptionsReader::new("subtitle extraction"),
+            input_owner: input_owner.clone(),
+        };
+        let pure_encoder = Arc::new(PureSubtitleEncoder::new(SubtitleEditParser::new(), sub_io));
+        let subtitles: Arc<dyn SubtitleEncoder> =
+            Arc::new(SubtitleEncoderImpl::new(pure_encoder, sub_resolver));
+
+        // ---- attachment extractor (real ffmpeg + filesystem) ------------------
+        // Built before the planner, which extracts a file's fonts before a
+        // subtitle burn-in that may need them (`TranscodeManager.StartFfMpeg`).
+        let resolver = Arc::new(MediaSourceManagerResolver {
+            media_sources: Arc::clone(&media_sources),
+        });
+        let io = Arc::new(FfmpegAttachmentIo {
+            path_manager: Arc::clone(&path_manager),
+            input_owner: input_owner.clone(),
+        });
+        // `AttachmentExtractorImpl<E, …>` holds an `Arc<E>` with `E: Sized`, so the
+        // trait-object encoder is wrapped in the sized [`DynMediaEncoder`] newtype.
+        let attachments: Arc<dyn AttachmentExtractor> = Arc::new(AttachmentExtractorImpl::new(
+            Arc::new(DynMediaEncoder(Arc::clone(&encoder))),
+            resolver,
+            io,
+        ));
+
+        // ---- HLS transcode chain (below the planner seam) ---------------------
+        let ffmpeg_path = encoder.encoder_path();
+        let planner = FerrofinStreamStatePlanner::new(
+            media_sources,
+            encoder,
+            EncodingHelper::new(self.ffmpeg.capabilities.clone()),
+            Arc::clone(&config),
+            Arc::clone(&paths),
+            Arc::clone(&subtitles),
+            self.ffmpeg.supports_filter("tonemapx"),
+        )
+        .with_attachments(Arc::clone(&attachments), path_manager);
+        let planner = match self.library.clone() {
+            Some(library) => planner.with_library(library),
+            None => planner,
+        };
+        let planner = match self.virtual_folders.clone() {
+            Some(folders) => planner.with_virtual_folders(folders),
+            None => planner,
+        };
+        let transcoder = match input_owner {
+            Some(owner) => TokioSegmentTranscoder::new().with_input_owner(owner),
+            None => TokioSegmentTranscoder::new(),
+        };
+        let mut hls_impl = HlsStreamManagerImpl::new(
+            planner,
+            transcoder,
+            Arc::clone(&self.manager),
+            Arc::clone(&self.generator),
+            paths as Arc<dyn ferrofin_traits::system::ServerApplicationPaths>,
+            ffmpeg_path,
+        )
+        .with_coordination(&self.coordination);
+        if let Some(trickplay) = self.trickplay.clone() {
+            hls_impl = hls_impl.with_trickplay(trickplay);
+        }
+        (Arc::new(hls_impl), attachments, subtitles)
+    }
+}
+
+#[async_trait]
+impl ferrofin_api::handlers::bluefin_tv_playback::LocalSourcePins for MediaEncodingRuntime {
+    async fn pin(
+        &self,
+        state: &ferrofin_api::AppState,
+        item: Uuid,
+        source: &str,
+        path: &str,
+        viewer: Uuid,
+    ) -> Result<ferrofin_api::AppState, axum::http::StatusCode> {
+        let sources = state
+            .media_sources
+            .pin_local_source(item, source, path, viewer)
+            .await
+            .map_err(|_| axum::http::StatusCode::UNPROCESSABLE_ENTITY)?;
+        let (hls, attachments, subtitles) = self.bind(Arc::clone(&sources), true);
+        Ok(state.scoped_media_view(sources, hls, attachments, subtitles))
+    }
 }
 
 /// `GET url`, its body or what went wrong, which names only the URL's host.
@@ -438,6 +594,7 @@ async fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
 /// `SubtitleExtractionTimeoutMinutes` read from `config` on every run.
 struct FfmpegSubtitleIo {
     path_manager: Arc<dyn PathManager>,
+    input_owner: Option<ferrofin_mediaencoding::transcoding::retained_input::InputProcessBinding>,
     ffmpeg_path: String,
     config: Arc<dyn ServerConfigurationManager>,
     /// Reads `encoding.json` on each extraction and reports a broken file once.
@@ -499,6 +656,7 @@ impl SubtitleIo for FfmpegSubtitleIo {
             ));
         };
         let parts = ferrofin_mediaencoding::encoder::split_args(args)?;
+        let owner = self.input_owner.as_ref().map(ferrofin_mediaencoding::transcoding::retained_input::InputProcessBinding::try_acquire).transpose()?;
         let child = tokio::process::Command::new(&self.ffmpeg_path)
             .args(&parts)
             .stdin(std::process::Stdio::null())
@@ -511,7 +669,9 @@ impl SubtitleIo for FfmpegSubtitleIo {
         // below, or the request future being dropped (a client disconnecting
         // mid-seek) — kills ffmpeg and deletes its outputs.
         let mut running = RunningExtraction {
-            child,
+            child: ferrofin_mediaencoding::transcoding::retained_input::RetainedInputProcess::new(
+                child, owner,
+            ),
             output_paths,
             finished: false,
         };
@@ -554,7 +714,7 @@ impl SubtitleIo for FfmpegSubtitleIo {
 /// cut off mid-write would stay in the cache and be served on every later
 /// request, because extraction skips any output that already exists.
 struct RunningExtraction<'a> {
-    child: tokio::process::Child,
+    child: ferrofin_mediaencoding::transcoding::retained_input::RetainedInputProcess,
     output_paths: &'a [String],
     finished: bool,
 }
@@ -678,6 +838,7 @@ impl MediaSourceResolver for MediaSourceManagerResolver {
 /// reads use `tokio::fs`, and `-dump_attachment` runs through `tokio::process`.
 struct FfmpegAttachmentIo {
     path_manager: Arc<dyn PathManager>,
+    input_owner: Option<ferrofin_mediaencoding::transcoding::retained_input::InputProcessBinding>,
 }
 
 #[async_trait]
@@ -734,6 +895,7 @@ impl AttachmentIo for FfmpegAttachmentIo {
         if let Some(dir) = working_dir {
             command.current_dir(dir);
         }
+        let owner = self.input_owner.as_ref().map(ferrofin_mediaencoding::transcoding::retained_input::InputProcessBinding::try_acquire).transpose()?;
         let child = command
             .args(&parts)
             .stdin(std::process::Stdio::null())
@@ -746,7 +908,9 @@ impl AttachmentIo for FfmpegAttachmentIo {
         // dropped) kills it and deletes `outputs`. Upstream has no timeout
         // here, only the cancellation (owner decision 2026-10-25).
         let mut running = RunningExtraction {
-            child,
+            child: ferrofin_mediaencoding::transcoding::retained_input::RetainedInputProcess::new(
+                child, owner,
+            ),
             output_paths: outputs,
             finished: false,
         };
@@ -1584,6 +1748,7 @@ mod tests {
         // extractor falls back to the attachment's index).
         let (_, paths) = config_and_paths();
         let io = FfmpegAttachmentIo {
+            input_owner: None,
             path_manager: Arc::new(ferrofin_core::path_manager::FerrofinPathManager::new(paths)),
         };
         let id = "d37ecb9d75b0c0a8e9ecb0a864ec670e";
@@ -1727,6 +1892,7 @@ mod tests {
             ffmpeg_path,
             config: Arc::new(FakeConfig(paths, options)),
             encoding_reader: EncodingOptionsReader::new("subtitle extraction"),
+            input_owner: None,
         }
     }
 
@@ -1946,6 +2112,7 @@ mod tests {
             ),
         );
         let io = FfmpegAttachmentIo {
+            input_owner: None,
             path_manager: Arc::new(FakePathManager {
                 root: tmp.path().to_string_lossy().into_owned(),
             }),
@@ -1997,6 +2164,7 @@ mod tests {
         let output = tmp.path().join("font.ttf").to_string_lossy().into_owned();
         let ffmpeg = fake_ffmpeg(tmp.path(), &format!("printf font > \"{output}\"; exit 1"));
         let io = FfmpegAttachmentIo {
+            input_owner: None,
             path_manager: Arc::new(FakePathManager {
                 root: tmp.path().to_string_lossy().into_owned(),
             }),
@@ -2014,6 +2182,7 @@ mod tests {
     async fn ffmpeg_attachment_io_paths_and_fs() {
         let tmp = tempfile::tempdir().unwrap();
         let io = FfmpegAttachmentIo {
+            input_owner: None,
             path_manager: Arc::new(FakePathManager {
                 root: tmp.path().to_string_lossy().into_owned(),
             }),
@@ -2059,6 +2228,7 @@ mod tests {
             &format!("printf '%s\\n' \"$@\" > \"{}\"", record.display()),
         );
         let io = FfmpegAttachmentIo {
+            input_owner: None,
             path_manager: Arc::new(FakePathManager {
                 root: tmp.path().to_string_lossy().into_owned(),
             }),

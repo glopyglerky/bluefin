@@ -85,6 +85,7 @@ struct UnifiedSearchResults: View {
     private var identity: String { query + "|" + (store.session.map(OfflineLibrary.identity) ?? "preview") }
     var body: some View {
         List {
+            ServerDiscoverySection(query: query)
             if !model.items.isEmpty {
                 Section("Your library") {
                     ForEach(model.items) { item in result(item) }
@@ -94,14 +95,14 @@ struct UnifiedSearchResults: View {
             if !model.artists.isEmpty {
                 Section("Artists") {
                     ForEach(model.artists.filter { artist in !model.items.contains { $0.Id == artist.Id } }) { artist in
-                        NavigationLink(destination: MusicCollection(title: artist.title, type: "MusicAlbum", parent: artist)) { MusicRow(item: artist) }
+                        MediaNavigationLink(destination: .musicCollection(artist, type: "MusicAlbum")) { MusicRow(item: artist) }
                     }
                 }
             }
             if !model.channels.isEmpty {
                 Section("Channels and current programmes") {
                     ForEach(model.channels) { channel in
-                        NavigationLink(destination: LiveChannelView(channel: channel)) {
+                        MediaNavigationLink(destination: .channel(channel)) {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(channel.CurrentProgram?.title ?? channel.title).font(.headline)
                                 Text([channel.Number, channel.title].compactMap { $0 }.joined(separator: " · ")).foregroundStyle(.secondary)
@@ -125,10 +126,10 @@ struct UnifiedSearchResults: View {
             if item.Type == "Audio" {
                 Button { Task { await store.playMusic([item]) } } label: { MusicRow(item: item) }
             } else {
-                NavigationLink(destination: MusicCollection(title: item.title, type: item.Type == "MusicArtist" ? "MusicAlbum" : "Audio", parent: item)) { MusicRow(item: item) }
+                MediaNavigationLink(destination: .musicCollection(item, type: item.Type == "MusicArtist" ? "MusicAlbum" : "Audio")) { MusicRow(item: item) }
             }
         } else if item.Type == "TvChannel" {
-            NavigationLink(destination: LiveChannelView(channel: item)) { Label(item.title, systemImage: "dot.radiowaves.left.and.right") }
-        } else { NavigationLink(destination: DetailView(item: item)) { Label(item.title, systemImage: item.Type == "Episode" ? "tv" : "film") } }
+            MediaNavigationLink(destination: .channel(item)) { Label(item.title, systemImage: "dot.radiowaves.left.and.right") }
+        } else { MediaNavigationLink(destination: .detail(item)) { Label(item.title, systemImage: item.Type == "Episode" ? "tv" : "film") } }
     }
 }

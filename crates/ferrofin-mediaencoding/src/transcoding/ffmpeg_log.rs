@@ -13,9 +13,10 @@
 
 use std::borrow::Cow;
 
-use ferrofin_util::source_url::{is_remote_url, redact_url, redact_urls_in};
+use ferrofin_util::source_url::{is_remote_url, redact_url};
 
 use super::progress::{FfmpegProgress, parse};
+use super::retained_input::redact_inputs;
 
 /// The longest stderr line kept, for the progress parser and a filtered log.
 /// ffmpeg's own logger cuts a line well short of this.
@@ -30,9 +31,17 @@ const HIDDEN_VALUE: &str = "<redacted>";
 
 /// Whether anything written about a job with these `arguments` needs filtering.
 fn names_a_remote_source(arguments: &[String]) -> bool {
-    arguments
-        .iter()
-        .any(|argument| is_remote_url(argument) || HEADER_FLAGS.contains(&argument.as_str()))
+    arguments.iter().any(|argument| {
+        is_remote_url(argument)
+            || private_input(argument)
+            || (argument.contains("/proc/") && redact_inputs(argument).as_ref() != argument)
+            || HEADER_FLAGS.contains(&argument.as_str())
+    })
+}
+
+fn private_input(argument: &str) -> bool {
+    let path = argument.strip_prefix("file:").unwrap_or(argument);
+    path.starts_with("/proc/") && path.contains("/fd/")
 }
 
 /// `arguments` as the job's log header and the `ffmpeg_args` debug line show
@@ -47,12 +56,12 @@ pub(super) fn shown_arguments(arguments: &[String]) -> Cow<'_, [String]> {
             &mut after_header_flag,
             HEADER_FLAGS.contains(&argument.as_str()),
         );
-        if is_header {
+        if is_header || private_input(argument) {
             HIDDEN_VALUE.to_owned()
         } else if is_remote_url(argument) {
             redact_url(argument)
         } else {
-            redact_urls_in(argument).into_owned()
+            redact_inputs(argument).into_owned()
         }
     });
     Cow::Owned(shown.collect())
@@ -63,7 +72,7 @@ pub(super) fn shown_arguments(arguments: &[String]) -> Cow<'_, [String]> {
 struct LineFilter {
     /// Each URL in the job's arguments and how it is shown. ffmpeg prints an
     /// input unquoted in places, where a space in it would end the URL
-    /// [`redact_urls_in`] finds.
+    /// [`ferrofin_util::source_url::redact_urls_in`] finds.
     inputs: Vec<(String, String)>,
 }
 
@@ -73,8 +82,24 @@ impl LineFilter {
         names_a_remote_source(arguments).then(|| Self {
             inputs: arguments
                 .iter()
-                .filter(|argument| is_remote_url(argument))
-                .map(|url| (url.clone(), redact_url(url)))
+                .flat_map(|argument| {
+                    if private_input(argument) {
+                        vec![
+                            (argument.clone(), HIDDEN_VALUE.to_owned()),
+                            (
+                                argument
+                                    .strip_prefix("file:")
+                                    .unwrap_or(argument)
+                                    .to_owned(),
+                                HIDDEN_VALUE.to_owned(),
+                            ),
+                        ]
+                    } else if is_remote_url(argument) {
+                        vec![(argument.clone(), redact_url(argument))]
+                    } else {
+                        Vec::new()
+                    }
+                })
                 .collect(),
         })
     }
@@ -88,8 +113,8 @@ impl LineFilter {
             }
         }
         match scrubbed {
-            Cow::Borrowed(line) => redact_urls_in(line),
-            Cow::Owned(line) => Cow::Owned(redact_urls_in(&line).into_owned()),
+            Cow::Borrowed(line) => redact_inputs(line),
+            Cow::Owned(line) => Cow::Owned(redact_inputs(&line).into_owned()),
         }
     }
 }
@@ -174,6 +199,38 @@ mod tests {
 
     const SOURCE: &str = "http://USER:SECRET@127.0.0.1:18275/live/USER/SECRET/1.m3u8?token=SECRET";
     const SHOWN: &str = "http://127.0.0.1:18275";
+
+    #[test]
+    fn private_descriptor_inputs_never_reach_headers_or_stderr_logs() {
+        let path = "/proc/12345/fd/19";
+        let args = strings(&["-i", "file:/proc/12345/fd/19", "-f", "hls", "out.m3u8"]);
+        assert!(!format!("{:?}", shown_arguments(&args)).contains(path));
+        let stderr = log_of(&args, &[b"Input #0 from 'file:/proc/123", b"45/fd/19':\n"]);
+        assert!(!String::from_utf8_lossy(&stderr).contains("/proc/"));
+    }
+
+    #[test]
+    fn embedded_subtitle_and_complex_filters_redact_headers_and_split_diagnostics() {
+        for flag in ["-vf", "-filter_complex"] {
+            let args = strings(&[
+                flag,
+                "subtitles=f='/proc/12345/fd/67':si=0,drawtext=text='/proc/self/fd/8'",
+                "out.m3u8",
+            ]);
+            let original = args.clone();
+            assert!(!format!("{:?}", shown_arguments(&args)).contains("/proc/"));
+            let stderr = log_of(
+                &args,
+                &[
+                    b"subtitles f='/proc/123",
+                    b"45/fd/67' failed; /proc/",
+                    b"self/fd/8\n",
+                ],
+            );
+            assert!(!String::from_utf8_lossy(&stderr).contains("/proc/"));
+            assert_eq!(args, original, "actual FFmpeg arguments remain unchanged");
+        }
+    }
 
     fn strings(arguments: &[&str]) -> Vec<String> {
         arguments.iter().map(|&a| a.to_owned()).collect()

@@ -1,7 +1,7 @@
 //! Capability-only, origin-pinned loopback media server. No caller-supplied upstream URL.
 use super::{err, Result};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{Arc, Mutex, OnceLock},
     thread,
     time::Duration,
@@ -15,9 +15,131 @@ use tokio::{
 use url::Url;
 const PLAYLIST_MAX: usize = 1024 * 1024;
 const ROUTES_MAX: usize = 4096;
+const CONTROL_ROUTES_MAX: usize = 256;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RouteKind {
+    Anchor,
+    Control,
+    Media,
+}
+struct Route {
+    url: Url,
+    kind: RouteKind,
+    age: u64,
+}
+/// IDs are never recycled: an expired local URL cannot resolve to newer media.
+/// Keep the item entry point and favor bounded rendition-playlist references over
+/// old segments, including renditions a player may select after a long session.
+#[derive(Default)]
+struct Routes {
+    entries: HashMap<usize, Route>,
+    urls: HashMap<Url, usize>,
+    recent: BTreeMap<(bool, u64), usize>,
+    controls: usize,
+    next_id: usize,
+    clock: u64,
+}
+impl Routes {
+    fn touch(&mut self, id: usize, control: bool) -> Result<()> {
+        let entry = self.entries.get(&id).ok_or_else(|| err("Unknown route"))?;
+        if entry.kind != RouteKind::Anchor {
+            let next = self
+                .clock
+                .checked_add(1)
+                .ok_or_else(|| err("Route clock exhausted"))?;
+            let promote = control && entry.kind == RouteKind::Media;
+            if promote && self.controls >= CONTROL_ROUTES_MAX {
+                self.evict(true)?;
+            }
+            let entry = self
+                .entries
+                .get_mut(&id)
+                .ok_or_else(|| err("Unknown route"))?;
+            self.recent
+                .remove(&(entry.kind == RouteKind::Control, entry.age));
+            if promote {
+                entry.kind = RouteKind::Control;
+                self.controls += 1;
+            }
+            entry.age = next;
+            self.recent
+                .insert((entry.kind == RouteKind::Control, next), id);
+            self.clock = next;
+        }
+        Ok(())
+    }
+    fn evict(&mut self, control_only: bool) -> Result<()> {
+        let key = if control_only {
+            self.recent.range((true, 0)..).next().map(|(key, _)| *key)
+        } else {
+            self.recent.first_key_value().map(|(key, _)| *key)
+        }
+        .ok_or_else(|| err("Route capacity unavailable"))?;
+        let id = self
+            .recent
+            .remove(&key)
+            .ok_or_else(|| err("Route capacity unavailable"))?;
+        let entry = self
+            .entries
+            .remove(&id)
+            .ok_or_else(|| err("Route capacity unavailable"))?;
+        self.urls.remove(&entry.url);
+        if entry.kind == RouteKind::Control {
+            self.controls -= 1;
+        }
+        Ok(())
+    }
+    fn insert(&mut self, url: Url, control: bool) -> Result<usize> {
+        let control = control || url.path().to_ascii_lowercase().ends_with(".m3u8");
+        if let Some(&id) = self.urls.get(&url) {
+            self.touch(id, control)?;
+            return Ok(id);
+        }
+        let id = self.next_id;
+        let next = id
+            .checked_add(1)
+            .ok_or_else(|| err("Route IDs exhausted"))?;
+        let age = self
+            .clock
+            .checked_add(1)
+            .ok_or_else(|| err("Route clock exhausted"))?;
+        let kind = if id == 0 {
+            RouteKind::Anchor
+        } else if control {
+            RouteKind::Control
+        } else {
+            RouteKind::Media
+        };
+        if kind == RouteKind::Control && self.controls >= CONTROL_ROUTES_MAX {
+            self.evict(true)?;
+        }
+        if self.entries.len() >= ROUTES_MAX {
+            self.evict(false)?;
+        }
+        if kind != RouteKind::Anchor {
+            self.recent.insert((kind == RouteKind::Control, age), id);
+        }
+        if kind == RouteKind::Control {
+            self.controls += 1;
+        }
+        self.urls.insert(url.clone(), id);
+        self.entries.insert(id, Route { url, kind, age });
+        self.clock = age;
+        self.next_id = next;
+        Ok(id)
+    }
+    fn lookup(&mut self, id: usize) -> Result<Option<Url>> {
+        if !self.entries.contains_key(&id) {
+            return Ok(None);
+        }
+        self.touch(id, false)?;
+        Ok(self.entries.get(&id).map(|entry| entry.url.clone()))
+    }
+}
 struct Proxy {
     stop: oneshot::Sender<()>,
-    join: thread::JoinHandle<()>,
+    join: thread::JoinHandle<Result<()>>,
 }
 static PROXIES: OnceLock<Mutex<HashMap<String, Proxy>>> = OnceLock::new();
 static STREAMS: OnceLock<Arc<Semaphore>> = OnceLock::new();
@@ -30,10 +152,13 @@ struct Session {
     auth: String,
     tunnel: Option<super::iroh_transport::Tunnel>,
     local: String,
-    routes: Mutex<Vec<Url>>,
+    routes: Mutex<Routes>,
 }
 impl Session {
     fn route(&self, base: &Url, raw: &str) -> Result<String> {
+        self.issue_route(base, raw, false).map(|(_, url)| url)
+    }
+    fn issue_route(&self, base: &Url, raw: &str, control: bool) -> Result<(usize, String)> {
         if raw.len() > 16384 || raw.contains(['\\', '\r', '\n']) || raw.contains("{$") {
             return Err(err("Invalid media route"));
         }
@@ -63,16 +188,8 @@ impl Session {
             u.query_pairs_mut().extend_pairs(pairs);
         }
         let mut routes = self.routes.lock().map_err(|_| err("Proxy unavailable"))?;
-        let id = if let Some(i) = routes.iter().position(|x| x == &u) {
-            i
-        } else {
-            if routes.len() >= ROUTES_MAX {
-                return Err(err("Too many media routes"));
-            }
-            routes.push(u);
-            routes.len() - 1
-        };
-        Ok(format!("{}/{id}", self.local))
+        let id = routes.insert(u, control)?;
+        Ok((id, format!("{}/{id}", self.local)))
     }
     fn playlist(&self, base: &Url, input: &[u8]) -> Result<Vec<u8>> {
         let s = std::str::from_utf8(input).map_err(|_| err("Invalid playlist"))?;
@@ -80,12 +197,21 @@ impl Session {
             return Err(err("Invalid playlist"));
         }
         let mut out = String::new();
+        let mut required = std::collections::HashSet::new();
+        let mut rewrite = |raw: &str, control: bool| -> Result<String> {
+            let (id, url) = self.issue_route(base, raw, control)?;
+            required.insert(id);
+            if required.len() > ROUTES_MAX {
+                return Err(err("Playlist exceeds route capacity"));
+            }
+            Ok(url)
+        };
         for line in s.lines() {
             if line.len() > 16384 || line.chars().any(|c| c.is_control()) {
                 return Err(err("Invalid playlist line"));
             }
             if !line.starts_with('#') && !line.is_empty() {
-                out.push_str(&self.route(base, line)?);
+                out.push_str(&rewrite(line, false)?);
             } else if let Some((tag, attrs)) = line.split_once(':').filter(|(t, _)| {
                 matches!(
                     *t,
@@ -94,6 +220,7 @@ impl Session {
                         | "#EXT-X-MAP"
                         | "#EXT-X-MEDIA"
                         | "#EXT-X-I-FRAME-STREAM-INF"
+                        | "#EXT-X-IMAGE-STREAM-INF"
                 )
             }) {
                 out.push_str(tag);
@@ -144,7 +271,7 @@ impl Session {
                             return Err(err("Unquoted playlist URI"));
                         }
                         out.push('"');
-                        out.push_str(&self.route(base, value)?);
+                        out.push_str(&rewrite(value, true)?);
                         out.push('"');
                     } else {
                         if key.contains("URI") || value.contains("://") {
@@ -169,8 +296,10 @@ impl Session {
                 if attrs.is_empty()
                     || (matches!(tag, "#EXT-X-KEY" | "#EXT-X-SESSION-KEY")
                         && !keys.contains(&"METHOD"))
-                    || (matches!(tag, "#EXT-X-MAP" | "#EXT-X-I-FRAME-STREAM-INF")
-                        && !keys.contains(&"URI"))
+                    || (matches!(
+                        tag,
+                        "#EXT-X-MAP" | "#EXT-X-I-FRAME-STREAM-INF" | "#EXT-X-IMAGE-STREAM-INF"
+                    ) && !keys.contains(&"URI"))
                     || (matches!(tag, "#EXT-X-KEY" | "#EXT-X-SESSION-KEY")
                         && !no_key
                         && !keys.contains(&"URI"))
@@ -192,6 +321,12 @@ impl Session {
             if out.len() > PLAYLIST_MAX * 4 {
                 return Err(err("Rewritten playlist too large"));
             }
+        }
+        // A very large single manifest must fail rather than publish URLs that
+        // its own rewrite has already evicted. Normal sliding windows stay live.
+        let routes = self.routes.lock().map_err(|_| err("Proxy unavailable"))?;
+        if required.iter().any(|id| !routes.entries.contains_key(id)) {
+            return Err(err("Playlist exceeds route capacity"));
         }
         Ok(out.into_bytes())
     }
@@ -237,13 +372,13 @@ pub(super) fn start_with_transport(
         .local_addr()
         .map_err(|_| err("Loopback unavailable"))?;
     let local = format!("http://{address}/{id}");
-    let state = Arc::new(Session {
+    let mut state = Arc::new(Session {
         origin: remote.clone(),
         prefix,
         auth,
         tunnel,
         local,
-        routes: Mutex::new(Vec::new()),
+        routes: Mutex::new(Routes::default()),
     });
     let url = state.route(&remote, remote.as_str())?;
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -253,8 +388,8 @@ pub(super) fn start_with_transport(
     let (stop, mut stopped) = oneshot::channel();
     let join=thread::Builder::new().name("bluefin-playback".into()).spawn(move || {
         runtime.block_on(async move {
-            let Ok(listener)=TcpListener::from_std(listener) else {return;};
-            let Ok(client)=reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(5)).read_timeout(Duration::from_secs(30)).build() else {return;};
+            let listener=TcpListener::from_std(listener).map_err(|_|err("Proxy listener unavailable"))?;
+            let client=reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(5)).read_timeout(Duration::from_secs(30)).build().map_err(|_|err("Proxy client unavailable"))?;
             let mut jobs=JoinSet::new();
             loop {tokio::select! {
                 _=&mut stopped=>break,
@@ -269,10 +404,20 @@ pub(super) fn start_with_transport(
                 }
             }}
             jobs.abort_all();while jobs.join_next().await.is_some() {}
-        });
+            drop(client);
+            drain_session(&mut state)
+        })
     }).map_err(|_|err("Proxy thread unavailable"))?;
     map.insert(id.clone(), Proxy { stop, join });
     Ok((id, url))
+}
+fn drain_session(state: &mut Arc<Session>) -> Result<()> {
+    // All request futures and their session references must be gone before drain.
+    let state = Arc::get_mut(state).ok_or_else(|| err("Proxy cleanup unconfirmed"))?;
+    if let Some(tunnel) = state.tunnel.as_mut() {
+        tunnel.stop()?;
+    }
+    Ok(())
 }
 pub(super) fn stop(id: &str) -> Result<()> {
     // Keep the slot until the thread has exited, including all sockets and upstream requests.
@@ -281,7 +426,7 @@ pub(super) fn stop(id: &str) -> Result<()> {
         let _ = p.stop.send(());
         p.join
             .join()
-            .map_err(|_| err("Proxy stopped with failure"))?;
+            .map_err(|_| err("Proxy stopped with failure"))??;
     }
     Ok(())
 }
@@ -343,8 +488,7 @@ async fn transfer(
         .routes
         .lock()
         .map_err(|_| err("Proxy unavailable"))?
-        .get(id)
-        .cloned()
+        .lookup(id)?
         .ok_or_else(|| err("Unknown route"))?;
     let expected = format!("127.0.0.1:{}", local.port().unwrap_or(80));
     let mut host = false;
@@ -385,7 +529,7 @@ async fn transfer(
             }
             "content-length" if v == "0" => {}
             "content-length" | "transfer-encoding" | "authorization" | "cookie" | "origin" => {
-                return Err(err("Unsupported header"))
+                return Err(err("Unsupported header"));
             }
             _ => {}
         }

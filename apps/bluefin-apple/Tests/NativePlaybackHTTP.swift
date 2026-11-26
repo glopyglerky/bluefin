@@ -7,6 +7,11 @@ import Network
 final class NativePlaybackHTTP: @unchecked Sendable {
     private final class Readiness: @unchecked Sendable { var completed = false }
     struct Request { let method: String; let path: String; let headers: [String: String]; let body: Data }
+    struct Response {
+        let bytes: Data
+        var status = "200 OK"
+        var type = "application/json"
+    }
     let token = "native-test-only-token"
     let queue = DispatchQueue(label: "bluefin.tests.loopback")
     private let listener: NWListener
@@ -16,6 +21,9 @@ final class NativePlaybackHTTP: @unchecked Sendable {
     private var recorded: [Request] = []
     private var held: NWConnection?
     var onHeldDownload: (() -> Void)?
+    /// Configured before start. Both the interceptor and its completion run on queue.
+    var intercept: ((Request, @escaping (Response) -> Void) -> Bool)?
+    var publicPaths: Set<String> = []
     private(set) var origin = ""
 
     init(files: NativePlaybackFixtures.Files) throws {
@@ -108,14 +116,26 @@ final class NativePlaybackHTTP: @unchecked Sendable {
         catch { send(Data(), status: "500 Fixture encoding failed", connection: connection) }
     }
     private func respond(_ request: Request, _ connection: NWConnection) {
-        guard request.headers["authorization"]?.contains(token) == true,
+        guard publicPaths.contains(request.path) || request.headers["authorization"]?.contains(token) == true,
               !request.path.lowercased().contains(token) else {
             send(Data(), status: "401 Unauthorized", connection: connection); return
         }
+        if intercept?(request, { [weak self, weak connection] response in
+            guard let self, let connection else { return }
+            self.send(response.bytes, status: response.status, type: response.type, connection: connection)
+        }) == true { return }
         let path = request.path.components(separatedBy: "?")[0]
         let parts = path.split(separator: "/").map(String.init)
         if path == "/Users/Me" {
             json(["Id": "native-user", "Policy": ["EnableContentDownloading": true]], connection)
+        } else if path == "/MediaSegments/video" {
+            json(["Items": [
+                ["ItemId": "video", "Type": "Intro", "StartTicks": 4_000_000, "EndTicks": 16_000_000],
+                ["ItemId": "video", "Type": 3, "StartTicks": 16_000_000, "EndTicks": 19_000_000],
+                ["ItemId": "video", "Type": "Commercial", "StartTicks": 19_000_000, "EndTicks": 22_000_000],
+                ["ItemId": "video", "Type": "Outro", "StartTicks": 22_000_000, "EndTicks": 25_000_000],
+                ["ItemId": "different-video", "Type": "Intro", "StartTicks": 0, "EndTicks": 8_000_000]
+            ]], connection)
         } else if parts.count == 4 && parts[0] == "Users" && parts[2] == "Items" {
             json(["Id": parts[3], "Name": "Original synthetic tone", "Type": "Audio", "MediaType": "Audio"], connection)
         } else if parts.count == 3 && parts[0] == "Items" && parts[2] == "PlaybackInfo" {

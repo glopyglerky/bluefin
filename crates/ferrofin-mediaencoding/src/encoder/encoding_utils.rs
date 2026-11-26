@@ -131,7 +131,7 @@ pub fn split_args(arguments: &str) -> Result<Vec<String>, String> {
     shlex::split(arguments).ok_or_else(|| {
         format!(
             "unbalanced quoting in ffmpeg arguments `{}`",
-            ferrofin_util::source_url::redact_urls_in(arguments)
+            crate::transcoding::retained_input::redact_inputs(arguments)
         )
     })
 }

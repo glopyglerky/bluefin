@@ -103,7 +103,7 @@ pub(crate) fn interfaces() -> Vec<Interface> {
     {
         crate::os::macos::interface::interfaces()
     }
-    #[cfg(any(target_os = "ios", target_os = "tvos"))]
+    #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))]
     {
         crate::os::ios::interface::interfaces()
     }

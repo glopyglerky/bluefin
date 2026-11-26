@@ -64,6 +64,21 @@ pub async fn ip_access_layer(
     mut request: Request,
     next: Next,
 ) -> Response {
+    let direct = request
+        .extensions()
+        .get::<bluefin_iroh_server::DirectPeer>()
+        .copied();
+    if direct.is_some_and(|peer| {
+        request
+            .extensions()
+            .get::<ConnectInfo<std::net::SocketAddr>>()
+            .is_none_or(|ci| ci.0 != peer.remote)
+    }) {
+        return Response::builder()
+            .status(axum::http::StatusCode::SERVICE_UNAVAILABLE)
+            .body(axum::body::Body::empty())
+            .unwrap_or_default();
+    }
     let peer = request
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
@@ -73,7 +88,11 @@ pub async fn ip_access_layer(
     // Behind a reverse proxy the peer is the PROXY, so filtering it would
     // filter the wrong host — and let every real client through. The forwarded
     // chain is consulted only when the peer is a configured `KnownProxy`.
-    let ip = state.client_address_for(peer, &crate::state::forwarded_for(request.headers()));
+    let ip = if direct.is_some() {
+        peer
+    } else {
+        state.client_address_for(peer, &crate::state::forwarded_for(request.headers()))
+    };
     request.extensions_mut().insert(ResolvedClientAddress(ip));
     // Absent where the accept loop could not read the connection's local
     // address (or a router built without it): only loopback is exempt then.
@@ -84,12 +103,16 @@ pub async fn ip_access_layer(
     if result == RemoteAccessPolicyResult::Allow {
         return next.run(request).await;
     }
-    tracing::warn!(
-        path = %request.uri().path(),
-        remote_ip = %ip,
-        reason = ?result,
-        "blocking request due to an IP filtering rule"
-    );
+    if direct.is_some() {
+        tracing::warn!(reason = ?result, "blocking direct media due to an IP filtering rule");
+    } else {
+        tracing::warn!(
+            path = %request.uri().path(),
+            remote_ip = %ip,
+            reason = ?result,
+            "blocking request due to an IP filtering rule"
+        );
+    }
     Response::builder()
         .status(axum::http::StatusCode::SERVICE_UNAVAILABLE)
         .body(axum::body::Body::empty())

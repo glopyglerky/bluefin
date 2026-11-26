@@ -63,15 +63,26 @@ impl Extension for FerrofinSettingsExtension {
         // `build.rs` does not pin or copy it. It holds no setting: the page is
         // served anonymously, and its script reads them from the admin-only
         // `GET /Ferrofin/Settings`.
-        vec![PluginConfigPage {
-            name: "Ferrofin".to_owned(),
-            bytes: include_bytes!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/assets/ferrofin/settings.html"
-            ))
-            .to_vec(),
-            enable_in_main_menu: true,
-        }]
+        vec![
+            PluginConfigPage {
+                name: "Ferrofin".to_owned(),
+                bytes: include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/assets/ferrofin/settings.html"
+                ))
+                .to_vec(),
+                enable_in_main_menu: true,
+            },
+            PluginConfigPage {
+                name: "BluefinDiscovery".to_owned(),
+                bytes: include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/assets/ferrofin/bluefin-discovery.html"
+                ))
+                .to_vec(),
+                enable_in_main_menu: true,
+            },
+        ]
     }
 
     fn tasks(&self, _cx: &ExtensionContext) -> Vec<Arc<dyn ScheduledTask>> {
@@ -124,7 +135,7 @@ mod tests {
     fn settings_page() -> PluginConfigPage {
         let mut pages = FerrofinSettingsExtension.config_pages();
         let names: Vec<&str> = pages.iter().map(|page| page.name.as_str()).collect();
-        assert_eq!(names, ["Ferrofin"]);
+        assert_eq!(names, ["Ferrofin", "BluefinDiscovery"]);
         pages.remove(0)
     }
 

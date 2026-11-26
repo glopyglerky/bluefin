@@ -2,6 +2,11 @@
 resolver = "3"
 members = [
     "crates/bluefin-contract",
+    "crates/bluefin-iroh-server",
+    "crates/bluefin-discovery",
+    "crates/bluefin-karaoke",
+    "crates/bluefin-karaoke-engine",
+    "crates/bluefin-tv-playback",
     "crates/ferrofin-util",
     "crates/ferrofin-keyframes",
     "crates/ferrofin-model",
@@ -116,7 +121,7 @@ sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "run
 # Direct handle on the SQLite C API, pinned to the exact version sqlx resolves so
 # cargo unifies them to ONE linked copy — a second copy would mean a second,
 # unconfigured SQLite. Used only to call sqlite3_config() before any connection.
-libsqlite3-sys = "0.37.0"
+libsqlite3-sys = "=0.39.1"
 
 # ── serde / errors ─────────────────────────────────────────────────
 serde = { version = "1", features = ["derive"] }
@@ -283,4 +288,12 @@ strip = false
 
 # Exact ICU4X2.3.1 with a reviewed Jamo dispatch correction for search data.
 [patch.crates-io]
+# Server graph only. Independent native-client manifests/locks remain frozen.
+iroh = { path = "vendor/iroh-server-1.4.1" }
 icu_collator = { path = "vendor/icu_collator" }
+# SQLx 0.9.0 plus upstream's manifest-only SQLite compatibility fixes.
+# Remove when a released SQLx driver admits libsqlite3-sys 0.39.x.
+# Origin, exact upstream commits, checksums and licenses: vendor/sqlx-sqlite/BLUEFIN-PATCH.md.
+sqlx-sqlite = { path = "vendor/sqlx-sqlite" }
+# One licensed, visibly modified Noq implementation shared with the native client.
+noq-proto = { path = "apps/bluefin-apple/iroh-modern/vendor/noq-proto-1.4.0" }

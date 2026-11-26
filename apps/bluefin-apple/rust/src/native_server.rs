@@ -6,6 +6,7 @@ pub(super) fn call(api: &Api<'_>, operation: &str) -> Result<Value> {
     match operation {
         "bluefinCapabilities" => {
             let value = api.get(&["Bluefin", "Capabilities"], vec![])?;
+            let transport = project_iroh_transport(value.get("irohMediaTransport"));
             let capabilities: Capabilities =
                 serde_json::from_value(value).map_err(|_| err("Invalid Bluefin capabilities"))?;
             if capabilities.protocol_version != PROTOCOL_VERSION
@@ -16,7 +17,13 @@ pub(super) fn call(api: &Api<'_>, operation: &str) -> Result<Value> {
             {
                 return Err(err("Unsupported Bluefin capabilities"));
             }
-            serde_json::to_value(capabilities).map_err(|_| err("Invalid Bluefin capabilities"))
+            let can_play = capabilities.viewer.media_playback;
+            let mut projected = serde_json::to_value(capabilities)
+                .map_err(|_| err("Invalid Bluefin capabilities"))?;
+            if let Some(transport) = transport.filter(|_| can_play) {
+                projected["irohMediaTransport"] = transport;
+            }
+            Ok(projected)
         }
         "bluefinMusicQueue" | "saveBluefinMusicQueue" => {
             let value = if operation == "saveBluefinMusicQueue" {
@@ -53,6 +60,41 @@ pub(super) fn call(api: &Api<'_>, operation: &str) -> Result<Value> {
         "bluefinMusicQueueItems" => queue_items(api),
         _ => Err(err("Unknown Bluefin operation")),
     }
+}
+
+/// Optional direct-transport metadata is not an account grant or a reachable-path proof.
+/// Unknown/malformed extensions must not break otherwise supported queue capabilities.
+fn project_iroh_transport(value: Option<&Value>) -> Option<Value> {
+    let mut transport: bluefin_contract::transport::IrohMediaTransport =
+        serde_json::from_value(value?.clone()).ok()?;
+    if transport.version != 1
+        || transport.alpn != "bluefin/http/1"
+        || !transport.direct_only
+        || transport.endpoint_id.len() != 64
+        || !transport
+            .endpoint_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || transport.direct_addresses.is_empty()
+        || transport.direct_addresses.len() > 16
+        || transport.direct_addresses.iter().any(|address| {
+            address.len() > 128
+                || !address
+                    .parse::<std::net::SocketAddr>()
+                    .is_ok_and(|address| {
+                        address.port() != 0
+                            && !address.ip().is_unspecified()
+                            && !address.ip().is_multicast()
+                    })
+        })
+    {
+        return None;
+    }
+    let mut seen = std::collections::HashSet::new();
+    transport
+        .direct_addresses
+        .retain(|address| seen.insert(address.clone()));
+    serde_json::to_value(transport).ok()
 }
 
 fn normalized_id(value: &str) -> Option<String> {
@@ -233,6 +275,60 @@ mod tests {
                 .unwrap()
                 .starts_with("GET /media/Bluefin/Capabilities HTTP/1.1"));
         }
+    }
+    #[test]
+    fn capabilities_preserve_supported_account_scoped_iroh_advertisement() {
+        let transport = json!({"version":1,"endpointId":"01".repeat(32),"directAddresses":["127.0.0.1:32100","127.0.0.1:32100","[::1]:32100"],"alpn":"bluefin/http/1","directOnly":true,"privateExtra":"never project"});
+        for can_play in [false, true] {
+            let (server, worker) = fixture(
+                "200 OK",
+                json!({"protocolVersion":1,"musicQueueSync":true,"maxQueueItems":512,"viewer":{"userId":A,"mediaPlayback":can_play,"audioTranscoding":false,"contentDownloading":false,"liveTvAccess":false},"irohMediaTransport":transport}),
+            );
+            let value = call(&Api::new(&request(&server)).unwrap(), "bluefinCapabilities").unwrap();
+            worker.join().unwrap();
+            if can_play {
+                assert_eq!(
+                    value["irohMediaTransport"]["endpointId"],
+                    transport["endpointId"]
+                );
+                assert_eq!(
+                    value["irohMediaTransport"]["directAddresses"],
+                    json!(["127.0.0.1:32100", "[::1]:32100"])
+                );
+                assert!(value["irohMediaTransport"].get("privateExtra").is_none());
+            } else {
+                assert!(value.get("irohMediaTransport").is_none());
+            }
+        }
+    }
+    #[test]
+    fn unsupported_iroh_extension_does_not_disable_queue_capabilities() {
+        let valid = json!({"version":1,"endpointId":"01".repeat(32),"directAddresses":["127.0.0.1:32100"],"alpn":"bluefin/http/1","directOnly":true});
+        for (field, invalid) in [
+            ("version", json!(2)),
+            ("endpointId", json!("invalid")),
+            ("alpn", json!("other")),
+            ("directOnly", json!(false)),
+            ("directAddresses", json!(["0.0.0.0:1"])),
+            ("directAddresses", json!(["127.0.0.1:0"])),
+            ("directAddresses", json!(["https://example.invalid"])),
+        ] {
+            let mut transport = valid.clone();
+            transport[field] = invalid;
+            let (server, worker) = fixture(
+                "200 OK",
+                json!({"protocolVersion":1,"musicQueueSync":true,"maxQueueItems":512,"viewer":{"userId":A,"mediaPlayback":true,"audioTranscoding":false,"contentDownloading":false,"liveTvAccess":false},"irohMediaTransport":transport}),
+            );
+            let value = call(&Api::new(&request(&server)).unwrap(), "bluefinCapabilities").unwrap();
+            worker.join().unwrap();
+            assert_eq!(value["musicQueueSync"], true);
+            assert!(
+                value.get("irohMediaTransport").is_none(),
+                "unsupported {field}"
+            );
+        }
+        assert!(project_iroh_transport(None).is_none());
+        assert!(project_iroh_transport(Some(&Value::Null)).is_none());
     }
     #[test]
     fn metadata_batch_preserves_duplicate_order_and_refuses_missing_audio() {

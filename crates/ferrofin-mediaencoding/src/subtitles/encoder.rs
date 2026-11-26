@@ -710,7 +710,7 @@ impl<P: SubtitleParser, I: SubtitleIo> SubtitleEncoder<P, I> {
             let stream_index = helper::get_subtitle_stream_index_for_ffmpeg(media_source, stream);
             if stream_index == -1 {
                 tracing::error!(
-                    path = %ferrofin_util::source_url::redact_url(&source_path),
+                    path = %crate::transcoding::retained_input::redact_inputs(&source_path),
                     index = stream.index,
                     "cannot find subtitle stream index, skipping this stream"
                 );
@@ -871,7 +871,7 @@ impl<P: SubtitleParser, I: SubtitleIo> SubtitleEncoder<P, I> {
         result: Result<(), String>,
     ) {
         // A `.strm` source's path is its target URL, which can carry an account.
-        let source_path = ferrofin_util::source_url::redact_url(source_path);
+        let source_path = crate::transcoding::retained_input::redact_inputs(source_path);
         match result {
             Err(error) => {
                 // Extraction failed — delete all outputs so zero-byte cache

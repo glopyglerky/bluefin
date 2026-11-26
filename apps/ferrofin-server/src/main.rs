@@ -33,5 +33,8 @@ use ferrofin_server::config::{Cli, Config};
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config = Config::load(cli.clone())?;
-    ferrofin_server::run_reloading(config, move || Config::load(cli.clone())).await
+    Box::pin(ferrofin_server::run_reloading(config, move || {
+        Config::load(cli.clone())
+    }))
+    .await
 }

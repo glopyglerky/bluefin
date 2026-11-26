@@ -154,8 +154,7 @@ struct MusicCollection: View {
             }.navigationTitle(title).modifier(MusicNavigationTitle(large: parent == nil)).modifier(MusicSearch(text: $query, enabled: !isPlaylist, prompt: "Search \(title.lowercased())"))
                 .background(BluefinBackground())
                 .toolbar {
-                    if (parent != nil && isPlaylist) || (type == "Playlist" && parent == nil) {
-                      ToolbarItem(placement: .primaryAction) {
+                    ToolbarItem(placement: .primaryAction) {
                         HStack {
                             if parent != nil && isPlaylist {
                                 Button { playlistSettings = true } label: { Image(systemName: "ellipsis.circle") }.accessibilityLabel("Playlist settings")
@@ -164,11 +163,10 @@ struct MusicCollection: View {
                                 Button { selectedTracks = []; playlistPicker = true } label: { Image(systemName: "plus") }.accessibilityLabel("Create playlist")
                             }
                         }
-                      }
                     }
                 }
-                .sheet(isPresented: $playlistPicker, onDismiss: { refresh = UUID() }) { MusicPlaylistPicker(items: selectedTracks) }
-                .sheet(isPresented: $playlistSettings, onDismiss: { refresh = UUID() }) { if let parent { MusicPlaylistSettings(playlist: parent) } }
+                .sheet(isPresented: $playlistPicker, onDismiss: { refresh = UUID() }) { MusicPlaylistPicker(items: selectedTracks).environmentObject(store) }
+                .sheet(isPresented: $playlistSettings, onDismiss: { refresh = UUID() }) { if let parent { MusicPlaylistSettings(playlist: parent).environmentObject(store) } }
                 .onAppear { if !configured { sort = initialSort; favorites = initialFavorites; configured = true } }
                 .task(id: requestKey) {
                     do { try await Task.sleep(nanoseconds: 250_000_000); try Task.checkCancellation(); await load() } catch {}
@@ -280,15 +278,15 @@ struct MusicPlayer: View {
         .onAppear { favorite = playback.item.UserData?.IsFavorite == true }
         .onChange(of: playback.item.Id) { _ in favorite = playback.isFavorite }
         .onChange(of: playback.isFavorite) { favorite = $0 }
-        .sheet(isPresented: $queueVisible) { queue }
-        .sheet(isPresented: $lyricsVisible) { MusicLyricsView(playback: playback) }
-        .sheet(isPresented: $addToPlaylist) { MusicPlaylistPicker(items: [playback.item]) }
+        .sheet(isPresented: $queueVisible) { queue.environmentObject(store) }
+        .sheet(isPresented: $lyricsVisible) { MusicLyricsView(playback: playback).environmentObject(store) }
+        .sheet(isPresented: $addToPlaylist) { MusicPlaylistPicker(items: [playback.item]).environmentObject(store) }
         .sheet(isPresented: $qualityVisible) { AudioQualityView(playback: playback) }
         .sheet(isPresented: $integrationsVisible) {
             BluefinNavigation {
                 Form { NativeIntegrationActions(item: playback.item) }.navigationTitle("Sharing and apps")
                     .toolbar { ToolbarItem(placement: .primaryAction) { Button("Done") { integrationsVisible = false } } }
-            }
+            }.environmentObject(store)
         }
         .alert("Music", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) { Button("OK") { problem = nil } } message: { Text(problem ?? "") }
     }
@@ -298,30 +296,47 @@ struct MusicPlayer: View {
             Spacer()
             Text("NOW PLAYING").font(.caption.weight(.semibold)).tracking(2).foregroundStyle(.secondary)
             Spacer()
-            if #available(tvOS 17, *) {
-                Menu {
-                    Button("Add to playlist", systemImage: "music.note.list") { addToPlaylist = true }
-                    Button("Sharing and apps", systemImage: "square.and.arrow.up") { integrationsVisible = true }
-                } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.accessibilityLabel("More music actions")
-            } else {
+            headerActions
+        }.frame(maxWidth: 1100)
+    }
+    // Keep the availability check out of the surrounding stack's result builder.
+    // Menu is available on iOS 14, but requires tvOS 17.
+    private var headerActions: some View {
+        if #available(iOS 14, tvOS 17, *) {
+            return AnyView(headerMenu)
+        } else {
+            return AnyView(Group {
                 Button("Add to playlist") { addToPlaylist = true }
                 Button("Sharing and apps") { integrationsVisible = true }
-            }
-        }.frame(maxWidth: 1100)
+            })
+        }
+    }
+    @available(iOS 14, tvOS 17, *)
+    private var headerMenu: some View {
+        Menu {
+            Button { addToPlaylist = true } label: { Label("Add to playlist", systemImage: "music.note.list") }
+            Button { integrationsVisible = true } label: { Label("Sharing and apps", systemImage: "square.and.arrow.up") }
+        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.accessibilityLabel("More music actions")
     }
     @ViewBuilder private func playerLayout(size: CGSize) -> some View {
         #if os(tvOS)
         HStack(alignment: .center, spacing: 70) { cover.frame(maxWidth: 600); controls.frame(maxWidth: 650) }
         #else
-        let wide = size.width >= 760 && !dynamicTypeSize.isAccessibilitySize
+        let wide = (size.width >= 760 || (size.width >= 600 && size.width > size.height)) && !dynamicTypeSize.isAccessibilitySize
         let artworkSize = max(120, min(wide ? (size.width - 76) * 0.45 : size.width - 40,
                                         wide ? size.height - 140 : size.height * 0.32, 420))
         if #available(iOS 16, *) {
-            let layout = wide ? AnyLayout(HStackLayout(alignment: .center, spacing: 36)) : AnyLayout(VStackLayout(spacing: 30))
+            let layout = wide ? AnyLayout(HStackLayout(alignment: .top, spacing: 36)) : AnyLayout(VStackLayout(spacing: 30))
             layout { cover.frame(width: artworkSize, height: artworkSize); controls.frame(maxWidth: 520) }
                 .frame(maxWidth: wide ? 1100 : 520)
         } else {
-            VStack(spacing: 16) { cover.frame(width: artworkSize, height: artworkSize); controls }.frame(maxWidth: 520)
+            Group {
+                if wide {
+                    HStack(alignment: .top, spacing: 28) { cover.frame(width: artworkSize, height: artworkSize); controls.frame(maxWidth: 520) }
+                } else {
+                    VStack(spacing: 24) { cover.frame(width: artworkSize, height: artworkSize); controls }
+                }
+            }.frame(maxWidth: wide ? 1100 : 520)
         }
         #endif
     }
@@ -386,16 +401,24 @@ struct MusicPlayer: View {
     }
     private var qualityBadge: some View {
         Button { qualityVisible = true } label: {
-                let stream = playback.source?.MediaStreams?.first { $0.Type == "Audio" }
+                let stream = playback.audioSourceStream
                 VStack(alignment: .leading, spacing: 4) {
-                    Label(AudioQualitySummary.label(stream: stream, method: playback.playMethod), systemImage: "waveform")
-                    if !AudioQualitySummary.format(stream).isEmpty { Text(AudioQualitySummary.format(stream)) }
+                    Label(AudioQualitySummary.badge(stream: stream, method: playback.playMethod, singing: playback.karaoke != nil), systemImage: "waveform")
+                    if !AudioQualitySummary.format(stream).isEmpty { Text("Source · \(AudioQualitySummary.format(stream))") }
+                    Text("View audio details").font(.caption2)
                 }.font(.caption.weight(.medium)).foregroundStyle(.secondary).frame(minHeight: 44)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .overlay(alignment: .trailing) { Image(systemName: "chevron.right").font(.caption2).accessibilityHidden(true) }
+                    .contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityHint("View source format, conversion, audio processing and device output")
     }
     private var queue: some View {
         NavigationView {
             List {
+                Section {
+                    Text(playback.item.title).font(.headline)
+                    Text("Now playing").font(.caption).foregroundStyle(.secondary)
+                }
                 Section {
                     HStack {
                         Button { store.toggleMusicShuffle() } label: { Label(store.musicShuffled ? "Shuffle on" : "Shuffle off", systemImage: "shuffle") }

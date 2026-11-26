@@ -8,114 +8,375 @@
 
 /* Begin PBXBuildFile section */
 		00E12DBFCC22E0C4D3360644 /* NativeShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B85C15446CBCC5BD594B4205 /* NativeShortcuts.swift */; };
+		03426E1FFA619E4D3784E296 /* NativeLibraryIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 197ECAABB535B43743CCB101 /* NativeLibraryIntents.swift */; };
+		0417BA7D2768339F7370B30C /* SportsSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 723A92A154BA65DDC7BC4A16 /* SportsSettings.swift */; };
+		04668CCD9A998EA3B5F7C7A0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4F18BB501B54B3886D122ABD /* Assets.xcassets */; };
+		0502093DF5FC04C544C3AE91 /* NoticeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 477C7978C1AE9BC387EB87D8 /* NoticeStore.swift */; };
+		054DAF1C755940CD60C98A8B /* TopShelfSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55C98B75EF73AC1DF1E3E765 /* TopShelfSnapshot.swift */; };
+		060220EE098F65E79A762ABE /* BluefinTopShelf.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C5C95D5F584416E8DDF1A826 /* BluefinTopShelf.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		08CE6F886C4971B999717F53 /* VideoOptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8408F8A6A7152DBA9996513 /* VideoOptions.swift */; };
+		0945C116129C4BEBBC0D143C /* VideoOptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8408F8A6A7152DBA9996513 /* VideoOptions.swift */; };
+		0945C316BC768ECFEBA4204E /* AuthorizedUse.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BDDAA60743495AF5D9F39A5 /* AuthorizedUse.swift */; };
 		09C5DECF766EB3BED5EA7356 /* BluefinApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCB87ECD3A2D26C375F3D55C /* BluefinApp.swift */; };
+		0A6CA706E27E1CB67445E44C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF0280F112CF1BBC0F287DCD /* Assets.xcassets */; };
 		0B1E2674ECCF1A866062C076 /* NativePlaybackFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FAC5D92CC21A4DF2B39C342 /* NativePlaybackFixtures.swift */; };
+		0B52E3221CD5BDF833CB1DBA /* AudioQualityPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F661FDB4528C9FE378372F5 /* AudioQualityPolicy.swift */; };
+		0BBF0B32D39D8A6C6E13A922 /* SportsDashboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD92C1DF1443AE0C88DD9DC /* SportsDashboard.swift */; };
+		0CCFABA4D602C2A6A177EF5A /* PlaybackLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DED8DE60C9EF16484D7401 /* PlaybackLifecycle.swift */; };
+		0CD969DAE65DCBC231B3F528 /* NativeServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE2460776A20B4FB7A2F4B5B /* NativeServer.swift */; };
 		0D036DE21AD8ACF6F3052240 /* MusicPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */; };
+		0D1768BA01A3BE5B2913C054 /* SportsStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E92A57ECD46DFF66059C2CC2 /* SportsStoreTests.swift */; };
 		0DF3C0601DEE72C12B361DD7 /* LiveGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFF2309B1CA75DF4B84355FB /* LiveGuide.swift */; };
 		0E4A6B58F65C68838B6EC22E /* ProviderHandoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D64C602C6429167CD4DF0ACF /* ProviderHandoffTests.swift */; };
 		110F323927F8A2E9E6650B0D /* MusicExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF41EA8217CC01ED78F5B230 /* MusicExtras.swift */; };
+		1117B0CB30849EA527399862 /* AudioSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8510BA858AF05A7716E9F3AB /* AudioSettings.swift */; };
+		12426C61532FC93B52C7D150 /* MusicPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */; };
+		12DE54ADCEDAD4834765538A /* SportsSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 723A92A154BA65DDC7BC4A16 /* SportsSettings.swift */; };
+		1349478B7835ED0D70D767C7 /* NativeLegalText.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0C62959371831E8F25A2161 /* NativeLegalText.swift */; };
 		1750B1E2CAB977C8A5C58954 /* PreviewArtwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28DA06E996BD91035921718F /* PreviewArtwork.swift */; };
+		180D6971BD075194B2101332 /* MusicExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF41EA8217CC01ED78F5B230 /* MusicExtras.swift */; };
+		188EE8329216279F7449B17A /* NativeServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE2460776A20B4FB7A2F4B5B /* NativeServer.swift */; };
+		18964E9C2A6C3D1C5852BEB5 /* OfflineLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D285970E9B54011DA8C30BA /* OfflineLibrary.swift */; };
+		1AAA568A5980F022FC9D6FCA /* NoticeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 477C7978C1AE9BC387EB87D8 /* NoticeStore.swift */; };
+		1B01958427A6E1E130A49018 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A869924D1D322649B8E44112 /* Models.swift */; };
+		1B2C5ED960F256AB3E6052BB /* TrailersViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B9BE6359C39645FC464E057 /* TrailersViews.swift */; };
+		1C0EE5A0E5271539C6EE7C0B /* SportsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A52F31A8E806B3BB3C273E1 /* SportsModels.swift */; };
+		1C7A31485FB9D65B05BA4DE8 /* KaraokeContinuityControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA9373F7B92D2D2534278D6 /* KaraokeContinuityControls.swift */; };
 		1CC7A55A46745FA91961E41D /* PreviewArtwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28DA06E996BD91035921718F /* PreviewArtwork.swift */; };
 		1D5F2EC402608BB297557AB2 /* NativeHomeScenes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B93418762ED988465849B32 /* NativeHomeScenes.swift */; };
+		1E986CB3842D854206F59509 /* BluefinAudioCheck.m4a in Resources */ = {isa = PBXBuildFile; fileRef = 79B40C813F78E1CD75D9520B /* BluefinAudioCheck.m4a */; };
 		1F8D76CDB686472861627362 /* ProviderHandoffs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18FFDECE868BE15617A6FE95 /* ProviderHandoffs.swift */; };
 		20B782EE4425370F11C47F47 /* MusicExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF41EA8217CC01ED78F5B230 /* MusicExtras.swift */; };
+		20EFE7466F6B2774AB93F5C6 /* ServerDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0211ABA63728B2203262877 /* ServerDiscovery.swift */; };
 		211E90AF971F30180C7E64FA /* LiveGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFF2309B1CA75DF4B84355FB /* LiveGuide.swift */; };
 		220D7C750B03BA789D7F2D95 /* BluefinAudioCheck.m4a in Resources */ = {isa = PBXBuildFile; fileRef = 79B40C813F78E1CD75D9520B /* BluefinAudioCheck.m4a */; };
+		24415DC1C342F2E9D6F64C72 /* KaraokeAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D9BCFE68C5BB0A2D5703231 /* KaraokeAudio.swift */; };
+		24F35D225A73A3E5CF76C49C /* KaraokeContinuityLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C687D323B772AA3B1A871B01 /* KaraokeContinuityLifecycle.swift */; };
+		2526DE607D7258E19EBD2717 /* SportsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A52F31A8E806B3BB3C273E1 /* SportsModels.swift */; };
+		2591A8881807207056B6BC8A /* NativeSharePlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */; };
+		25B7D8ECF82305CB1D3BFE1D /* KaraokeAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D9BCFE68C5BB0A2D5703231 /* KaraokeAudio.swift */; };
+		26492C577C678C13344E54BE /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C28C34F2C31ABDF4F724ACEF /* PrivacyInfo.xcprivacy */; };
+		264FFAC5C0D3A9711018DCB0 /* AudioQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = B28593266A15D0DCF100B3A1 /* AudioQuality.swift */; };
+		2665BC3D7043D44A2CD9687D /* TopShelfSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55C98B75EF73AC1DF1E3E765 /* TopShelfSnapshot.swift */; };
 		2716B29DABA02C484556DE05 /* NativeServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE2460776A20B4FB7A2F4B5B /* NativeServer.swift */; };
+		278F52073DC844BC00F4A06F /* LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DE689159E4853343AA651D0 /* LibraryStore.swift */; };
 		27B2DCC4EF9BC965C69ACC2F /* LiveTV.swift in Sources */ = {isa = PBXBuildFile; fileRef = 982BE933C743D9BFA5CE7B37 /* LiveTV.swift */; };
+		27DE164F4181CD9C3EC5BA04 /* NoticeViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA793EB36B1D8E01F4C255B1 /* NoticeViews.swift */; };
 		27EACA61753C36271A00DCE6 /* NativeFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D378DA698DCFE1A5912537BD /* NativeFormatTests.swift */; };
 		29A00921934D3319F6C4AC46 /* NativeHomeScenes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B93418762ED988465849B32 /* NativeHomeScenes.swift */; };
+		2AC3E3B19781B8E37DD2B857 /* LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DE689159E4853343AA651D0 /* LibraryStore.swift */; };
+		2AD4F47BD14AC2021D53EC71 /* AudioQualityPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F661FDB4528C9FE378372F5 /* AudioQualityPolicy.swift */; };
 		2CA8197A6DE60C38AF0AAB36 /* AudioQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = B28593266A15D0DCF100B3A1 /* AudioQuality.swift */; };
+		2DB38474506A3B641BF62AEE /* MusicExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF41EA8217CC01ED78F5B230 /* MusicExtras.swift */; };
 		2DBD381BD622504214533F10 /* CoreAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8004301C4A8B9B7CF56DB3F4 /* CoreAdmission.swift */; };
+		2EC9BBE07B46AF8CC60E2255 /* KaraokeTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4E81221A54AEF54BBBE5571 /* KaraokeTimeline.swift */; };
+		2F157930CB972FF744FDF487 /* ManagedPairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41418B5DDBBF2D43F8D7D23D /* ManagedPairingTests.swift */; };
+		2F1C740999E8A63B1700ADC7 /* Sports.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3732B4D57D5C67E6EF478440 /* Sports.swift */; };
 		2F9D73C75F76205C93623EA1 /* BluefinApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCB87ECD3A2D26C375F3D55C /* BluefinApp.swift */; };
+		30A8E469DAE5F63A806D9497 /* MusicLibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D006ABB8323A0134B9F3E64C /* MusicLibraryModel.swift */; };
+		32722EA3A0DBE305480E9D94 /* NativeCarPlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */; };
+		335A02DCEE7FF7572026D2F6 /* SportsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8F4534B3596F2D95F39EDB7 /* SportsStore.swift */; };
 		33D2A5EA39388CDBE8B1A394 /* BluefinTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6006E519D52C7EBC295D8FB0 /* BluefinTests.swift */; };
+		33E49575AD471A3D5497461D /* ServerDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0211ABA63728B2203262877 /* ServerDiscovery.swift */; };
+		33FBA301864558B376038777 /* KaraokeLyricsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F5B920A78E13647FCE304AF /* KaraokeLyricsView.swift */; };
+		34F9A5330F8F147103AC6208 /* NoticeViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA793EB36B1D8E01F4C255B1 /* NoticeViews.swift */; };
+		353646068C9C94417E5AA59D /* Artwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FF25D78AA631E5A41B8B313 /* Artwork.swift */; };
 		3698FB4DFCBB8915ED9CDF5E /* AdaptiveLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EB832273C3F7049A4B0DAC8 /* AdaptiveLayoutTests.swift */; };
+		36F22BB19587DC3F898AD26A /* IrohSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49DB857C424585BC6F92237 /* IrohSettings.swift */; };
 		37DBC0B0D29851E6F6178ED0 /* MusicLibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D006ABB8323A0134B9F3E64C /* MusicLibraryModel.swift */; };
+		392D13ADCFB1B9B0CFE0D649 /* AdaptiveNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F1E05FA54088CF8DE6C3607 /* AdaptiveNavigation.swift */; };
+		396332B5DD4ED02B4C5287F4 /* SportsPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA08FC051213BA0AAC530C4F /* SportsPresentationTests.swift */; };
+		39C5D97D8663DD98BAEE0D9C /* NativeTitleSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B1F9CBDB9782B42D2EC439 /* NativeTitleSelection.swift */; };
 		39C8E62F36F70A6FA975D184 /* VideoOptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8408F8A6A7152DBA9996513 /* VideoOptions.swift */; };
+		3AC956DB11362290C4E1F793 /* NoticeViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA793EB36B1D8E01F4C255B1 /* NoticeViews.swift */; };
+		3B2CC8CE216087F03C1DAF7C /* NativeHomeScenes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B93418762ED988465849B32 /* NativeHomeScenes.swift */; };
+		3B70E340D8B2966142B9C28C /* KaraokeContinuityLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C687D323B772AA3B1A871B01 /* KaraokeContinuityLifecycle.swift */; };
 		3B7BCF23A632D9CBE11F4F74 /* CarPlayVideoSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */; };
 		3C19172E3D40D827C414FF09 /* Artwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FF25D78AA631E5A41B8B313 /* Artwork.swift */; };
+		3CF70F388746F7B4ECF43B49 /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */; };
 		3E04EBF02A63482BE56B8751 /* AuthorizedUse.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BDDAA60743495AF5D9F39A5 /* AuthorizedUse.swift */; };
+		3F25F42007BB94B95A4F764A /* ManagedPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CE27F3EB6C348614EEBDCB4 /* ManagedPairing.swift */; };
 		423AB228CA49BA6C7E5ECE66 /* NativePlaybackHTTP.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2DFA2F71A88876FFAE99094 /* NativePlaybackHTTP.swift */; };
 		452A3FCF6B81F530F66D67A3 /* IrohSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49DB857C424585BC6F92237 /* IrohSettings.swift */; };
+		4668420625F1FD7EE3704BB0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3283CBFB68059E09887B7B5D /* Assets.xcassets */; };
+		46A527C026C30B77DABC95B9 /* KaraokePreparation.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA965C7003B2CD5A408C2903 /* KaraokePreparation.swift */; };
+		487AB037E5F03E465ED917B6 /* WatchCompanionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F593F80CA8D70A19A7254966 /* WatchCompanionTests.swift */; };
 		49446A73FFA372F97BFBE6AC /* LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DE689159E4853343AA651D0 /* LibraryStore.swift */; };
+		4A58F62C6B48576492A01C3F /* UnifiedSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = B05A1285A0067A18352B95F1 /* UnifiedSearch.swift */; };
 		4ACCA5EAB0065404A04759B1 /* NativeShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B85C15446CBCC5BD594B4205 /* NativeShortcuts.swift */; };
 		4C534668F133F0AC756F0B40 /* UnifiedSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD4BCBF72AAF97F87A0DEA95 /* UnifiedSearchTests.swift */; };
+		4C6EF304387A8BEDB8B0F050 /* KaraokePreparationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1832D15539C2E2EA3C2B1EF /* KaraokePreparationModels.swift */; };
+		4EEBA461B9406FBE8DB42F51 /* TVTopShelf.swift in Sources */ = {isa = PBXBuildFile; fileRef = 204622CF419E90AE72B82059 /* TVTopShelf.swift */; };
+		4F0446970A6D23B95BDC2E2B /* TrailersModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B16FA8243019237A7638B76 /* TrailersModels.swift */; };
+		501391AFAEF475365AA0BE8A /* Sports.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3732B4D57D5C67E6EF478440 /* Sports.swift */; };
+		50F6579BA063D242E4BF4F3B /* KaraokePreparationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 155E66BAE65FFEDA035F2A6A /* KaraokePreparationTests.swift */; };
+		50FB5ECE9E7DD34E7C5BA778 /* KaraokeLyricsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F5B920A78E13647FCE304AF /* KaraokeLyricsView.swift */; };
+		512DF67B3BB0E1E59584BE2A /* NativeSharePlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */; };
+		517C93A7C21DC3B3E7AC45CF /* PreviewArtwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28DA06E996BD91035921718F /* PreviewArtwork.swift */; };
+		523A62C9B65E59BEA6223868 /* BluefinApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCB87ECD3A2D26C375F3D55C /* BluefinApp.swift */; };
 		5246175DF89AEFA224A98A23 /* UnifiedSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = B05A1285A0067A18352B95F1 /* UnifiedSearch.swift */; };
+		5277E282FEE3812FB8EDCEDC /* NoticeViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA793EB36B1D8E01F4C255B1 /* NoticeViews.swift */; };
 		539F083F5F00E44C00AF4998 /* NativeAssetAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9079883C6976008F4733D1BC /* NativeAssetAdmission.swift */; };
 		554191D9BB4AA117CF5055A3 /* ProviderHandoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D64C602C6429167CD4DF0ACF /* ProviderHandoffTests.swift */; };
+		56222E06A41C5E7E69126BD8 /* NativeLibraryIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 197ECAABB535B43743CCB101 /* NativeLibraryIntents.swift */; };
 		5740E48A11C7741B27DF98B5 /* RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706B3CC35EBF8FE54AD7791A /* RustBridge.swift */; };
+		575EB4F23D1B50357885BF3B /* MusicLibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D006ABB8323A0134B9F3E64C /* MusicLibraryModel.swift */; };
+		57B6BBA24BBD37A1DD8204E8 /* WatchCompanionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F593F80CA8D70A19A7254966 /* WatchCompanionTests.swift */; };
+		58175CB1DFFE1A4D2E2359F9 /* SportsFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65891F5D2882F27D8036F92D /* SportsFixtures.swift */; };
+		58AD0E515E23DBF035C1C584 /* AudioQualityPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F661FDB4528C9FE378372F5 /* AudioQualityPolicy.swift */; };
+		592F78546B1A7BD448367144 /* KaraokePreparationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 155E66BAE65FFEDA035F2A6A /* KaraokePreparationTests.swift */; };
+		59D0E6C162D68143C22D6B6B /* SoftwareLicensesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA837F728DAB98C7BEE124A0 /* SoftwareLicensesView.swift */; };
+		5AD02735CD8A75EC19BF9D7F /* KaraokePreparation.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA965C7003B2CD5A408C2903 /* KaraokePreparation.swift */; };
+		5B435D9FEDC73BCBFF67136E /* Artwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FF25D78AA631E5A41B8B313 /* Artwork.swift */; };
+		5B99817265569E81DC5C041D /* VisionPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEE1BC82779FF018C4635A6 /* VisionPlatform.swift */; };
 		5DAC315EDF02CF8E164C8188 /* Sports.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3732B4D57D5C67E6EF478440 /* Sports.swift */; };
 		5F3257CB271DE208FC6E13A8 /* NativeIntegrations.swift in Sources */ = {isa = PBXBuildFile; fileRef = E63091525FC2417A600865C5 /* NativeIntegrations.swift */; };
+		614C8ED0BD65CC2D89DB31AF /* ManagedPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CE27F3EB6C348614EEBDCB4 /* ManagedPairing.swift */; };
+		62503AD611E40E61EE331FD0 /* BluefinStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 151BD9B36DBFDD44A247108B /* BluefinStyle.swift */; };
+		6459DB442F231CA0D651E1A2 /* NoticeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 477C7978C1AE9BC387EB87D8 /* NoticeStore.swift */; };
 		64B604505F07EA883550040B /* NativeServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE2460776A20B4FB7A2F4B5B /* NativeServer.swift */; };
+		65194A5156AB6A1086639CD4 /* KaraokeLyricsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F5B920A78E13647FCE304AF /* KaraokeLyricsView.swift */; };
+		669334F801F543840AC910D9 /* KaraokePreparationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1832D15539C2E2EA3C2B1EF /* KaraokePreparationModels.swift */; };
+		6890DD1E33548A7B8451AF71 /* KaraokePreparationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1832D15539C2E2EA3C2B1EF /* KaraokePreparationModels.swift */; };
+		6958F6B3484B1525F07E1177 /* KaraokeContinuityControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA9373F7B92D2D2534278D6 /* KaraokeContinuityControls.swift */; };
+		6ABEC3CCE04BC5E28C882AC8 /* NativeShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B85C15446CBCC5BD594B4205 /* NativeShortcuts.swift */; };
+		6B702DF9FC8693A522D43AFE /* WatchLibraryIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C56989D464766D147D9C451 /* WatchLibraryIntents.swift */; };
 		6CF660F9938362B5F8A34568 /* AudioSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8510BA858AF05A7716E9F3AB /* AudioSettings.swift */; };
 		6DE406BEF60072CF1707F48E /* AuthorizedUse.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BDDAA60743495AF5D9F39A5 /* AuthorizedUse.swift */; };
 		6DE9362DB33BCD47DF35076A /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */; };
 		702DB01A916BBCFCE5D011B1 /* HomeAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */; };
 		702FB15FE4E329C4A2425DAE /* MusicPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */; };
+		70BB1BFA18EB02A031CD67B9 /* WatchAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30BB216A32E9D03C0DF699C7 /* WatchAPI.swift */; };
+		7145E6B7A1845C7DE956CC84 /* RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706B3CC35EBF8FE54AD7791A /* RustBridge.swift */; };
+		7176AD0E67C081EC6653ED11 /* TVTopShelf.swift in Sources */ = {isa = PBXBuildFile; fileRef = 204622CF419E90AE72B82059 /* TVTopShelf.swift */; };
+		7209AB85ACC87684283BDA78 /* CarPlayVideoSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */; };
 		733A53D6D23B872806DE0899 /* NativeFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D378DA698DCFE1A5912537BD /* NativeFormatTests.swift */; };
+		740F250855ADB26171B6D050 /* NativeIntegrations.swift in Sources */ = {isa = PBXBuildFile; fileRef = E63091525FC2417A600865C5 /* NativeIntegrations.swift */; };
 		7484DFC2B2094C6C18EC67D8 /* OfflineLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D285970E9B54011DA8C30BA /* OfflineLibrary.swift */; };
+		75DBCA87A84D52BC0C02A0D0 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = DBCDDCED380E226B8BA1540C /* PrivacyInfo.xcprivacy */; };
 		7674B02A06F3145B0418C4DA /* AudioQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = B28593266A15D0DCF100B3A1 /* AudioQuality.swift */; };
+		767525B73E6344EFB1EC2407 /* SportsDashboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD92C1DF1443AE0C88DD9DC /* SportsDashboard.swift */; };
+		76CA9D801D4024005E9E861D /* NativeServerModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57069BF89FC51AA9192B0DDC /* NativeServerModelTests.swift */; };
+		7922611909273EA5F5C9DB63 /* NativeLegalText.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0C62959371831E8F25A2161 /* NativeLegalText.swift */; };
+		7A1C4D0AEC50C442C630F176 /* ManagedPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CE27F3EB6C348614EEBDCB4 /* ManagedPairing.swift */; };
+		7A9F75CC2B305E999E12D275 /* KaraokeContinuityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0AC1EF31245B10EB1D21D0 /* KaraokeContinuityTests.swift */; };
+		7AA52CCDE5D2662B60F76775 /* NativeTitleSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B1F9CBDB9782B42D2EC439 /* NativeTitleSelection.swift */; };
+		7B21F40DCCDF495C65E5E33A /* WatchLeaseLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9423B7E30E32E3D9DA203F0C /* WatchLeaseLifecycle.swift */; };
 		7B45817160C57283E7345606 /* IrohSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49DB857C424585BC6F92237 /* IrohSettings.swift */; };
 		7B529048D78C70B0660E3262 /* NativePlaybackFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FAC5D92CC21A4DF2B39C342 /* NativePlaybackFixtures.swift */; };
+		7C14AC8018C950693A33002A /* KaraokeMicrophone.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7334128659740C5E2692A24 /* KaraokeMicrophone.swift */; };
+		7CA672BF438B0E67B72A6048 /* MusicDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = C161B9D616DEA7BA78CA3269 /* MusicDesign.swift */; };
+		7E799819B217F195785088F6 /* NativeIntegrationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */; };
 		7F7550C29AC6A32B5CCEF21B /* UnifiedSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD4BCBF72AAF97F87A0DEA95 /* UnifiedSearchTests.swift */; };
+		7FAE2FCB3478F8FAD198D2E4 /* AudioQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = B28593266A15D0DCF100B3A1 /* AudioQuality.swift */; };
+		80FE81E140F8A435232585A1 /* KaraokeContinuityControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA9373F7B92D2D2534278D6 /* KaraokeContinuityControls.swift */; };
+		82D58CEECF213B0476B3CF9C /* KaraokeMicrophone.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7334128659740C5E2692A24 /* KaraokeMicrophone.swift */; };
+		86FF5C2F89EAE5C62CC23125 /* TrailersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5FAAF9EEEE8712CF7973FC1 /* TrailersTests.swift */; };
+		88DEBCE06138140FA1DD3EB0 /* SportsSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 723A92A154BA65DDC7BC4A16 /* SportsSettings.swift */; };
+		8918EAC5BFC6A49176762F56 /* NativeTitleSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B1F9CBDB9782B42D2EC439 /* NativeTitleSelection.swift */; };
+		898CEEA9A3ED896E88E33A5B /* TVTopShelf.swift in Sources */ = {isa = PBXBuildFile; fileRef = 204622CF419E90AE72B82059 /* TVTopShelf.swift */; };
+		89F2E820A542C3DD3D3CDBF5 /* ServerDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0211ABA63728B2203262877 /* ServerDiscovery.swift */; };
 		8A6ED647567DE99473AE5EEC /* AudioSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8510BA858AF05A7716E9F3AB /* AudioSettings.swift */; };
+		8A769727CAC0BA9BD1CB6964 /* BluefinStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 151BD9B36DBFDD44A247108B /* BluefinStyle.swift */; };
+		8B862D2A463A474BB11B7D1D /* SportsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8F4534B3596F2D95F39EDB7 /* SportsStore.swift */; };
 		8C8E6B685D460EF1627F4BD6 /* NativeIntegrationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */; };
+		8CA0A1A8BAC90B004667487C /* ManagedPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CE27F3EB6C348614EEBDCB4 /* ManagedPairing.swift */; };
+		8CE0D5B45E99B9629A864CF1 /* KaraokeContinuityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0AC1EF31245B10EB1D21D0 /* KaraokeContinuityTests.swift */; };
+		8E6D762914320C82AA57834B /* SportsPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54132E01D5B3C0A8ABEE63EF /* SportsPresentation.swift */; };
+		8E8F374B08DAE8F7F28F8138 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A869924D1D322649B8E44112 /* Models.swift */; };
+		8EDEED84A389499B1828B63C /* SportsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A52F31A8E806B3BB3C273E1 /* SportsModels.swift */; };
+		8FCF33BB4408E2FE11333822 /* MusicDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = C161B9D616DEA7BA78CA3269 /* MusicDesign.swift */; };
 		915EAD3B2B3801B77540B432 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A869924D1D322649B8E44112 /* Models.swift */; };
+		91C66B72EABC0B5B8318044E /* BluefinAudioCheck.m4a in Resources */ = {isa = PBXBuildFile; fileRef = 79B40C813F78E1CD75D9520B /* BluefinAudioCheck.m4a */; };
+		91CD8DACBD50EC4447FE1E71 /* LiveGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFF2309B1CA75DF4B84355FB /* LiveGuide.swift */; };
 		93A052358E73D0E7124DFCE3 /* PlaybackLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DED8DE60C9EF16484D7401 /* PlaybackLifecycle.swift */; };
+		93A0A563ED11661A5C8EE3EF /* UnifiedSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = B05A1285A0067A18352B95F1 /* UnifiedSearch.swift */; };
+		943CF056E3E493E06A74EF76 /* WidgetRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2D742B2E28DA043D85885BF /* WidgetRoute.swift */; };
+		96252005AA7BA97222F290C9 /* SportsPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54132E01D5B3C0A8ABEE63EF /* SportsPresentation.swift */; };
+		9686649530D07B6EBB09E75E /* LiveTV.swift in Sources */ = {isa = PBXBuildFile; fileRef = 982BE933C743D9BFA5CE7B37 /* LiveTV.swift */; };
+		96B1FCD4A22DF47992FA561B /* BluefinWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91A5BCC153DF517499560FE0 /* BluefinWidgets.swift */; };
 		97E6881D69BE50868A46817B /* CarPlayVideoSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */; };
+		983E31A4C915FC5E33CBA988 /* OfflineLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D285970E9B54011DA8C30BA /* OfflineLibrary.swift */; };
+		984F9003FFC31C5D04466613 /* TrailersViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B9BE6359C39645FC464E057 /* TrailersViews.swift */; };
+		9AD5EBFBCE756E6825B644D6 /* KaraokeContinuityAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D7322B01463782B4656C7DD /* KaraokeContinuityAudio.swift */; };
+		9BBB40184EC319DA6EEA9F6D /* SoftwareLicensesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA837F728DAB98C7BEE124A0 /* SoftwareLicensesView.swift */; };
+		9C93FE807E1337C6C0D5C099 /* TrailersModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B16FA8243019237A7638B76 /* TrailersModels.swift */; };
+		9CD05834EC9D582DF652D312 /* SportsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A52F31A8E806B3BB3C273E1 /* SportsModels.swift */; };
 		9D0732F8B0E6736C4BDA79F4 /* AdaptiveLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EB832273C3F7049A4B0DAC8 /* AdaptiveLayoutTests.swift */; };
+		9D351540197622B0C1EC84F9 /* TVTopShelf.swift in Sources */ = {isa = PBXBuildFile; fileRef = 204622CF419E90AE72B82059 /* TVTopShelf.swift */; };
+		9E67CE5847954A10F491E5C2 /* TrailersModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B16FA8243019237A7638B76 /* TrailersModels.swift */; };
+		9EB46946AFAC10FC5C659F76 /* BluefinOceanStudy.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = 26BD4A8C5AB4CFEA96586328 /* BluefinOceanStudy.mp4 */; };
+		9EEA28B215F32B936D9478A7 /* SportsPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54132E01D5B3C0A8ABEE63EF /* SportsPresentation.swift */; };
+		A02912D1E56DC9A629BB7418 /* RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706B3CC35EBF8FE54AD7791A /* RustBridge.swift */; };
+		A075CE57D0925C6422EA86FA /* KaraokeAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D9BCFE68C5BB0A2D5703231 /* KaraokeAudio.swift */; };
 		A08DD4D6F9B92C107A6520E1 /* HomeAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */; };
 		A09BD06984B2DA35F6ECAF80 /* MusicLibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D006ABB8323A0134B9F3E64C /* MusicLibraryModel.swift */; };
+		A15FC18F81D614B23AEB0758 /* WatchCompanion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49E55D2D281781288D3567DC /* WatchCompanion.swift */; };
 		A18604A6D17207CBD4FC1107 /* BluefinOceanStudy.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = 26BD4A8C5AB4CFEA96586328 /* BluefinOceanStudy.mp4 */; };
+		A26A328F55E89AF4AEBF1C22 /* KaraokePreparation.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA965C7003B2CD5A408C2903 /* KaraokePreparation.swift */; };
+		A2A043E532F00F57EA110758 /* KaraokeTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4E81221A54AEF54BBBE5571 /* KaraokeTimeline.swift */; };
+		A2E2F4A4C3B7455C7088F0FC /* TrailersViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B9BE6359C39645FC464E057 /* TrailersViews.swift */; };
+		A2F09A9A395A3F6E7756DAFA /* KaraokeContinuityLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C687D323B772AA3B1A871B01 /* KaraokeContinuityLifecycle.swift */; };
 		A2FB2ACF6BC94AF9F4CC6280 /* NativeCarPlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */; };
+		A3252E50E50A85C7FE2069B0 /* CoreAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8004301C4A8B9B7CF56DB3F4 /* CoreAdmission.swift */; };
+		A3C191EECA90AD39DDCA433F /* NativeLegalText.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0C62959371831E8F25A2161 /* NativeLegalText.swift */; };
+		A3FFC79C07CB74B99AE14C02 /* KaraokeTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4E81221A54AEF54BBBE5571 /* KaraokeTimeline.swift */; };
+		A4B7F2DD178DA7F189CA81EE /* NativeServerModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57069BF89FC51AA9192B0DDC /* NativeServerModelTests.swift */; };
+		A5E343FDEC097DC17E87FCAE /* ContentProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9CD53432470C683D2F4E878 /* ContentProvider.swift */; };
 		A8ACDA1FE3D4F69053FCA371 /* BluefinOceanStudy.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = 26BD4A8C5AB4CFEA96586328 /* BluefinOceanStudy.mp4 */; };
+		A8BBBF9442551804141AED0E /* NativeLibraryIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 197ECAABB535B43743CCB101 /* NativeLibraryIntents.swift */; };
 		AA4CF381A8AC7A3774AF780B /* BluefinStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 151BD9B36DBFDD44A247108B /* BluefinStyle.swift */; };
 		AAB2D67AF1A21FB8BF768323 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A869924D1D322649B8E44112 /* Models.swift */; };
+		AAFD6525AC0DBBEBC63B4CB1 /* KaraokeLyricsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F5B920A78E13647FCE304AF /* KaraokeLyricsView.swift */; };
 		ABECCCD47CAB64F4CCDFC553 /* Artwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FF25D78AA631E5A41B8B313 /* Artwork.swift */; };
+		ABFA23B020F37858E358626A /* BluefinWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 865750C407640DAF0D4571F7 /* BluefinWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AD403E6DD0A42ACE9777F90C /* BluefinStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 151BD9B36DBFDD44A247108B /* BluefinStyle.swift */; };
 		AE27B61125D6A2043B71CA94 /* NativeSharePlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */; };
+		AE564236AF23AC4D4B9FD6E6 /* SportsPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA08FC051213BA0AAC530C4F /* SportsPresentationTests.swift */; };
 		B1E3DBE2409E62BF87CC85A6 /* NativeAssetAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9079883C6976008F4733D1BC /* NativeAssetAdmission.swift */; };
 		B30BDDF3135E4C583C1B219D /* LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DE689159E4853343AA651D0 /* LibraryStore.swift */; };
+		B347294D4B01E5DEE0421D78 /* PreviewArtwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28DA06E996BD91035921718F /* PreviewArtwork.swift */; };
+		B3893711F6147394D396E71B /* SoftwareLicensesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA837F728DAB98C7BEE124A0 /* SoftwareLicensesView.swift */; };
+		B54BF3A4089B473F7768FE77 /* WatchAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30BB216A32E9D03C0DF699C7 /* WatchAPI.swift */; };
 		B574CFD024AE05B5E5825F2C /* BluefinTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6006E519D52C7EBC295D8FB0 /* BluefinTests.swift */; };
 		B8142CFA4F8F8C630C6A8DE2 /* SharePlayContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C571608A3F14B07D357FF34 /* SharePlayContractTests.swift */; };
 		B878CA93D5F9F2E4CBB0E188 /* NativePlaybackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55DBC4D89A5CC6B08F603BAE /* NativePlaybackTests.swift */; };
 		B8A20DF9FFD9503886052011 /* NativeIntegrationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */; };
+		B9F23B80F1EE42B726D20C84 /* CoreAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8004301C4A8B9B7CF56DB3F4 /* CoreAdmission.swift */; };
 		BA4D8713C317519AF8D2F7E5 /* NativePlaybackHTTP.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2DFA2F71A88876FFAE99094 /* NativePlaybackHTTP.swift */; };
+		BA57F33A6A58AD6CF3AC0C87 /* KaraokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88046A0A0996133AAF5BEFED /* KaraokeTests.swift */; };
+		BA74C7B1C1D6F671A2F451CE /* NoticeViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA793EB36B1D8E01F4C255B1 /* NoticeViews.swift */; };
+		BA860347136C540387259ECE /* NativeAudioDSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = E88CF800F2A3D9B8F0779C5B /* NativeAudioDSP.swift */; };
 		BC43E1A9FB934E909DC6942E /* UnifiedSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = B05A1285A0067A18352B95F1 /* UnifiedSearch.swift */; };
+		BCCE5089AE9C13D7D2DF8CEE /* KaraokeContinuityAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D7322B01463782B4656C7DD /* KaraokeContinuityAudio.swift */; };
 		BEEF40A7258BA8E88F13E2D0 /* VideoOptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8408F8A6A7152DBA9996513 /* VideoOptions.swift */; };
+		BF388CE84B598A54CB331044 /* ManagedPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CE27F3EB6C348614EEBDCB4 /* ManagedPairing.swift */; };
 		BF3FF8064DE4CEBEABA6A9F5 /* ProviderHandoffs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18FFDECE868BE15617A6FE95 /* ProviderHandoffs.swift */; };
 		BF5C1FBF949A718CE2E9C9DC /* NativeAudioDSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = E88CF800F2A3D9B8F0779C5B /* NativeAudioDSP.swift */; };
 		BFE41D00EA94B85CE35A75B8 /* NativeAudioDSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = E88CF800F2A3D9B8F0779C5B /* NativeAudioDSP.swift */; };
+		C06EDA64E3A264BB1FB56BAA /* BluefinOceanStudy.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = 26BD4A8C5AB4CFEA96586328 /* BluefinOceanStudy.mp4 */; };
+		C28FBD6BBC426D48A1937E43 /* KaraokeContinuityLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C687D323B772AA3B1A871B01 /* KaraokeContinuityLifecycle.swift */; };
 		C5C8F63F9166746987128869 /* MusicDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = C161B9D616DEA7BA78CA3269 /* MusicDesign.swift */; };
+		C6231739C6CA06F75BCD50C9 /* HomeAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */; };
+		C6C5113C0D4CEEE467771A49 /* SportsStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E92A57ECD46DFF66059C2CC2 /* SportsStoreTests.swift */; };
+		C6FA6FBC3122D174C81DF986 /* NativeKaraokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4951D96A1B8535945F7F30B /* NativeKaraokeTests.swift */; };
+		C74034FB7E23FB1DFEE49248 /* HomeAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */; };
+		C7411E5172D40837D1AB87CF /* PlaybackLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DED8DE60C9EF16484D7401 /* PlaybackLifecycle.swift */; };
 		C854B0A308957C9C255C8B24 /* CoreAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8004301C4A8B9B7CF56DB3F4 /* CoreAdmission.swift */; };
+		C8CF443AEF3073ADB148ED34 /* KaraokePreparation.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA965C7003B2CD5A408C2903 /* KaraokePreparation.swift */; };
 		C91AF6A17B6A456ED382E6B1 /* PlaybackLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DED8DE60C9EF16484D7401 /* PlaybackLifecycle.swift */; };
 		CA2B4CCECE3D8374E522FB5A /* BluefinAudioCheck.m4a in Resources */ = {isa = PBXBuildFile; fileRef = 79B40C813F78E1CD75D9520B /* BluefinAudioCheck.m4a */; };
+		CA35D1590BE26C2465EE4601 /* WidgetRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2D742B2E28DA043D85885BF /* WidgetRoute.swift */; };
+		CACC844735259FEFAD796A12 /* WatchCompanion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49E55D2D281781288D3567DC /* WatchCompanion.swift */; };
 		CB4D45D4FFFBEACA0DE6EEAF /* AdaptiveNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F1E05FA54088CF8DE6C3607 /* AdaptiveNavigation.swift */; };
 		CC7D278B7F468987E35308F1 /* NativeSharePlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */; };
 		CD84E7F67C8D595A2B572FAE /* Sports.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3732B4D57D5C67E6EF478440 /* Sports.swift */; };
+		CD9C48DF9B74677F7337E21D /* TrailersViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B9BE6359C39645FC464E057 /* TrailersViews.swift */; };
+		CDECFB43D07B7D4A85A49DDB /* NoticeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 477C7978C1AE9BC387EB87D8 /* NoticeStore.swift */; };
+		CF638B8FF8A02ABA71187178 /* ProviderHandoffs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18FFDECE868BE15617A6FE95 /* ProviderHandoffs.swift */; };
+		D3C8C699F1BBB441954C9769 /* BluefinWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = C138515A395BFA1379042EF8 /* BluefinWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		D411D49983495E930525B9DD /* NativeCarPlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */; };
+		D46D9435EADD95493A4528A5 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3AC307A2AB31A4292FF97B88 /* Assets.xcassets */; };
 		D48A4036B7B14A8C647B7962 /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */; };
+		D4F9E83FDA6E04CDD7DE99D1 /* NativeShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B85C15446CBCC5BD594B4205 /* NativeShortcuts.swift */; };
+		D5C157A98A2EFA87CDCA3F3B /* AdaptiveNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F1E05FA54088CF8DE6C3607 /* AdaptiveNavigation.swift */; };
+		D6CBD7EA980B10B476D7542F /* WatchCompanion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49E55D2D281781288D3567DC /* WatchCompanion.swift */; };
+		D7AB5AB67493D8FD2F5D5C90 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = DBCDDCED380E226B8BA1540C /* PrivacyInfo.xcprivacy */; };
 		D8D2E0847E16AEF1BE05C295 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = DBCDDCED380E226B8BA1540C /* PrivacyInfo.xcprivacy */; };
+		D90FE5AFC3B955F226538467 /* TrailersModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B16FA8243019237A7638B76 /* TrailersModels.swift */; };
+		DA9A166AED07EB84DB14BA76 /* WatchCompanion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49E55D2D281781288D3567DC /* WatchCompanion.swift */; };
+		DB1D4E0BA2059B9F64FD2DB9 /* SportsPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54132E01D5B3C0A8ABEE63EF /* SportsPresentation.swift */; };
 		DB7D896D4144893819D4FA3F /* OfflineLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D285970E9B54011DA8C30BA /* OfflineLibrary.swift */; };
 		DC032D9013CC21C8F3B87E03 /* NativeIntegrations.swift in Sources */ = {isa = PBXBuildFile; fileRef = E63091525FC2417A600865C5 /* NativeIntegrations.swift */; };
+		DC8075DF90C6A023CF56C524 /* AuthorizedUse.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BDDAA60743495AF5D9F39A5 /* AuthorizedUse.swift */; };
+		DCCF2FBE23178949E88CD057 /* NativeLegalText.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0C62959371831E8F25A2161 /* NativeLegalText.swift */; };
+		DCDE9E29569A8E8BE797D593 /* TrailersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5FAAF9EEEE8712CF7973FC1 /* TrailersTests.swift */; };
+		DDCB363D61718146B31E630D /* IrohSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49DB857C424585BC6F92237 /* IrohSettings.swift */; };
+		DE008E2D960E024E262F8937 /* WatchCompanion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49E55D2D281781288D3567DC /* WatchCompanion.swift */; };
+		DE917B8A3BF55EF837BE5C2A /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */; };
+		DF70C9CACBDA3ED82D013CFF /* BluefinApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCB87ECD3A2D26C375F3D55C /* BluefinApp.swift */; };
+		E02BDB5FA2EE40D2AE24EE49 /* NativeLibraryIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 197ECAABB535B43743CCB101 /* NativeLibraryIntents.swift */; };
+		E0AD3117873ABF4819A50671 /* CarPlayVideoSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */; };
+		E15DBFA331CA450312D9DBCB /* NativeLegalText.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0C62959371831E8F25A2161 /* NativeLegalText.swift */; };
 		E1741DB338EFF2799C9CA88A /* SharePlayContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C571608A3F14B07D357FF34 /* SharePlayContractTests.swift */; };
+		E1C1EF36C97FFB0D56B84675 /* NativeTitleSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B1F9CBDB9782B42D2EC439 /* NativeTitleSelection.swift */; };
+		E281313CA34EC7435C9666FD /* SportsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8F4534B3596F2D95F39EDB7 /* SportsStore.swift */; };
+		E32569446B24C7C33E7D5055 /* KaraokeTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4E81221A54AEF54BBBE5571 /* KaraokeTimeline.swift */; };
+		E3D2892F2225E71192B5997A /* NativeKaraokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4951D96A1B8535945F7F30B /* NativeKaraokeTests.swift */; };
 		E3F44E94DABB3CB5E3C79903 /* RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706B3CC35EBF8FE54AD7791A /* RustBridge.swift */; };
+		E411DFE70D68EEDAA2DA09B4 /* NativeAssetAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9079883C6976008F4733D1BC /* NativeAssetAdmission.swift */; };
+		E46FEB072887D375524C8E9F /* SportsDashboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD92C1DF1443AE0C88DD9DC /* SportsDashboard.swift */; };
+		E4B4A0D1C9C3DF6B184D5971 /* MusicPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */; };
+		E66AE7BC3FA591DE2892E703 /* NativeIntegrationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */; };
+		E75F2B0C2BEF5D5246BFFECC /* AudioQualityPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F661FDB4528C9FE378372F5 /* AudioQualityPolicy.swift */; };
+		E8193499DE465B87286BF7A1 /* KaraokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88046A0A0996133AAF5BEFED /* KaraokeTests.swift */; };
+		E89FECC1D038C3902041B6CD /* SportsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8F4534B3596F2D95F39EDB7 /* SportsStore.swift */; };
+		E8C90D1DC045DADE5DD19E9B /* AudioSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8510BA858AF05A7716E9F3AB /* AudioSettings.swift */; };
 		E8D400930AAFA800EE5DF18F /* AdaptiveNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F1E05FA54088CF8DE6C3607 /* AdaptiveNavigation.swift */; };
+		EA210813F84181D69F915DEF /* NativeHomeScenes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B93418762ED988465849B32 /* NativeHomeScenes.swift */; };
+		EA5C2238E6FABAF1A1EEB5A1 /* KaraokePreparationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1832D15539C2E2EA3C2B1EF /* KaraokePreparationModels.swift */; };
+		EA7BC265662C06603E9D40F7 /* KaraokeContinuityAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D7322B01463782B4656C7DD /* KaraokeContinuityAudio.swift */; };
 		EB65753346AEFB43AC116417 /* MusicDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = C161B9D616DEA7BA78CA3269 /* MusicDesign.swift */; };
+		EBBFEFD6AE60C3053BA983E7 /* WatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4A4EBB1E469987A3EB78192 /* WatchApp.swift */; };
+		ECB3D2907CABE701EB3FFEC2 /* NativeAudioDSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = E88CF800F2A3D9B8F0779C5B /* NativeAudioDSP.swift */; };
+		ECC8E1F69E00188A4AF7AE5B /* ProviderHandoffs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18FFDECE868BE15617A6FE95 /* ProviderHandoffs.swift */; };
 		ECF5BE8CED401BEFFED6AE1B /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = DBCDDCED380E226B8BA1540C /* PrivacyInfo.xcprivacy */; };
+		EE9447236818A1AE848FB9EB /* KaraokeMicrophone.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7334128659740C5E2692A24 /* KaraokeMicrophone.swift */; };
+		EF3D16707A5FD8797E720C4B /* KaraokeContinuityAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D7322B01463782B4656C7DD /* KaraokeContinuityAudio.swift */; };
+		EF46E4B5CE0CE0980A9CDB07 /* NativeIntegrations.swift in Sources */ = {isa = PBXBuildFile; fileRef = E63091525FC2417A600865C5 /* NativeIntegrations.swift */; };
+		F07F249C40FB09333C19273B /* SoftwareLicensesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA837F728DAB98C7BEE124A0 /* SoftwareLicensesView.swift */; };
+		F0EC2AC16C60EF166FFDDBC9 /* LiveGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFF2309B1CA75DF4B84355FB /* LiveGuide.swift */; };
+		F1D82CFB96B9FF6B6347A08F /* KaraokeMicrophone.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7334128659740C5E2692A24 /* KaraokeMicrophone.swift */; };
+		F2C870367A709AB0B20EC5BD /* NoticeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 477C7978C1AE9BC387EB87D8 /* NoticeStore.swift */; };
+		F386D47F8D61B72525EC0AF1 /* SoftwareLicensesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA837F728DAB98C7BEE124A0 /* SoftwareLicensesView.swift */; };
 		F3BB324981FD1223E3CEA605 /* LiveTV.swift in Sources */ = {isa = PBXBuildFile; fileRef = 982BE933C743D9BFA5CE7B37 /* LiveTV.swift */; };
+		F50D786DF28E64881CFA4AFA /* SportsDashboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD92C1DF1443AE0C88DD9DC /* SportsDashboard.swift */; };
+		F5AB554CCC67ED4ECCD18B2B /* ManagedPairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41418B5DDBBF2D43F8D7D23D /* ManagedPairingTests.swift */; };
+		F640F61AF5B5CE908A0A751C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF0280F112CF1BBC0F287DCD /* Assets.xcassets */; };
+		F693B483F31548C2F01472F7 /* NativeCarPlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */; };
+		F7750282BA108521F17157B9 /* SportsSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 723A92A154BA65DDC7BC4A16 /* SportsSettings.swift */; };
+		F7F7E0F313D2A609CBBEBE50 /* SportsFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65891F5D2882F27D8036F92D /* SportsFixtures.swift */; };
+		F88D15D644E966A0A99471F4 /* LiveTV.swift in Sources */ = {isa = PBXBuildFile; fileRef = 982BE933C743D9BFA5CE7B37 /* LiveTV.swift */; };
 		F8AEA80934F90BF2DC579F4B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF0280F112CF1BBC0F287DCD /* Assets.xcassets */; };
+		F922F8BEF4FA6E315324F5CD /* KaraokeAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D9BCFE68C5BB0A2D5703231 /* KaraokeAudio.swift */; };
+		F9280781519FE7346295A589 /* NativeAssetAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9079883C6976008F4733D1BC /* NativeAssetAdmission.swift */; };
 		F9807DCE4365D032A5506A98 /* NativePlaybackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55DBC4D89A5CC6B08F603BAE /* NativePlaybackTests.swift */; };
+		F9A1E7FE2AC77235EF2BAA7F /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86205CD24EF81DB4E0B3AE27 /* WidgetSnapshot.swift */; };
+		F9D554EE7EA3AEA5C93640AE /* ServerDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0211ABA63728B2203262877 /* ServerDiscovery.swift */; };
+		FA659AD510E10B25F14331B4 /* NativeTitleSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B1F9CBDB9782B42D2EC439 /* NativeTitleSelection.swift */; };
 		FB06B81496BE628C42868C34 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF0280F112CF1BBC0F287DCD /* Assets.xcassets */; };
+		FE4BEE1598281EBB49C93B10 /* MacCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2655BAD9B7451AA3EF4F4873 /* MacCommands.swift */; };
+		FFD2738E1795E33B6C0E49AE /* KaraokeContinuityControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA9373F7B92D2D2534278D6 /* KaraokeContinuityControls.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		0282451A32E1E20FD04DA0DD /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 31F430E3BC81A341F0AD88FA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A0861CBC345CC8F56B0005B7;
+			remoteInfo = BluefinWatch;
+		};
+		21068EE38080B7E028B26891 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 31F430E3BC81A341F0AD88FA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 27B8B171ADA03FD9537D2106;
+			remoteInfo = BluefinTopShelf;
+		};
 		3DB6336D77FFAD002D3BAFB6 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 31F430E3BC81A341F0AD88FA /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 849371161E39E4F01A2EE256;
 			remoteInfo = Bluefin;
+		};
+		847D28C670CD3ECBCEB16B12 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 31F430E3BC81A341F0AD88FA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9CEAABB2B9BDC6AD6ECE76A6;
+			remoteInfo = BluefinWidgets;
 		};
 		B51FCBB1DDBAD9D8560FBCB3 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -126,61 +387,155 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		041EDEE4A36D98C1EA7D1430 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				060220EE098F65E79A762ABE /* BluefinTopShelf.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1696CDA91EEFB8873A0C4E89 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				ABFA23B020F37858E358626A /* BluefinWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		73F74DDD7F4D76C87FEFB146 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				D3C8C699F1BBB441954C9769 /* BluefinWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeAssistant.swift; sourceTree = "<group>"; };
+		05B1F9CBDB9782B42D2EC439 /* NativeTitleSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTitleSelection.swift; sourceTree = "<group>"; };
 		0C571608A3F14B07D357FF34 /* SharePlayContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharePlayContractTests.swift; sourceTree = "<group>"; };
 		0CCE1271A6DE0258BD662552 /* BluefinTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BluefinTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0EB832273C3F7049A4B0DAC8 /* AdaptiveLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveLayoutTests.swift; sourceTree = "<group>"; };
 		151BD9B36DBFDD44A247108B /* BluefinStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluefinStyle.swift; sourceTree = "<group>"; };
+		155E66BAE65FFEDA035F2A6A /* KaraokePreparationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaraokePreparationTests.swift; sourceTree = "<group>"; };
 		18FFDECE868BE15617A6FE95 /* ProviderHandoffs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderHandoffs.swift; sourceTree = "<group>"; };
+		197ECAABB535B43743CCB101 /* NativeLibraryIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeLibraryIntents.swift; sourceTree = "<group>"; };
+		1B6D5A21FCA99A791B62AC27 /* BluefinVision.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BluefinVision.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1B93418762ED988465849B32 /* NativeHomeScenes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeHomeScenes.swift; sourceTree = "<group>"; };
+		1BD92C1DF1443AE0C88DD9DC /* SportsDashboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SportsDashboard.swift; sourceTree = "<group>"; };
 		1BDDAA60743495AF5D9F39A5 /* AuthorizedUse.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthorizedUse.swift; sourceTree = "<group>"; };
 		1D2F8939E26D2C4764EFF44E /* BluefinTV.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BluefinTV.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1D9BCFE68C5BB0A2D5703231 /* KaraokeAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaraokeAudio.swift; sourceTree = "<group>"; };
+		204622CF419E90AE72B82059 /* TVTopShelf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVTopShelf.swift; sourceTree = "<group>"; };
+		2655BAD9B7451AA3EF4F4873 /* MacCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCommands.swift; sourceTree = "<group>"; };
 		26BD4A8C5AB4CFEA96586328 /* BluefinOceanStudy.mp4 */ = {isa = PBXFileReference; path = BluefinOceanStudy.mp4; sourceTree = "<group>"; };
 		26DED8DE60C9EF16484D7401 /* PlaybackLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackLifecycle.swift; sourceTree = "<group>"; };
 		28DA06E996BD91035921718F /* PreviewArtwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewArtwork.swift; sourceTree = "<group>"; };
 		2DE689159E4853343AA651D0 /* LibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryStore.swift; sourceTree = "<group>"; };
 		2FF25D78AA631E5A41B8B313 /* Artwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Artwork.swift; sourceTree = "<group>"; };
+		30BB216A32E9D03C0DF699C7 /* WatchAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAPI.swift; sourceTree = "<group>"; };
 		3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeSharePlay.swift; sourceTree = "<group>"; };
+		3283CBFB68059E09887B7B5D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCarPlay.swift; sourceTree = "<group>"; };
 		3732B4D57D5C67E6EF478440 /* Sports.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sports.swift; sourceTree = "<group>"; };
+		3A52F31A8E806B3BB3C273E1 /* SportsModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SportsModels.swift; sourceTree = "<group>"; };
+		3AC307A2AB31A4292FF97B88 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		3D285970E9B54011DA8C30BA /* OfflineLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineLibrary.swift; sourceTree = "<group>"; };
+		3D7322B01463782B4656C7DD /* KaraokeContinuityAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaraokeContinuityAudio.swift; sourceTree = "<group>"; };
+		3DE116ED3D8575226DD2B37A /* BluefinMac.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BluefinMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3F661FDB4528C9FE378372F5 /* AudioQualityPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioQualityPolicy.swift; sourceTree = "<group>"; };
+		41418B5DDBBF2D43F8D7D23D /* ManagedPairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagedPairingTests.swift; sourceTree = "<group>"; };
 		45454C11F9CB4E0BF62FAEBF /* PlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackController.swift; sourceTree = "<group>"; };
+		477C7978C1AE9BC387EB87D8 /* NoticeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoticeStore.swift; sourceTree = "<group>"; };
+		49E55D2D281781288D3567DC /* WatchCompanion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchCompanion.swift; sourceTree = "<group>"; };
+		4B16FA8243019237A7638B76 /* TrailersModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrailersModels.swift; sourceTree = "<group>"; };
 		4C53CB77C1078300B3B71D7A /* CarPlayVideoSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlayVideoSupport.swift; sourceTree = "<group>"; };
+		4F18BB501B54B3886D122ABD /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		4F5B920A78E13647FCE304AF /* KaraokeLyricsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaraokeLyricsView.swift; sourceTree = "<group>"; };
+		54132E01D5B3C0A8ABEE63EF /* SportsPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SportsPresentation.swift; sourceTree = "<group>"; };
 		5534EB0309DF3248B8DD64A6 /* MusicPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicPlayer.swift; sourceTree = "<group>"; };
+		55C98B75EF73AC1DF1E3E765 /* TopShelfSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopShelfSnapshot.swift; sourceTree = "<group>"; };
 		55DBC4D89A5CC6B08F603BAE /* NativePlaybackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlaybackTests.swift; sourceTree = "<group>"; };
+		57069BF89FC51AA9192B0DDC /* NativeServerModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeServerModelTests.swift; sourceTree = "<group>"; };
 		5BB5CBF94C7858BB4CC72B30 /* Bluefin.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Bluefin.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5C0AC1EF31245B10EB1D21D0 /* KaraokeContinuityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaraokeContinuityTests.swift; sourceTree = "<group>"; };
+		5C56989D464766D147D9C451 /* WatchLibraryIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchLibraryIntents.swift; sourceTree = "<group>"; };
+		5CE27F3EB6C348614EEBDCB4 /* ManagedPairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagedPairing.swift; sourceTree = "<group>"; };
 		5FAC5D92CC21A4DF2B39C342 /* NativePlaybackFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlaybackFixtures.swift; sourceTree = "<group>"; };
 		6006E519D52C7EBC295D8FB0 /* BluefinTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluefinTests.swift; sourceTree = "<group>"; };
+		65891F5D2882F27D8036F92D /* SportsFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SportsFixtures.swift; sourceTree = "<group>"; };
 		6EF67BEB99190D727348048F /* BluefinTVTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BluefinTVTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		706B3CC35EBF8FE54AD7791A /* RustBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustBridge.swift; sourceTree = "<group>"; };
+		723A92A154BA65DDC7BC4A16 /* SportsSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SportsSettings.swift; sourceTree = "<group>"; };
 		79B40C813F78E1CD75D9520B /* BluefinAudioCheck.m4a */ = {isa = PBXFileReference; path = BluefinAudioCheck.m4a; sourceTree = "<group>"; };
 		8004301C4A8B9B7CF56DB3F4 /* CoreAdmission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreAdmission.swift; sourceTree = "<group>"; };
 		8510BA858AF05A7716E9F3AB /* AudioSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSettings.swift; sourceTree = "<group>"; };
+		86205CD24EF81DB4E0B3AE27 /* WidgetSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshot.swift; sourceTree = "<group>"; };
+		865750C407640DAF0D4571F7 /* BluefinWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = BluefinWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		88046A0A0996133AAF5BEFED /* KaraokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaraokeTests.swift; sourceTree = "<group>"; };
+		8B9BE6359C39645FC464E057 /* TrailersViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrailersViews.swift; sourceTree = "<group>"; };
 		8F1E05FA54088CF8DE6C3607 /* AdaptiveNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveNavigation.swift; sourceTree = "<group>"; };
 		9079883C6976008F4733D1BC /* NativeAssetAdmission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAssetAdmission.swift; sourceTree = "<group>"; };
+		91A5BCC153DF517499560FE0 /* BluefinWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluefinWidgets.swift; sourceTree = "<group>"; };
+		9423B7E30E32E3D9DA203F0C /* WatchLeaseLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchLeaseLifecycle.swift; sourceTree = "<group>"; };
 		982BE933C743D9BFA5CE7B37 /* LiveTV.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTV.swift; sourceTree = "<group>"; };
+		9EA9373F7B92D2D2534278D6 /* KaraokeContinuityControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaraokeContinuityControls.swift; sourceTree = "<group>"; };
+		A0211ABA63728B2203262877 /* ServerDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerDiscovery.swift; sourceTree = "<group>"; };
+		A2D742B2E28DA043D85885BF /* WidgetRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetRoute.swift; sourceTree = "<group>"; };
+		A4E81221A54AEF54BBBE5571 /* KaraokeTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaraokeTimeline.swift; sourceTree = "<group>"; };
 		A869924D1D322649B8E44112 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		AD4BCBF72AAF97F87A0DEA95 /* UnifiedSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedSearchTests.swift; sourceTree = "<group>"; };
 		AFF2309B1CA75DF4B84355FB /* LiveGuide.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveGuide.swift; sourceTree = "<group>"; };
 		B05A1285A0067A18352B95F1 /* UnifiedSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedSearch.swift; sourceTree = "<group>"; };
+		B1832D15539C2E2EA3C2B1EF /* KaraokePreparationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaraokePreparationModels.swift; sourceTree = "<group>"; };
 		B28593266A15D0DCF100B3A1 /* AudioQuality.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioQuality.swift; sourceTree = "<group>"; };
 		B49DB857C424585BC6F92237 /* IrohSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohSettings.swift; sourceTree = "<group>"; };
 		B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeIntegrationActions.swift; sourceTree = "<group>"; };
+		B7334128659740C5E2692A24 /* KaraokeMicrophone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaraokeMicrophone.swift; sourceTree = "<group>"; };
 		B85C15446CBCC5BD594B4205 /* NativeShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeShortcuts.swift; sourceTree = "<group>"; };
+		BEEE1BC82779FF018C4635A6 /* VisionPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionPlatform.swift; sourceTree = "<group>"; };
+		C138515A395BFA1379042EF8 /* BluefinWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BluefinWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C161B9D616DEA7BA78CA3269 /* MusicDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicDesign.swift; sourceTree = "<group>"; };
+		C28C34F2C31ABDF4F724ACEF /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		C2DFA2F71A88876FFAE99094 /* NativePlaybackHTTP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlaybackHTTP.swift; sourceTree = "<group>"; };
+		C4951D96A1B8535945F7F30B /* NativeKaraokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeKaraokeTests.swift; sourceTree = "<group>"; };
+		C5C95D5F584416E8DDF1A826 /* BluefinTopShelf.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = BluefinTopShelf.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C687D323B772AA3B1A871B01 /* KaraokeContinuityLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaraokeContinuityLifecycle.swift; sourceTree = "<group>"; };
 		C8408F8A6A7152DBA9996513 /* VideoOptions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoOptions.swift; sourceTree = "<group>"; };
 		CCB87ECD3A2D26C375F3D55C /* BluefinApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluefinApp.swift; sourceTree = "<group>"; };
 		CF41EA8217CC01ED78F5B230 /* MusicExtras.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicExtras.swift; sourceTree = "<group>"; };
 		D006ABB8323A0134B9F3E64C /* MusicLibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicLibraryModel.swift; sourceTree = "<group>"; };
 		D378DA698DCFE1A5912537BD /* NativeFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeFormatTests.swift; sourceTree = "<group>"; };
+		D4A4EBB1E469987A3EB78192 /* WatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchApp.swift; sourceTree = "<group>"; };
 		D4C44FD13474EB0877DF6C6B /* Rust-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Rust-Bridging-Header.h"; sourceTree = "<group>"; };
 		D64C602C6429167CD4DF0ACF /* ProviderHandoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderHandoffTests.swift; sourceTree = "<group>"; };
+		D9CD53432470C683D2F4E878 /* ContentProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentProvider.swift; sourceTree = "<group>"; };
+		DA965C7003B2CD5A408C2903 /* KaraokePreparation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaraokePreparation.swift; sourceTree = "<group>"; };
 		DBCDDCED380E226B8BA1540C /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		DF0280F112CF1BBC0F287DCD /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E0C62959371831E8F25A2161 /* NativeLegalText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeLegalText.swift; sourceTree = "<group>"; };
 		E63091525FC2417A600865C5 /* NativeIntegrations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeIntegrations.swift; sourceTree = "<group>"; };
 		E88CF800F2A3D9B8F0779C5B /* NativeAudioDSP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAudioDSP.swift; sourceTree = "<group>"; };
+		E92A57ECD46DFF66059C2CC2 /* SportsStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SportsStoreTests.swift; sourceTree = "<group>"; };
+		EA793EB36B1D8E01F4C255B1 /* NoticeViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoticeViews.swift; sourceTree = "<group>"; };
+		F593F80CA8D70A19A7254966 /* WatchCompanionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchCompanionTests.swift; sourceTree = "<group>"; };
+		F5FAAF9EEEE8712CF7973FC1 /* TrailersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrailersTests.swift; sourceTree = "<group>"; };
+		F8F4534B3596F2D95F39EDB7 /* SportsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SportsStore.swift; sourceTree = "<group>"; };
+		FA08FC051213BA0AAC530C4F /* SportsPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SportsPresentationTests.swift; sourceTree = "<group>"; };
+		FA837F728DAB98C7BEE124A0 /* SoftwareLicensesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoftwareLicensesView.swift; sourceTree = "<group>"; };
 		FE2460776A20B4FB7A2F4B5B /* NativeServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeServer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -189,24 +544,78 @@
 			isa = PBXGroup;
 			children = (
 				5BB5CBF94C7858BB4CC72B30 /* Bluefin.app */,
+				3DE116ED3D8575226DD2B37A /* BluefinMac.app */,
 				0CCE1271A6DE0258BD662552 /* BluefinTests.xctest */,
+				C5C95D5F584416E8DDF1A826 /* BluefinTopShelf.appex */,
 				1D2F8939E26D2C4764EFF44E /* BluefinTV.app */,
 				6EF67BEB99190D727348048F /* BluefinTVTests.xctest */,
+				1B6D5A21FCA99A791B62AC27 /* BluefinVision.app */,
+				C138515A395BFA1379042EF8 /* BluefinWatch.app */,
+				865750C407640DAF0D4571F7 /* BluefinWidgets.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		1F85304C9FD2F14C2BAA7EBF /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				3AC307A2AB31A4292FF97B88 /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		26B806492D974D6807AF9FE2 /* TopShelf */ = {
+			isa = PBXGroup;
+			children = (
+				D9CD53432470C683D2F4E878 /* ContentProvider.swift */,
+				55C98B75EF73AC1DF1E3E765 /* TopShelfSnapshot.swift */,
+			);
+			path = TopShelf;
 			sourceTree = "<group>";
 		};
 		2CDC2273B593A8B10A260DF0 /* Integrations */ = {
 			isa = PBXGroup;
 			children = (
+				5CE27F3EB6C348614EEBDCB4 /* ManagedPairing.swift */,
 				33046DDF5C75F9DF541600F7 /* NativeCarPlay.swift */,
 				1B93418762ED988465849B32 /* NativeHomeScenes.swift */,
 				B503551C38AD609E7BD07089 /* NativeIntegrationActions.swift */,
 				E63091525FC2417A600865C5 /* NativeIntegrations.swift */,
+				197ECAABB535B43743CCB101 /* NativeLibraryIntents.swift */,
 				3104C96D3C2DC37ADB453241 /* NativeSharePlay.swift */,
 				B85C15446CBCC5BD594B4205 /* NativeShortcuts.swift */,
+				05B1F9CBDB9782B42D2EC439 /* NativeTitleSelection.swift */,
+				49E55D2D281781288D3567DC /* WatchCompanion.swift */,
 			);
 			path = Integrations;
+			sourceTree = "<group>";
+		};
+		2CE3C5FB7B07F1761318F874 /* Legal */ = {
+			isa = PBXGroup;
+			children = (
+				E0C62959371831E8F25A2161 /* NativeLegalText.swift */,
+				477C7978C1AE9BC387EB87D8 /* NoticeStore.swift */,
+				EA793EB36B1D8E01F4C255B1 /* NoticeViews.swift */,
+				FA837F728DAB98C7BEE124A0 /* SoftwareLicensesView.swift */,
+			);
+			path = Legal;
+			sourceTree = "<group>";
+		};
+		30C1C0D756BA0A7C8E3D0E96 /* Vision */ = {
+			isa = PBXGroup;
+			children = (
+				BEEE1BC82779FF018C4635A6 /* VisionPlatform.swift */,
+				E663EEC24D00A933CE541895 /* Resources */,
+			);
+			path = Vision;
+			sourceTree = "<group>";
+		};
+		34C6A77A651F71C5541DF818 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				4F18BB501B54B3886D122ABD /* Assets.xcassets */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		4CAAEC7D10C92CEB296964A1 /* Tests */ = {
@@ -214,15 +623,49 @@
 			children = (
 				0EB832273C3F7049A4B0DAC8 /* AdaptiveLayoutTests.swift */,
 				6006E519D52C7EBC295D8FB0 /* BluefinTests.swift */,
+				5C0AC1EF31245B10EB1D21D0 /* KaraokeContinuityTests.swift */,
+				155E66BAE65FFEDA035F2A6A /* KaraokePreparationTests.swift */,
+				88046A0A0996133AAF5BEFED /* KaraokeTests.swift */,
+				41418B5DDBBF2D43F8D7D23D /* ManagedPairingTests.swift */,
 				D378DA698DCFE1A5912537BD /* NativeFormatTests.swift */,
+				C4951D96A1B8535945F7F30B /* NativeKaraokeTests.swift */,
 				5FAC5D92CC21A4DF2B39C342 /* NativePlaybackFixtures.swift */,
 				C2DFA2F71A88876FFAE99094 /* NativePlaybackHTTP.swift */,
 				55DBC4D89A5CC6B08F603BAE /* NativePlaybackTests.swift */,
+				57069BF89FC51AA9192B0DDC /* NativeServerModelTests.swift */,
 				D64C602C6429167CD4DF0ACF /* ProviderHandoffTests.swift */,
 				0C571608A3F14B07D357FF34 /* SharePlayContractTests.swift */,
+				65891F5D2882F27D8036F92D /* SportsFixtures.swift */,
+				FA08FC051213BA0AAC530C4F /* SportsPresentationTests.swift */,
+				E92A57ECD46DFF66059C2CC2 /* SportsStoreTests.swift */,
+				F5FAAF9EEEE8712CF7973FC1 /* TrailersTests.swift */,
 				AD4BCBF72AAF97F87A0DEA95 /* UnifiedSearchTests.swift */,
+				F593F80CA8D70A19A7254966 /* WatchCompanionTests.swift */,
 			);
 			path = Tests;
+			sourceTree = "<group>";
+		};
+		7D02A8DAAA895A45BAB8E2B4 /* Widgets */ = {
+			isa = PBXGroup;
+			children = (
+				91A5BCC153DF517499560FE0 /* BluefinWidgets.swift */,
+				C28C34F2C31ABDF4F724ACEF /* PrivacyInfo.xcprivacy */,
+				A2D742B2E28DA043D85885BF /* WidgetRoute.swift */,
+				86205CD24EF81DB4E0B3AE27 /* WidgetSnapshot.swift */,
+			);
+			path = Widgets;
+			sourceTree = "<group>";
+		};
+		830864C5CA4842C8A25530AA /* Watch */ = {
+			isa = PBXGroup;
+			children = (
+				30BB216A32E9D03C0DF699C7 /* WatchAPI.swift */,
+				D4A4EBB1E469987A3EB78192 /* WatchApp.swift */,
+				9423B7E30E32E3D9DA203F0C /* WatchLeaseLifecycle.swift */,
+				5C56989D464766D147D9C451 /* WatchLibraryIntents.swift */,
+				1F85304C9FD2F14C2BAA7EBF /* Resources */,
+			);
+			path = Watch;
 			sourceTree = "<group>";
 		};
 		8745C439D6AE038E0C54B999 /* Sources */ = {
@@ -231,6 +674,7 @@
 				8F1E05FA54088CF8DE6C3607 /* AdaptiveNavigation.swift */,
 				2FF25D78AA631E5A41B8B313 /* Artwork.swift */,
 				B28593266A15D0DCF100B3A1 /* AudioQuality.swift */,
+				3F661FDB4528C9FE378372F5 /* AudioQualityPolicy.swift */,
 				8510BA858AF05A7716E9F3AB /* AudioSettings.swift */,
 				1BDDAA60743495AF5D9F39A5 /* AuthorizedUse.swift */,
 				CCB87ECD3A2D26C375F3D55C /* BluefinApp.swift */,
@@ -239,6 +683,15 @@
 				8004301C4A8B9B7CF56DB3F4 /* CoreAdmission.swift */,
 				056DC1B10B8679BB4BFF9872 /* HomeAssistant.swift */,
 				B49DB857C424585BC6F92237 /* IrohSettings.swift */,
+				1D9BCFE68C5BB0A2D5703231 /* KaraokeAudio.swift */,
+				3D7322B01463782B4656C7DD /* KaraokeContinuityAudio.swift */,
+				9EA9373F7B92D2D2534278D6 /* KaraokeContinuityControls.swift */,
+				C687D323B772AA3B1A871B01 /* KaraokeContinuityLifecycle.swift */,
+				4F5B920A78E13647FCE304AF /* KaraokeLyricsView.swift */,
+				B7334128659740C5E2692A24 /* KaraokeMicrophone.swift */,
+				DA965C7003B2CD5A408C2903 /* KaraokePreparation.swift */,
+				B1832D15539C2E2EA3C2B1EF /* KaraokePreparationModels.swift */,
+				A4E81221A54AEF54BBBE5571 /* KaraokeTimeline.swift */,
 				2DE689159E4853343AA651D0 /* LibraryStore.swift */,
 				AFF2309B1CA75DF4B84355FB /* LiveGuide.swift */,
 				982BE933C743D9BFA5CE7B37 /* LiveTV.swift */,
@@ -257,10 +710,20 @@
 				18FFDECE868BE15617A6FE95 /* ProviderHandoffs.swift */,
 				D4C44FD13474EB0877DF6C6B /* Rust-Bridging-Header.h */,
 				706B3CC35EBF8FE54AD7791A /* RustBridge.swift */,
+				A0211ABA63728B2203262877 /* ServerDiscovery.swift */,
 				3732B4D57D5C67E6EF478440 /* Sports.swift */,
+				1BD92C1DF1443AE0C88DD9DC /* SportsDashboard.swift */,
+				3A52F31A8E806B3BB3C273E1 /* SportsModels.swift */,
+				54132E01D5B3C0A8ABEE63EF /* SportsPresentation.swift */,
+				723A92A154BA65DDC7BC4A16 /* SportsSettings.swift */,
+				F8F4534B3596F2D95F39EDB7 /* SportsStore.swift */,
+				4B16FA8243019237A7638B76 /* TrailersModels.swift */,
+				8B9BE6359C39645FC464E057 /* TrailersViews.swift */,
+				204622CF419E90AE72B82059 /* TVTopShelf.swift */,
 				B05A1285A0067A18352B95F1 /* UnifiedSearch.swift */,
 				C8408F8A6A7152DBA9996513 /* VideoOptions.swift */,
 				2CDC2273B593A8B10A260DF0 /* Integrations */,
+				2CE3C5FB7B07F1761318F874 /* Legal */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -277,11 +740,33 @@
 		DDA6AAC87DCD92DC88E74B94 = {
 			isa = PBXGroup;
 			children = (
+				F94BC1C5452C6A74B0966B5E /* Mac */,
 				FEBDE78B6FE928B778A92632 /* Resources */,
 				8745C439D6AE038E0C54B999 /* Sources */,
 				4CAAEC7D10C92CEB296964A1 /* Tests */,
+				26B806492D974D6807AF9FE2 /* TopShelf */,
+				30C1C0D756BA0A7C8E3D0E96 /* Vision */,
+				830864C5CA4842C8A25530AA /* Watch */,
+				7D02A8DAAA895A45BAB8E2B4 /* Widgets */,
 				08E70717C5EBD5CED0FDEA60 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		E663EEC24D00A933CE541895 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				3283CBFB68059E09887B7B5D /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		F94BC1C5452C6A74B0966B5E /* Mac */ = {
+			isa = PBXGroup;
+			children = (
+				2655BAD9B7451AA3EF4F4873 /* MacCommands.swift */,
+				34C6A77A651F71C5541DF818 /* Resources */,
+			);
+			path = Mac;
 			sourceTree = "<group>";
 		};
 		FEBDE78B6FE928B778A92632 /* Resources */ = {
@@ -297,16 +782,57 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		849371161E39E4F01A2EE256 /* Bluefin */ = {
+		27B8B171ADA03FD9537D2106 /* BluefinTopShelf */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 0696E6354027B23F5B031018 /* Build configuration list for PBXNativeTarget "Bluefin" */;
+			buildConfigurationList = 213A1A265C6CB40282F19FCF /* Build configuration list for PBXNativeTarget "BluefinTopShelf" */;
 			buildPhases = (
-				8E7D9BE6295542A23A4221C6 /* Sources */,
-				0374142DD80BB427DD3B65C7 /* Resources */,
+				F6FB18F8E9DDD15C4F56DDC2 /* Sources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+			);
+			name = BluefinTopShelf;
+			packageProductDependencies = (
+			);
+			productName = BluefinTopShelf;
+			productReference = C5C95D5F584416E8DDF1A826 /* BluefinTopShelf.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		72D01775852AC7BD393F3379 /* BluefinVision */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7EB4819F09A800E0A8B42917 /* Build configuration list for PBXNativeTarget "BluefinVision" */;
+			buildPhases = (
+				B219BE8BDBBFF5267F97213D /* Stage local license resources */,
+				42BF9B52F3A55573AAF03C7C /* Sources */,
+				7E9D26832D86E8659F112000 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BluefinVision;
+			packageProductDependencies = (
+			);
+			productName = BluefinVision;
+			productReference = 1B6D5A21FCA99A791B62AC27 /* BluefinVision.app */;
+			productType = "com.apple.product-type.application";
+		};
+		849371161E39E4F01A2EE256 /* Bluefin */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0696E6354027B23F5B031018 /* Build configuration list for PBXNativeTarget "Bluefin" */;
+			buildPhases = (
+				90C7402DE893A1EE2DD4AC36 /* Stage local license resources */,
+				8E7D9BE6295542A23A4221C6 /* Sources */,
+				0374142DD80BB427DD3B65C7 /* Resources */,
+				1696CDA91EEFB8873A0C4E89 /* Embed Foundation Extensions */,
+				73F74DDD7F4D76C87FEFB146 /* Embed Watch Content */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				794809F18F3056AF64A465BC /* PBXTargetDependency */,
+				EF7A2046785E62E7425D8FB7 /* PBXTargetDependency */,
 			);
 			name = Bluefin;
 			packageProductDependencies = (
@@ -351,22 +877,81 @@
 			productReference = 6EF67BEB99190D727348048F /* BluefinTVTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		D28C5500C7E1F6999264A194 /* BluefinTV */ = {
+		9CEAABB2B9BDC6AD6ECE76A6 /* BluefinWidgets */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 27B345ABC91872B64860D77C /* Build configuration list for PBXNativeTarget "BluefinTV" */;
+			buildConfigurationList = CC7719D918B295B32A293A9F /* Build configuration list for PBXNativeTarget "BluefinWidgets" */;
 			buildPhases = (
-				38B3B7FA59E2AF2B5EF183E9 /* Sources */,
-				C10A3ABE2679808BBC27FB75 /* Resources */,
+				D30D4C2502A1CC4C509630C0 /* Sources */,
+				E9E1951ADEF5266D7C9C1430 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+			);
+			name = BluefinWidgets;
+			packageProductDependencies = (
+			);
+			productName = BluefinWidgets;
+			productReference = 865750C407640DAF0D4571F7 /* BluefinWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		A0861CBC345CC8F56B0005B7 /* BluefinWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0C517C4A916AC26577ECFB15 /* Build configuration list for PBXNativeTarget "BluefinWatch" */;
+			buildPhases = (
+				47A9B93CA72271480F076FB7 /* Stage local license resources */,
+				F09C8E8C4852AAA7DB93FF6D /* Sources */,
+				C4F3AFA69F85C81FBCB760A2 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BluefinWatch;
+			packageProductDependencies = (
+			);
+			productName = BluefinWatch;
+			productReference = C138515A395BFA1379042EF8 /* BluefinWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
+		D28C5500C7E1F6999264A194 /* BluefinTV */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 27B345ABC91872B64860D77C /* Build configuration list for PBXNativeTarget "BluefinTV" */;
+			buildPhases = (
+				6E68D6D774C7430CC70AAC4B /* Stage local license resources */,
+				38B3B7FA59E2AF2B5EF183E9 /* Sources */,
+				C10A3ABE2679808BBC27FB75 /* Resources */,
+				041EDEE4A36D98C1EA7D1430 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B9C66FBC8C7D665129C847F6 /* PBXTargetDependency */,
 			);
 			name = BluefinTV;
 			packageProductDependencies = (
 			);
 			productName = BluefinTV;
 			productReference = 1D2F8939E26D2C4764EFF44E /* BluefinTV.app */;
+			productType = "com.apple.product-type.application";
+		};
+		E5D7F1AC00F7B44B2635711D /* BluefinMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6E51A2F9DFDB719E3B0CC8BB /* Build configuration list for PBXNativeTarget "BluefinMac" */;
+			buildPhases = (
+				50DA55792F133869FA9937AF /* Stage local license resources */,
+				1DD276936C189961D13019FC /* Sources */,
+				58918C710D1CA61361F86360 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BluefinMac;
+			packageProductDependencies = (
+			);
+			productName = BluefinMac;
+			productReference = 3DE116ED3D8575226DD2B37A /* BluefinMac.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -378,6 +963,12 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					27B8B171ADA03FD9537D2106 = {
+						ProvisioningStyle = Automatic;
+					};
+					72D01775852AC7BD393F3379 = {
+						ProvisioningStyle = Automatic;
+					};
 					849371161E39E4F01A2EE256 = {
 						ProvisioningStyle = Automatic;
 					};
@@ -387,7 +978,16 @@
 					98419E2430DA686936DC03AC = {
 						ProvisioningStyle = Automatic;
 					};
+					9CEAABB2B9BDC6AD6ECE76A6 = {
+						ProvisioningStyle = Automatic;
+					};
+					A0861CBC345CC8F56B0005B7 = {
+						ProvisioningStyle = Automatic;
+					};
 					D28C5500C7E1F6999264A194 = {
+						ProvisioningStyle = Automatic;
+					};
+					E5D7F1AC00F7B44B2635711D = {
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -407,7 +1007,12 @@
 			projectRoot = "";
 			targets = (
 				849371161E39E4F01A2EE256 /* Bluefin */,
+				9CEAABB2B9BDC6AD6ECE76A6 /* BluefinWidgets */,
 				D28C5500C7E1F6999264A194 /* BluefinTV */,
+				27B8B171ADA03FD9537D2106 /* BluefinTopShelf */,
+				E5D7F1AC00F7B44B2635711D /* BluefinMac */,
+				72D01775852AC7BD393F3379 /* BluefinVision */,
+				A0861CBC345CC8F56B0005B7 /* BluefinWatch */,
 				949B664ECC2F92B8B8729FDF /* BluefinTests */,
 				98419E2430DA686936DC03AC /* BluefinTVTests */,
 			);
@@ -426,6 +1031,30 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		58918C710D1CA61361F86360 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				04668CCD9A998EA3B5F7C7A0 /* Assets.xcassets in Resources */,
+				F640F61AF5B5CE908A0A751C /* Assets.xcassets in Resources */,
+				1E986CB3842D854206F59509 /* BluefinAudioCheck.m4a in Resources */,
+				9EB46946AFAC10FC5C659F76 /* BluefinOceanStudy.mp4 in Resources */,
+				75DBCA87A84D52BC0C02A0D0 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7E9D26832D86E8659F112000 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4668420625F1FD7EE3704BB0 /* Assets.xcassets in Resources */,
+				0A6CA706E27E1CB67445E44C /* Assets.xcassets in Resources */,
+				91C66B72EABC0B5B8318044E /* BluefinAudioCheck.m4a in Resources */,
+				C06EDA64E3A264BB1FB56BAA /* BluefinOceanStudy.mp4 in Resources */,
+				D7AB5AB67493D8FD2F5D5C90 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C10A3ABE2679808BBC27FB75 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -437,9 +1066,215 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C4F3AFA69F85C81FBCB760A2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D46D9435EADD95493A4528A5 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E9E1951ADEF5266D7C9C1430 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				26492C577C678C13344E54BE /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		47A9B93CA72271480F076FB7 /* Stage local license resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"$(BLUEFIN_LEGAL_FILELIST_DIR)/$(PLATFORM_NAME).inputs.xcfilelist",
+			);
+			inputPaths = (
+				"$(BLUEFIN_LEGAL_RESOURCES_TOOL)",
+				"$(SRCROOT)/../../docs/legal/bluefin-clients",
+			);
+			name = "Stage local license resources";
+			outputFileListPaths = (
+				"$(BLUEFIN_LEGAL_FILELIST_DIR)/$(PLATFORM_NAME).outputs.xcfilelist",
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${BLUEFIN_LEGAL_RESOURCES_TOOL}\" --xcode \"${SRCROOT}/../../docs/legal/bluefin-clients\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Legal\"\n";
+		};
+		50DA55792F133869FA9937AF /* Stage local license resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"$(BLUEFIN_LEGAL_FILELIST_DIR)/$(PLATFORM_NAME).inputs.xcfilelist",
+			);
+			inputPaths = (
+				"$(BLUEFIN_LEGAL_RESOURCES_TOOL)",
+				"$(SRCROOT)/../../docs/legal/bluefin-clients",
+			);
+			name = "Stage local license resources";
+			outputFileListPaths = (
+				"$(BLUEFIN_LEGAL_FILELIST_DIR)/$(PLATFORM_NAME).outputs.xcfilelist",
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${BLUEFIN_LEGAL_RESOURCES_TOOL}\" --xcode \"${SRCROOT}/../../docs/legal/bluefin-clients\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Legal\"\n";
+		};
+		6E68D6D774C7430CC70AAC4B /* Stage local license resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"$(BLUEFIN_LEGAL_FILELIST_DIR)/$(PLATFORM_NAME).inputs.xcfilelist",
+			);
+			inputPaths = (
+				"$(BLUEFIN_LEGAL_RESOURCES_TOOL)",
+				"$(SRCROOT)/../../docs/legal/bluefin-clients",
+			);
+			name = "Stage local license resources";
+			outputFileListPaths = (
+				"$(BLUEFIN_LEGAL_FILELIST_DIR)/$(PLATFORM_NAME).outputs.xcfilelist",
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${BLUEFIN_LEGAL_RESOURCES_TOOL}\" --xcode \"${SRCROOT}/../../docs/legal/bluefin-clients\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Legal\"\n";
+		};
+		90C7402DE893A1EE2DD4AC36 /* Stage local license resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"$(BLUEFIN_LEGAL_FILELIST_DIR)/$(PLATFORM_NAME).inputs.xcfilelist",
+			);
+			inputPaths = (
+				"$(BLUEFIN_LEGAL_RESOURCES_TOOL)",
+				"$(SRCROOT)/../../docs/legal/bluefin-clients",
+			);
+			name = "Stage local license resources";
+			outputFileListPaths = (
+				"$(BLUEFIN_LEGAL_FILELIST_DIR)/$(PLATFORM_NAME).outputs.xcfilelist",
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${BLUEFIN_LEGAL_RESOURCES_TOOL}\" --xcode \"${SRCROOT}/../../docs/legal/bluefin-clients\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Legal\"\n";
+		};
+		B219BE8BDBBFF5267F97213D /* Stage local license resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"$(BLUEFIN_LEGAL_FILELIST_DIR)/$(PLATFORM_NAME).inputs.xcfilelist",
+			);
+			inputPaths = (
+				"$(BLUEFIN_LEGAL_RESOURCES_TOOL)",
+				"$(SRCROOT)/../../docs/legal/bluefin-clients",
+			);
+			name = "Stage local license resources";
+			outputFileListPaths = (
+				"$(BLUEFIN_LEGAL_FILELIST_DIR)/$(PLATFORM_NAME).outputs.xcfilelist",
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${BLUEFIN_LEGAL_RESOURCES_TOOL}\" --xcode \"${SRCROOT}/../../docs/legal/bluefin-clients\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Legal\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
+		1DD276936C189961D13019FC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				392D13ADCFB1B9B0CFE0D649 /* AdaptiveNavigation.swift in Sources */,
+				353646068C9C94417E5AA59D /* Artwork.swift in Sources */,
+				7FAE2FCB3478F8FAD198D2E4 /* AudioQuality.swift in Sources */,
+				58AD0E515E23DBF035C1C584 /* AudioQualityPolicy.swift in Sources */,
+				E8C90D1DC045DADE5DD19E9B /* AudioSettings.swift in Sources */,
+				DC8075DF90C6A023CF56C524 /* AuthorizedUse.swift in Sources */,
+				523A62C9B65E59BEA6223868 /* BluefinApp.swift in Sources */,
+				8A769727CAC0BA9BD1CB6964 /* BluefinStyle.swift in Sources */,
+				E0AD3117873ABF4819A50671 /* CarPlayVideoSupport.swift in Sources */,
+				B9F23B80F1EE42B726D20C84 /* CoreAdmission.swift in Sources */,
+				C6231739C6CA06F75BCD50C9 /* HomeAssistant.swift in Sources */,
+				36F22BB19587DC3F898AD26A /* IrohSettings.swift in Sources */,
+				25B7D8ECF82305CB1D3BFE1D /* KaraokeAudio.swift in Sources */,
+				9AD5EBFBCE756E6825B644D6 /* KaraokeContinuityAudio.swift in Sources */,
+				80FE81E140F8A435232585A1 /* KaraokeContinuityControls.swift in Sources */,
+				C28FBD6BBC426D48A1937E43 /* KaraokeContinuityLifecycle.swift in Sources */,
+				65194A5156AB6A1086639CD4 /* KaraokeLyricsView.swift in Sources */,
+				7C14AC8018C950693A33002A /* KaraokeMicrophone.swift in Sources */,
+				5AD02735CD8A75EC19BF9D7F /* KaraokePreparation.swift in Sources */,
+				669334F801F543840AC910D9 /* KaraokePreparationModels.swift in Sources */,
+				2EC9BBE07B46AF8CC60E2255 /* KaraokeTimeline.swift in Sources */,
+				2AC3E3B19781B8E37DD2B857 /* LibraryStore.swift in Sources */,
+				91CD8DACBD50EC4447FE1E71 /* LiveGuide.swift in Sources */,
+				9686649530D07B6EBB09E75E /* LiveTV.swift in Sources */,
+				FE4BEE1598281EBB49C93B10 /* MacCommands.swift in Sources */,
+				8CA0A1A8BAC90B004667487C /* ManagedPairing.swift in Sources */,
+				1B01958427A6E1E130A49018 /* Models.swift in Sources */,
+				8FCF33BB4408E2FE11333822 /* MusicDesign.swift in Sources */,
+				180D6971BD075194B2101332 /* MusicExtras.swift in Sources */,
+				30A8E469DAE5F63A806D9497 /* MusicLibraryModel.swift in Sources */,
+				E4B4A0D1C9C3DF6B184D5971 /* MusicPlayer.swift in Sources */,
+				E411DFE70D68EEDAA2DA09B4 /* NativeAssetAdmission.swift in Sources */,
+				BA860347136C540387259ECE /* NativeAudioDSP.swift in Sources */,
+				F693B483F31548C2F01472F7 /* NativeCarPlay.swift in Sources */,
+				EA210813F84181D69F915DEF /* NativeHomeScenes.swift in Sources */,
+				7E799819B217F195785088F6 /* NativeIntegrationActions.swift in Sources */,
+				740F250855ADB26171B6D050 /* NativeIntegrations.swift in Sources */,
+				E15DBFA331CA450312D9DBCB /* NativeLegalText.swift in Sources */,
+				E02BDB5FA2EE40D2AE24EE49 /* NativeLibraryIntents.swift in Sources */,
+				0CD969DAE65DCBC231B3F528 /* NativeServer.swift in Sources */,
+				512DF67B3BB0E1E59584BE2A /* NativeSharePlay.swift in Sources */,
+				D4F9E83FDA6E04CDD7DE99D1 /* NativeShortcuts.swift in Sources */,
+				FA659AD510E10B25F14331B4 /* NativeTitleSelection.swift in Sources */,
+				1AAA568A5980F022FC9D6FCA /* NoticeStore.swift in Sources */,
+				27DE164F4181CD9C3EC5BA04 /* NoticeViews.swift in Sources */,
+				18964E9C2A6C3D1C5852BEB5 /* OfflineLibrary.swift in Sources */,
+				3CF70F388746F7B4ECF43B49 /* PlaybackController.swift in Sources */,
+				C7411E5172D40837D1AB87CF /* PlaybackLifecycle.swift in Sources */,
+				517C93A7C21DC3B3E7AC45CF /* PreviewArtwork.swift in Sources */,
+				CF638B8FF8A02ABA71187178 /* ProviderHandoffs.swift in Sources */,
+				7145E6B7A1845C7DE956CC84 /* RustBridge.swift in Sources */,
+				33E49575AD471A3D5497461D /* ServerDiscovery.swift in Sources */,
+				F386D47F8D61B72525EC0AF1 /* SoftwareLicensesView.swift in Sources */,
+				501391AFAEF475365AA0BE8A /* Sports.swift in Sources */,
+				F50D786DF28E64881CFA4AFA /* SportsDashboard.swift in Sources */,
+				9CD05834EC9D582DF652D312 /* SportsModels.swift in Sources */,
+				9EEA28B215F32B936D9478A7 /* SportsPresentation.swift in Sources */,
+				88DEBCE06138140FA1DD3EB0 /* SportsSettings.swift in Sources */,
+				8B862D2A463A474BB11B7D1D /* SportsStore.swift in Sources */,
+				9D351540197622B0C1EC84F9 /* TVTopShelf.swift in Sources */,
+				9C93FE807E1337C6C0D5C099 /* TrailersModels.swift in Sources */,
+				984F9003FFC31C5D04466613 /* TrailersViews.swift in Sources */,
+				4A58F62C6B48576492A01C3F /* UnifiedSearch.swift in Sources */,
+				08CE6F886C4971B999717F53 /* VideoOptions.swift in Sources */,
+				A15FC18F81D614B23AEB0758 /* WatchCompanion.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		38B3B7FA59E2AF2B5EF183E9 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -447,6 +1282,7 @@
 				CB4D45D4FFFBEACA0DE6EEAF /* AdaptiveNavigation.swift in Sources */,
 				ABECCCD47CAB64F4CCDFC553 /* Artwork.swift in Sources */,
 				7674B02A06F3145B0418C4DA /* AudioQuality.swift in Sources */,
+				E75F2B0C2BEF5D5246BFFECC /* AudioQualityPolicy.swift in Sources */,
 				6CF660F9938362B5F8A34568 /* AudioSettings.swift in Sources */,
 				6DE406BEF60072CF1707F48E /* AuthorizedUse.swift in Sources */,
 				2F9D73C75F76205C93623EA1 /* BluefinApp.swift in Sources */,
@@ -455,9 +1291,19 @@
 				2DBD381BD622504214533F10 /* CoreAdmission.swift in Sources */,
 				702DB01A916BBCFCE5D011B1 /* HomeAssistant.swift in Sources */,
 				7B45817160C57283E7345606 /* IrohSettings.swift in Sources */,
+				24415DC1C342F2E9D6F64C72 /* KaraokeAudio.swift in Sources */,
+				EF3D16707A5FD8797E720C4B /* KaraokeContinuityAudio.swift in Sources */,
+				1C7A31485FB9D65B05BA4DE8 /* KaraokeContinuityControls.swift in Sources */,
+				3B70E340D8B2966142B9C28C /* KaraokeContinuityLifecycle.swift in Sources */,
+				AAFD6525AC0DBBEBC63B4CB1 /* KaraokeLyricsView.swift in Sources */,
+				F1D82CFB96B9FF6B6347A08F /* KaraokeMicrophone.swift in Sources */,
+				C8CF443AEF3073ADB148ED34 /* KaraokePreparation.swift in Sources */,
+				4C6EF304387A8BEDB8B0F050 /* KaraokePreparationModels.swift in Sources */,
+				E32569446B24C7C33E7D5055 /* KaraokeTimeline.swift in Sources */,
 				49446A73FFA372F97BFBE6AC /* LibraryStore.swift in Sources */,
 				0DF3C0601DEE72C12B361DD7 /* LiveGuide.swift in Sources */,
 				27B2DCC4EF9BC965C69ACC2F /* LiveTV.swift in Sources */,
+				614C8ED0BD65CC2D89DB31AF /* ManagedPairing.swift in Sources */,
 				AAB2D67AF1A21FB8BF768323 /* Models.swift in Sources */,
 				EB65753346AEFB43AC116417 /* MusicDesign.swift in Sources */,
 				20B782EE4425370F11C47F47 /* MusicExtras.swift in Sources */,
@@ -469,18 +1315,107 @@
 				1D5F2EC402608BB297557AB2 /* NativeHomeScenes.swift in Sources */,
 				B8A20DF9FFD9503886052011 /* NativeIntegrationActions.swift in Sources */,
 				5F3257CB271DE208FC6E13A8 /* NativeIntegrations.swift in Sources */,
+				DCCF2FBE23178949E88CD057 /* NativeLegalText.swift in Sources */,
+				56222E06A41C5E7E69126BD8 /* NativeLibraryIntents.swift in Sources */,
 				2716B29DABA02C484556DE05 /* NativeServer.swift in Sources */,
 				CC7D278B7F468987E35308F1 /* NativeSharePlay.swift in Sources */,
 				4ACCA5EAB0065404A04759B1 /* NativeShortcuts.swift in Sources */,
+				E1C1EF36C97FFB0D56B84675 /* NativeTitleSelection.swift in Sources */,
+				F2C870367A709AB0B20EC5BD /* NoticeStore.swift in Sources */,
+				BA74C7B1C1D6F671A2F451CE /* NoticeViews.swift in Sources */,
 				DB7D896D4144893819D4FA3F /* OfflineLibrary.swift in Sources */,
 				6DE9362DB33BCD47DF35076A /* PlaybackController.swift in Sources */,
 				C91AF6A17B6A456ED382E6B1 /* PlaybackLifecycle.swift in Sources */,
 				1750B1E2CAB977C8A5C58954 /* PreviewArtwork.swift in Sources */,
 				1F8D76CDB686472861627362 /* ProviderHandoffs.swift in Sources */,
 				E3F44E94DABB3CB5E3C79903 /* RustBridge.swift in Sources */,
+				89F2E820A542C3DD3D3CDBF5 /* ServerDiscovery.swift in Sources */,
+				9BBB40184EC319DA6EEA9F6D /* SoftwareLicensesView.swift in Sources */,
 				5DAC315EDF02CF8E164C8188 /* Sports.swift in Sources */,
+				767525B73E6344EFB1EC2407 /* SportsDashboard.swift in Sources */,
+				8EDEED84A389499B1828B63C /* SportsModels.swift in Sources */,
+				96252005AA7BA97222F290C9 /* SportsPresentation.swift in Sources */,
+				F7750282BA108521F17157B9 /* SportsSettings.swift in Sources */,
+				E89FECC1D038C3902041B6CD /* SportsStore.swift in Sources */,
+				7176AD0E67C081EC6653ED11 /* TVTopShelf.swift in Sources */,
+				054DAF1C755940CD60C98A8B /* TopShelfSnapshot.swift in Sources */,
+				9E67CE5847954A10F491E5C2 /* TrailersModels.swift in Sources */,
+				A2E2F4A4C3B7455C7088F0FC /* TrailersViews.swift in Sources */,
 				BC43E1A9FB934E909DC6942E /* UnifiedSearch.swift in Sources */,
 				BEEF40A7258BA8E88F13E2D0 /* VideoOptions.swift in Sources */,
+				DE008E2D960E024E262F8937 /* WatchCompanion.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		42BF9B52F3A55573AAF03C7C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D5C157A98A2EFA87CDCA3F3B /* AdaptiveNavigation.swift in Sources */,
+				5B435D9FEDC73BCBFF67136E /* Artwork.swift in Sources */,
+				264FFAC5C0D3A9711018DCB0 /* AudioQuality.swift in Sources */,
+				0B52E3221CD5BDF833CB1DBA /* AudioQualityPolicy.swift in Sources */,
+				1117B0CB30849EA527399862 /* AudioSettings.swift in Sources */,
+				0945C316BC768ECFEBA4204E /* AuthorizedUse.swift in Sources */,
+				DF70C9CACBDA3ED82D013CFF /* BluefinApp.swift in Sources */,
+				62503AD611E40E61EE331FD0 /* BluefinStyle.swift in Sources */,
+				7209AB85ACC87684283BDA78 /* CarPlayVideoSupport.swift in Sources */,
+				A3252E50E50A85C7FE2069B0 /* CoreAdmission.swift in Sources */,
+				C74034FB7E23FB1DFEE49248 /* HomeAssistant.swift in Sources */,
+				DDCB363D61718146B31E630D /* IrohSettings.swift in Sources */,
+				F922F8BEF4FA6E315324F5CD /* KaraokeAudio.swift in Sources */,
+				BCCE5089AE9C13D7D2DF8CEE /* KaraokeContinuityAudio.swift in Sources */,
+				6958F6B3484B1525F07E1177 /* KaraokeContinuityControls.swift in Sources */,
+				24F35D225A73A3E5CF76C49C /* KaraokeContinuityLifecycle.swift in Sources */,
+				50FB5ECE9E7DD34E7C5BA778 /* KaraokeLyricsView.swift in Sources */,
+				EE9447236818A1AE848FB9EB /* KaraokeMicrophone.swift in Sources */,
+				46A527C026C30B77DABC95B9 /* KaraokePreparation.swift in Sources */,
+				EA5C2238E6FABAF1A1EEB5A1 /* KaraokePreparationModels.swift in Sources */,
+				A3FFC79C07CB74B99AE14C02 /* KaraokeTimeline.swift in Sources */,
+				278F52073DC844BC00F4A06F /* LibraryStore.swift in Sources */,
+				F0EC2AC16C60EF166FFDDBC9 /* LiveGuide.swift in Sources */,
+				F88D15D644E966A0A99471F4 /* LiveTV.swift in Sources */,
+				7A1C4D0AEC50C442C630F176 /* ManagedPairing.swift in Sources */,
+				8E8F374B08DAE8F7F28F8138 /* Models.swift in Sources */,
+				7CA672BF438B0E67B72A6048 /* MusicDesign.swift in Sources */,
+				2DB38474506A3B641BF62AEE /* MusicExtras.swift in Sources */,
+				575EB4F23D1B50357885BF3B /* MusicLibraryModel.swift in Sources */,
+				12426C61532FC93B52C7D150 /* MusicPlayer.swift in Sources */,
+				F9280781519FE7346295A589 /* NativeAssetAdmission.swift in Sources */,
+				ECB3D2907CABE701EB3FFEC2 /* NativeAudioDSP.swift in Sources */,
+				32722EA3A0DBE305480E9D94 /* NativeCarPlay.swift in Sources */,
+				3B2CC8CE216087F03C1DAF7C /* NativeHomeScenes.swift in Sources */,
+				E66AE7BC3FA591DE2892E703 /* NativeIntegrationActions.swift in Sources */,
+				EF46E4B5CE0CE0980A9CDB07 /* NativeIntegrations.swift in Sources */,
+				1349478B7835ED0D70D767C7 /* NativeLegalText.swift in Sources */,
+				03426E1FFA619E4D3784E296 /* NativeLibraryIntents.swift in Sources */,
+				188EE8329216279F7449B17A /* NativeServer.swift in Sources */,
+				2591A8881807207056B6BC8A /* NativeSharePlay.swift in Sources */,
+				6ABEC3CCE04BC5E28C882AC8 /* NativeShortcuts.swift in Sources */,
+				7AA52CCDE5D2662B60F76775 /* NativeTitleSelection.swift in Sources */,
+				CDECFB43D07B7D4A85A49DDB /* NoticeStore.swift in Sources */,
+				5277E282FEE3812FB8EDCEDC /* NoticeViews.swift in Sources */,
+				983E31A4C915FC5E33CBA988 /* OfflineLibrary.swift in Sources */,
+				DE917B8A3BF55EF837BE5C2A /* PlaybackController.swift in Sources */,
+				0CCFABA4D602C2A6A177EF5A /* PlaybackLifecycle.swift in Sources */,
+				B347294D4B01E5DEE0421D78 /* PreviewArtwork.swift in Sources */,
+				ECC8E1F69E00188A4AF7AE5B /* ProviderHandoffs.swift in Sources */,
+				A02912D1E56DC9A629BB7418 /* RustBridge.swift in Sources */,
+				F9D554EE7EA3AEA5C93640AE /* ServerDiscovery.swift in Sources */,
+				F07F249C40FB09333C19273B /* SoftwareLicensesView.swift in Sources */,
+				2F1C740999E8A63B1700ADC7 /* Sports.swift in Sources */,
+				E46FEB072887D375524C8E9F /* SportsDashboard.swift in Sources */,
+				2526DE607D7258E19EBD2717 /* SportsModels.swift in Sources */,
+				DB1D4E0BA2059B9F64FD2DB9 /* SportsPresentation.swift in Sources */,
+				12DE54ADCEDAD4834765538A /* SportsSettings.swift in Sources */,
+				335A02DCEE7FF7572026D2F6 /* SportsStore.swift in Sources */,
+				898CEEA9A3ED896E88E33A5B /* TVTopShelf.swift in Sources */,
+				D90FE5AFC3B955F226538467 /* TrailersModels.swift in Sources */,
+				CD9C48DF9B74677F7337E21D /* TrailersViews.swift in Sources */,
+				93A0A563ED11661A5C8EE3EF /* UnifiedSearch.swift in Sources */,
+				0945C116129C4BEBBC0D143C /* VideoOptions.swift in Sources */,
+				5B99817265569E81DC5C041D /* VisionPlatform.swift in Sources */,
+				D6CBD7EA980B10B476D7542F /* WatchCompanion.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -490,13 +1425,24 @@
 			files = (
 				9D0732F8B0E6736C4BDA79F4 /* AdaptiveLayoutTests.swift in Sources */,
 				B574CFD024AE05B5E5825F2C /* BluefinTests.swift in Sources */,
+				7A9F75CC2B305E999E12D275 /* KaraokeContinuityTests.swift in Sources */,
+				50F6579BA063D242E4BF4F3B /* KaraokePreparationTests.swift in Sources */,
+				E8193499DE465B87286BF7A1 /* KaraokeTests.swift in Sources */,
+				F5AB554CCC67ED4ECCD18B2B /* ManagedPairingTests.swift in Sources */,
 				27EACA61753C36271A00DCE6 /* NativeFormatTests.swift in Sources */,
+				C6FA6FBC3122D174C81DF986 /* NativeKaraokeTests.swift in Sources */,
 				7B529048D78C70B0660E3262 /* NativePlaybackFixtures.swift in Sources */,
 				423AB228CA49BA6C7E5ECE66 /* NativePlaybackHTTP.swift in Sources */,
 				F9807DCE4365D032A5506A98 /* NativePlaybackTests.swift in Sources */,
+				A4B7F2DD178DA7F189CA81EE /* NativeServerModelTests.swift in Sources */,
 				554191D9BB4AA117CF5055A3 /* ProviderHandoffTests.swift in Sources */,
 				B8142CFA4F8F8C630C6A8DE2 /* SharePlayContractTests.swift in Sources */,
+				F7F7E0F313D2A609CBBEBE50 /* SportsFixtures.swift in Sources */,
+				396332B5DD4ED02B4C5287F4 /* SportsPresentationTests.swift in Sources */,
+				C6C5113C0D4CEEE467771A49 /* SportsStoreTests.swift in Sources */,
+				86FF5C2F89EAE5C62CC23125 /* TrailersTests.swift in Sources */,
 				4C534668F133F0AC756F0B40 /* UnifiedSearchTests.swift in Sources */,
+				487AB037E5F03E465ED917B6 /* WatchCompanionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -507,6 +1453,7 @@
 				E8D400930AAFA800EE5DF18F /* AdaptiveNavigation.swift in Sources */,
 				3C19172E3D40D827C414FF09 /* Artwork.swift in Sources */,
 				2CA8197A6DE60C38AF0AAB36 /* AudioQuality.swift in Sources */,
+				2AD4F47BD14AC2021D53EC71 /* AudioQualityPolicy.swift in Sources */,
 				8A6ED647567DE99473AE5EEC /* AudioSettings.swift in Sources */,
 				3E04EBF02A63482BE56B8751 /* AuthorizedUse.swift in Sources */,
 				09C5DECF766EB3BED5EA7356 /* BluefinApp.swift in Sources */,
@@ -515,9 +1462,19 @@
 				C854B0A308957C9C255C8B24 /* CoreAdmission.swift in Sources */,
 				A08DD4D6F9B92C107A6520E1 /* HomeAssistant.swift in Sources */,
 				452A3FCF6B81F530F66D67A3 /* IrohSettings.swift in Sources */,
+				A075CE57D0925C6422EA86FA /* KaraokeAudio.swift in Sources */,
+				EA7BC265662C06603E9D40F7 /* KaraokeContinuityAudio.swift in Sources */,
+				FFD2738E1795E33B6C0E49AE /* KaraokeContinuityControls.swift in Sources */,
+				A2F09A9A395A3F6E7756DAFA /* KaraokeContinuityLifecycle.swift in Sources */,
+				33FBA301864558B376038777 /* KaraokeLyricsView.swift in Sources */,
+				82D58CEECF213B0476B3CF9C /* KaraokeMicrophone.swift in Sources */,
+				A26A328F55E89AF4AEBF1C22 /* KaraokePreparation.swift in Sources */,
+				6890DD1E33548A7B8451AF71 /* KaraokePreparationModels.swift in Sources */,
+				A2A043E532F00F57EA110758 /* KaraokeTimeline.swift in Sources */,
 				B30BDDF3135E4C583C1B219D /* LibraryStore.swift in Sources */,
 				211E90AF971F30180C7E64FA /* LiveGuide.swift in Sources */,
 				F3BB324981FD1223E3CEA605 /* LiveTV.swift in Sources */,
+				3F25F42007BB94B95A4F764A /* ManagedPairing.swift in Sources */,
 				915EAD3B2B3801B77540B432 /* Models.swift in Sources */,
 				C5C8F63F9166746987128869 /* MusicDesign.swift in Sources */,
 				110F323927F8A2E9E6650B0D /* MusicExtras.swift in Sources */,
@@ -529,18 +1486,36 @@
 				29A00921934D3319F6C4AC46 /* NativeHomeScenes.swift in Sources */,
 				8C8E6B685D460EF1627F4BD6 /* NativeIntegrationActions.swift in Sources */,
 				DC032D9013CC21C8F3B87E03 /* NativeIntegrations.swift in Sources */,
+				A3C191EECA90AD39DDCA433F /* NativeLegalText.swift in Sources */,
+				A8BBBF9442551804141AED0E /* NativeLibraryIntents.swift in Sources */,
 				64B604505F07EA883550040B /* NativeServer.swift in Sources */,
 				AE27B61125D6A2043B71CA94 /* NativeSharePlay.swift in Sources */,
 				00E12DBFCC22E0C4D3360644 /* NativeShortcuts.swift in Sources */,
+				39C5D97D8663DD98BAEE0D9C /* NativeTitleSelection.swift in Sources */,
+				0502093DF5FC04C544C3AE91 /* NoticeStore.swift in Sources */,
+				3AC956DB11362290C4E1F793 /* NoticeViews.swift in Sources */,
 				7484DFC2B2094C6C18EC67D8 /* OfflineLibrary.swift in Sources */,
 				D48A4036B7B14A8C647B7962 /* PlaybackController.swift in Sources */,
 				93A052358E73D0E7124DFCE3 /* PlaybackLifecycle.swift in Sources */,
 				1CC7A55A46745FA91961E41D /* PreviewArtwork.swift in Sources */,
 				BF3FF8064DE4CEBEABA6A9F5 /* ProviderHandoffs.swift in Sources */,
 				5740E48A11C7741B27DF98B5 /* RustBridge.swift in Sources */,
+				20EFE7466F6B2774AB93F5C6 /* ServerDiscovery.swift in Sources */,
+				B3893711F6147394D396E71B /* SoftwareLicensesView.swift in Sources */,
 				CD84E7F67C8D595A2B572FAE /* Sports.swift in Sources */,
+				0BBF0B32D39D8A6C6E13A922 /* SportsDashboard.swift in Sources */,
+				1C0EE5A0E5271539C6EE7C0B /* SportsModels.swift in Sources */,
+				8E6D762914320C82AA57834B /* SportsPresentation.swift in Sources */,
+				0417BA7D2768339F7370B30C /* SportsSettings.swift in Sources */,
+				E281313CA34EC7435C9666FD /* SportsStore.swift in Sources */,
+				4EEBA461B9406FBE8DB42F51 /* TVTopShelf.swift in Sources */,
+				4F0446970A6D23B95BDC2E2B /* TrailersModels.swift in Sources */,
+				1B2C5ED960F256AB3E6052BB /* TrailersViews.swift in Sources */,
 				5246175DF89AEFA224A98A23 /* UnifiedSearch.swift in Sources */,
 				39C8E62F36F70A6FA975D184 /* VideoOptions.swift in Sources */,
+				70BB1BFA18EB02A031CD67B9 /* WatchAPI.swift in Sources */,
+				DA9A166AED07EB84DB14BA76 /* WatchCompanion.swift in Sources */,
+				CA35D1590BE26C2465EE4601 /* WidgetRoute.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -550,13 +1525,61 @@
 			files = (
 				3698FB4DFCBB8915ED9CDF5E /* AdaptiveLayoutTests.swift in Sources */,
 				33D2A5EA39388CDBE8B1A394 /* BluefinTests.swift in Sources */,
+				8CE0D5B45E99B9629A864CF1 /* KaraokeContinuityTests.swift in Sources */,
+				592F78546B1A7BD448367144 /* KaraokePreparationTests.swift in Sources */,
+				BA57F33A6A58AD6CF3AC0C87 /* KaraokeTests.swift in Sources */,
+				2F157930CB972FF744FDF487 /* ManagedPairingTests.swift in Sources */,
 				733A53D6D23B872806DE0899 /* NativeFormatTests.swift in Sources */,
+				E3D2892F2225E71192B5997A /* NativeKaraokeTests.swift in Sources */,
 				0B1E2674ECCF1A866062C076 /* NativePlaybackFixtures.swift in Sources */,
 				BA4D8713C317519AF8D2F7E5 /* NativePlaybackHTTP.swift in Sources */,
 				B878CA93D5F9F2E4CBB0E188 /* NativePlaybackTests.swift in Sources */,
+				76CA9D801D4024005E9E861D /* NativeServerModelTests.swift in Sources */,
 				0E4A6B58F65C68838B6EC22E /* ProviderHandoffTests.swift in Sources */,
 				E1741DB338EFF2799C9CA88A /* SharePlayContractTests.swift in Sources */,
+				58175CB1DFFE1A4D2E2359F9 /* SportsFixtures.swift in Sources */,
+				AE564236AF23AC4D4B9FD6E6 /* SportsPresentationTests.swift in Sources */,
+				0D1768BA01A3BE5B2913C054 /* SportsStoreTests.swift in Sources */,
+				DCDE9E29569A8E8BE797D593 /* TrailersTests.swift in Sources */,
 				7F7550C29AC6A32B5CCEF21B /* UnifiedSearchTests.swift in Sources */,
+				57B6BBA24BBD37A1DD8204E8 /* WatchCompanionTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D30D4C2502A1CC4C509630C0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				96B1FCD4A22DF47992FA561B /* BluefinWidgets.swift in Sources */,
+				943CF056E3E493E06A74EF76 /* WidgetRoute.swift in Sources */,
+				F9A1E7FE2AC77235EF2BAA7F /* WidgetSnapshot.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F09C8E8C4852AAA7DB93FF6D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BF388CE84B598A54CB331044 /* ManagedPairing.swift in Sources */,
+				7922611909273EA5F5C9DB63 /* NativeLegalText.swift in Sources */,
+				8918EAC5BFC6A49176762F56 /* NativeTitleSelection.swift in Sources */,
+				6459DB442F231CA0D651E1A2 /* NoticeStore.swift in Sources */,
+				34F9A5330F8F147103AC6208 /* NoticeViews.swift in Sources */,
+				59D0E6C162D68143C22D6B6B /* SoftwareLicensesView.swift in Sources */,
+				B54BF3A4089B473F7768FE77 /* WatchAPI.swift in Sources */,
+				EBBFEFD6AE60C3053BA983E7 /* WatchApp.swift in Sources */,
+				CACC844735259FEFAD796A12 /* WatchCompanion.swift in Sources */,
+				7B21F40DCCDF495C65E5E33A /* WatchLeaseLifecycle.swift in Sources */,
+				6B702DF9FC8693A522D43AFE /* WatchLibraryIntents.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F6FB18F8E9DDD15C4F56DDC2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5E343FDEC097DC17E87FCAE /* ContentProvider.swift in Sources */,
+				2665BC3D7043D44A2CD9687D /* TopShelfSnapshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -568,20 +1591,99 @@
 			target = 849371161E39E4F01A2EE256 /* Bluefin */;
 			targetProxy = 3DB6336D77FFAD002D3BAFB6 /* PBXContainerItemProxy */;
 		};
+		794809F18F3056AF64A465BC /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A0861CBC345CC8F56B0005B7 /* BluefinWatch */;
+			targetProxy = 0282451A32E1E20FD04DA0DD /* PBXContainerItemProxy */;
+		};
 		A527FD5689F9A8EC409266B5 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = D28C5500C7E1F6999264A194 /* BluefinTV */;
 			targetProxy = B51FCBB1DDBAD9D8560FBCB3 /* PBXContainerItemProxy */;
 		};
+		B9C66FBC8C7D665129C847F6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 27B8B171ADA03FD9537D2106 /* BluefinTopShelf */;
+			targetProxy = 21068EE38080B7E028B26891 /* PBXContainerItemProxy */;
+		};
+		EF7A2046785E62E7425D8FB7 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9CEAABB2B9BDC6AD6ECE76A6 /* BluefinWidgets */;
+			targetProxy = 847D28C670CD3ECBCEB16B12 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		087AE9259E97F5B3F65C5218 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = BluefinMacIcon;
+				CODE_SIGN_ENTITLEMENTS = Mac/BluefinMac.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = Mac/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin.mac;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = YES;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		132791167414C4D1F092C99F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = TopShelf/TopShelf.entitlements;
+				INFOPLIST_FILE = TopShelf/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "";
+				OTHER_LDFLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin.topshelf;
+				SDKROOT = appletvos;
+				SKIP_INSTALL = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "";
+				TARGETED_DEVICE_FAMILY = 3;
+			};
+			name = Release;
+		};
+		1A345FDAB3737133EFD20220 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = BluefinVisionIcon;
+				CODE_SIGN_ENTITLEMENTS = Bluefin.entitlements;
+				INFOPLIST_FILE = Vision/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin.vision;
+				SDKROOT = xros;
+				TARGETED_DEVICE_FAMILY = 7;
+				XROS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Debug;
+		};
 		22952F8F66542508C5C028FB /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = BluefinTV;
 				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
-				CODE_SIGN_ENTITLEMENTS = Bluefin.entitlements;
+				CODE_SIGN_ENTITLEMENTS = BluefinTV.entitlements;
 				INFOPLIST_FILE = "tvOS-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -700,12 +1802,36 @@
 			};
 			name = Debug;
 		};
+		43610F436462BCF6E155839E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Widgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "";
+				OTHER_LDFLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin.widgets;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited)";
+				SWIFT_OBJC_BRIDGING_HEADER = "";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		6172A24019F7356657246F15 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = BluefinTV;
 				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
-				CODE_SIGN_ENTITLEMENTS = Bluefin.entitlements;
+				CODE_SIGN_ENTITLEMENTS = BluefinTV.entitlements;
 				INFOPLIST_FILE = "tvOS-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -716,6 +1842,24 @@
 				TARGETED_DEVICE_FAMILY = 3;
 			};
 			name = Release;
+		};
+		6304EAC7D33B5F95F6248412 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"ARCHS[sdk=watchos*]" = "arm64 arm64_32";
+				"ARCHS[sdk=watchsimulator*]" = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = BluefinWatchIcon;
+				INFOPLIST_FILE = Watch/Info.plist;
+				LIBRARY_SEARCH_PATHS = "";
+				OTHER_LDFLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin.watch;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "";
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Debug;
 		};
 		74E3888F9EE888A58D8C97E4 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -735,9 +1879,27 @@
 			};
 			name = Release;
 		};
+		769E0A9E2E10A363368BF8F8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = BluefinVisionIcon;
+				CODE_SIGN_ENTITLEMENTS = Bluefin.entitlements;
+				INFOPLIST_FILE = Vision/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin.vision;
+				SDKROOT = xros;
+				TARGETED_DEVICE_FAMILY = 7;
+				XROS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Release;
+		};
 		7EA994309EA6525B59B2219D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = BluefinIcon;
 				CODE_SIGN_ENTITLEMENTS = Bluefin.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
@@ -752,6 +1914,54 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
+		};
+		93EB73101AE874E86707B269 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Widgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "";
+				OTHER_LDFLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin.widgets;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited)";
+				SWIFT_OBJC_BRIDGING_HEADER = "";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		9FC636D2AE5AFA43475F4152 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = BluefinMacIcon;
+				CODE_SIGN_ENTITLEMENTS = Mac/BluefinMac.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = Mac/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin.mac;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = YES;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
 		};
 		A4EC5003CC8795A746151CA6 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -857,9 +2067,28 @@
 			};
 			name = Release;
 		};
+		C3BCE42EF44579F8755CA39C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"ARCHS[sdk=watchos*]" = "arm64 arm64_32";
+				"ARCHS[sdk=watchsimulator*]" = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = BluefinWatchIcon;
+				INFOPLIST_FILE = Watch/Info.plist;
+				LIBRARY_SEARCH_PATHS = "";
+				OTHER_LDFLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin.watch;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "";
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Release;
+		};
 		D6180AD9F1A4CB0FDE80C4C1 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = BluefinIcon;
 				CODE_SIGN_ENTITLEMENTS = Bluefin.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
@@ -874,6 +2103,27 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
+		};
+		E4DEB003DE830E2CBE8EC5CE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = TopShelf/TopShelf.entitlements;
+				INFOPLIST_FILE = TopShelf/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "";
+				OTHER_LDFLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = org.glopyglerky.bluefin.topshelf;
+				SDKROOT = appletvos;
+				SKIP_INSTALL = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "";
+				TARGETED_DEVICE_FAMILY = 3;
+			};
+			name = Debug;
 		};
 		FFBA3785060AE1FE8BA27095 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -905,6 +2155,24 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
+		0C517C4A916AC26577ECFB15 /* Build configuration list for PBXNativeTarget "BluefinWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6304EAC7D33B5F95F6248412 /* Debug */,
+				C3BCE42EF44579F8755CA39C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		213A1A265C6CB40282F19FCF /* Build configuration list for PBXNativeTarget "BluefinTopShelf" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E4DEB003DE830E2CBE8EC5CE /* Debug */,
+				132791167414C4D1F092C99F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		27B345ABC91872B64860D77C /* Build configuration list for PBXNativeTarget "BluefinTV" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -919,6 +2187,33 @@
 			buildConfigurations = (
 				3D7E2CD2948515ABBC247444 /* Debug */,
 				A4EC5003CC8795A746151CA6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		6E51A2F9DFDB719E3B0CC8BB /* Build configuration list for PBXNativeTarget "BluefinMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				087AE9259E97F5B3F65C5218 /* Debug */,
+				9FC636D2AE5AFA43475F4152 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7EB4819F09A800E0A8B42917 /* Build configuration list for PBXNativeTarget "BluefinVision" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A345FDAB3737133EFD20220 /* Debug */,
+				769E0A9E2E10A363368BF8F8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		CC7719D918B295B32A293A9F /* Build configuration list for PBXNativeTarget "BluefinWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				93EB73101AE874E86707B269 /* Debug */,
+				43610F436462BCF6E155839E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

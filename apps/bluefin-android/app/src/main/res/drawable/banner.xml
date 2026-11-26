@@ -1,0 +1,12 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp" android:height="180dp"
+    android:viewportWidth="320" android:viewportHeight="180">
+    <path android:fillColor="#0E1218" android:pathData="M0,0h320v180h-320z" />
+    <group android:translateX="20" android:translateY="47" android:scaleX="1.8" android:scaleY="1.8">
+        <path android:fillColor="#59D9F2" android:pathData="M8,24L30,10L25,22L40,24L25,27L30,38z" />
+    </group>
+    <!-- Original outlined wordmark keeps the app name crisp at every TV density. -->
+    <path android:fillColor="#00000000" android:strokeColor="#F6FAFF"
+        android:strokeWidth="3.2" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M120,104V76H128Q136,76 136,83Q136,90 128,90H120M128,90Q138,90 138,97Q138,104 128,104H120M149,76V104H165M176,76V96Q176,104 184.5,104Q193,104 193,96V76M220,76H204V104H220M204,90H217M247,76H231V104M231,90H244M260,76V104M273,104V76L291,104V76" />
+</vector>

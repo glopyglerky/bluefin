@@ -1,9 +1,31 @@
 import SwiftUI
+import Network
 
 struct BluefinCapabilities: Decodable {
     var protocolVersion: Int
     var musicQueueSync: Bool
     var maxQueueItems: Int
+    var discovery: ServerDiscoveryCapability?
+    var irohMediaTransport: ServerIrohTransport?
+}
+struct ServerIrohTransport: Decodable, Sendable {
+    var version: Int
+    var endpointId: String
+    var directAddresses: [String]
+    var alpn: String
+    var directOnly: Bool
+    var supported: Bool {
+        version == 1 && alpn == "bluefin/http/1" && directOnly &&
+        endpointId.utf8.count == 64 && endpointId.utf8.allSatisfy { (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) } &&
+        !directAddresses.isEmpty && directAddresses.count <= 16 && directAddresses.allSatisfy(Self.validAddress)
+    }
+    static func validAddress(_ address: String) -> Bool {
+        guard address.utf8.count <= 128, let endpoint = URLComponents(string: "https://" + address),
+              let host = endpoint.host, let port = endpoint.port, (1...65535).contains(port),
+              endpoint.user == nil, endpoint.password == nil, endpoint.path.isEmpty,
+              endpoint.query == nil, endpoint.fragment == nil else { return false }
+        return IPv4Address(host) != nil || IPv6Address(host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))) != nil
+    }
 }
 struct ServerQueueState: Codable, Equatable {
     var itemIds: [String]

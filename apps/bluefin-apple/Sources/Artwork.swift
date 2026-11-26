@@ -4,13 +4,13 @@ import CryptoKit
 
 private final class SameOriginImages: NSObject, URLSessionTaskDelegate, URLSessionDownloadDelegate {
     static let shared = SameOriginImages()
-    lazy var session: URLSession = {
+    static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 15
         config.timeoutIntervalForResource = 25
         config.urlCache = nil
         config.httpMaximumConnectionsPerHost = 4
-        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        return URLSession(configuration: config, delegate: shared, delegateQueue: nil)
     }()
     private let diskLock = NSLock()
     private var epoch = UUID()
@@ -46,6 +46,12 @@ private final class SameOriginImages: NSObject, URLSessionTaskDelegate, URLSessi
             }
         } catch { /* Artwork caching never prevents browsing or playback. */ }
     }
+    func cacheImage(_ image: UIImage, key: NSString, generation: UUID) -> Bool {
+        diskLock.lock(); defer { diskLock.unlock() }
+        guard epoch == generation else { return false }
+        cache.setObject(image, forKey: key, cost: Int(image.size.width * image.size.height * 4))
+        return true
+    }
     func clear() {
         diskLock.lock(); defer { diskLock.unlock() }
         epoch = UUID()
@@ -72,22 +78,54 @@ private final class SameOriginImages: NSObject, URLSessionTaskDelegate, URLSessi
 struct Artwork: View {
     let item: MediaItem
     var backdrop = false
+    var thumbnailWidth: Int? = nil
+    var contentMode: ContentMode = .fill
     @EnvironmentObject private var store: LibraryStore
     @State private var image: UIImage?
-    private var key: String { Self.cacheKey(item, session: store.session, backdrop: backdrop) }
-    private static func cacheKey(_ item: MediaItem, session: AccountSession?, backdrop: Bool) -> String {
-        "\(session?.server ?? "preview")/\(session?.userId ?? "")/\(item.Id)/\(backdrop)/\(backdrop ? item.BackdropImageTags?.first ?? "" : item.ImageTags?["Primary"] ?? "")"
+    @State private var imageKey: String?
+    @MainActor private static var inFlight: [String: Task<UIImage?, Never>] = [:]
+
+    private struct Source: Sendable {
+        let id: String
+        let kind: String
+        var tag: String?
+    }
+
+    private static func sources(for item: MediaItem, backdrop: Bool) -> [Source] {
+        var sources: [Source] = []
+        if backdrop {
+            if let tag = item.BackdropImageTags?.first, !tag.isEmpty {
+                sources.append(Source(id: item.Id, kind: "Backdrop/0", tag: tag))
+            }
+            if let parent = item.ParentBackdropItemId, let tag = item.ParentBackdropImageTags?.first, !tag.isEmpty {
+                sources.append(Source(id: parent, kind: "Backdrop/0", tag: tag))
+            }
+            if let tag = item.ImageTags?["Thumb"], !tag.isEmpty {
+                sources.append(Source(id: item.Id, kind: "Thumb", tag: tag))
+            }
+        }
+        let primary = Source(id: item.Id, kind: "Primary", tag: item.ImageTags?["Primary"])
+        if let tag = primary.tag, !tag.isEmpty { sources.append(primary) }
+        if let parent = item.ParentPrimaryImageItemId, let tag = item.ParentPrimaryImageTag, !tag.isEmpty {
+            sources.append(Source(id: parent, kind: "Primary", tag: tag))
+        }
+        if sources.isEmpty { sources.append(primary) }
+        return sources
+    }
+
+    private var key: String {
+        "\(store.accountContext)/\(item.Id)/\(backdrop)/\(thumbnailWidth ?? 0)/" +
+        Self.sources(for: item, backdrop: backdrop).map { "\($0.id)/\($0.kind)/\($0.tag ?? "")" }.joined(separator: "/")
     }
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
                 if item.Id.hasPrefix("preview") { PreviewArtwork(music: ["Audio", "MusicAlbum", "MusicArtist"].contains(item.Type ?? "")) }
-                else if let image { Image(uiImage: image).resizable().scaledToFill() }
+                else if let image, imageKey == key { Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode) }
                 else {
                     VStack(spacing: 12) {
                         Image(systemName: symbol).font(.system(size: backdrop ? 72 : 40, weight: .ultraLight)).opacity(0.5)
-                        if item.Id.hasPrefix("preview") { Text(item.title).font(backdrop ? .largeTitle.bold() : .title3.bold()).multilineTextAlignment(.center).padding(.horizontal, 12) }
                     }.foregroundColor(.white)
                 }
             }.frame(width: geometry.size.width, height: geometry.size.height).clipped()
@@ -104,58 +142,87 @@ struct Artwork: View {
         return [Color(hue: hue, saturation: 0.52, brightness: 0.43), Color(hue: hue, saturation: 0.72, brightness: 0.16)]
     }
     private func load() async {
-        image = nil
+        let requested = key
         guard let session = store.session, !store.preview else { return }
-        image = await Self.nativeImage(for: item, session: session, backdrop: backdrop)
+        let loaded = await Self.nativeImage(for: item, session: session, backdrop: backdrop, thumbnailWidth: thumbnailWidth)
+        guard !Task.isCancelled, requested == key else { return }
+        image = loaded
+        imageKey = requested
     }
-    static func nativeImage(for item: MediaItem, session: AccountSession, backdrop: Bool = false) async -> UIImage? {
-        let key = cacheKey(item, session: session, backdrop: backdrop)
+    @MainActor static func nativeImage(
+        for item: MediaItem, session: AccountSession, backdrop: Bool = false, thumbnailWidth: Int? = nil
+    ) async -> UIImage? {
+        let pixelWidth = thumbnailWidth ?? (backdrop ? 1600 : 500)
+        let cache = SameOriginImages.shared
+        let generation = cache.generation()
+        for source in sources(for: item, backdrop: backdrop) {
+            guard !Task.isCancelled, generation == cache.generation() else { return nil }
+            let key = "\(session.server)/\(session.userId)/\(source.id)/\(source.kind)/\(source.tag ?? "")/\(pixelWidth)"
+            if let cached = cache.cache.object(forKey: key as NSString) { return cached }
+            if let pending = inFlight[key] {
+                let image = await pending.value
+                guard !Task.isCancelled, generation == cache.generation() else { return nil }
+                if let image { return image }
+                continue
+            }
+            let pending = Task.detached(priority: .userInitiated) {
+                await fetch(source: source, session: session, width: pixelWidth, key: key, generation: generation)
+            }
+            inFlight[key] = pending
+            let image = await pending.value
+            guard generation == cache.generation() else { return nil }
+            inFlight[key] = nil
+            guard !Task.isCancelled else { return nil }
+            if let image { return image }
+        }
+        return nil
+    }
+
+    nonisolated private static func decode(_ file: URL, width: Int) -> UIImage? {
+        guard let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 8 * 1024 * 1024,
+              let source = CGImageSourceCreateWithURL(file as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceThumbnailMaxPixelSize: width,
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+                  kCGImageSourceShouldCacheImmediately: true,
+              ] as CFDictionary) else { return nil }
+        return UIImage(cgImage: cg)
+    }
+
+    nonisolated private static func fetch(source: Source, session: AccountSession, width: Int, key: String, generation: UUID) async -> UIImage? {
         let cache = SameOriginImages.shared
         let cacheKey = key as NSString
-        if let cached = cache.cache.object(forKey: cacheKey) { return cached }
-        let generation = cache.generation()
-        let identity = key
-        if let file = cache.cachedFile(identity) {
-            let cached = await Task.detached(priority: .utility) { UIImage(contentsOfFile: file.path) }.value
-            try? Task.checkCancellation()
-            if !Task.isCancelled, cache.generation() == generation, let cached {
-                cache.cache.setObject(cached, forKey: cacheKey, cost: Int(cached.size.width * cached.size.height * 4))
-                return cached
-            }
+        if let file = cache.cachedFile(key), let diskImage = decode(file, width: width),
+           !Task.isCancelled, cache.cacheImage(diskImage, key: cacheKey, generation: generation) {
+            return diskImage
         }
         guard !Task.isCancelled, var components = URLComponents(string: session.server), components.host != nil,
-              item.Id.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil else { return nil }
-        let kind = backdrop ? "Backdrop/0" : "Primary"
-        components.path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).isEmpty ? "/Items/\(item.Id)/Images/\(kind)" : components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).appending("/Items/\(item.Id)/Images/\(kind)")
-        if !components.path.hasPrefix("/") { components.path = "/" + components.path }
-        components.queryItems = [URLQueryItem(name: "maxWidth", value: backdrop ? "1600" : "500"), URLQueryItem(name: "quality", value: "85")]
+              source.id.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil else { return nil }
+        while components.path.hasSuffix("/") { components.path.removeLast() }
+        components.path += "/Items/\(source.id)/Images/\(source.kind)"
+        components.queryItems = [URLQueryItem(name: "maxWidth", value: String(width)), URLQueryItem(name: "quality", value: "85")]
         guard let url = components.url else { return nil }
         var request = URLRequest(url: url)
         guard !session.token.isEmpty, !session.token.contains(where: { $0 == "\"" || $0 == "\\" || $0.asciiValue.map { $0 < 32 || $0 == 127 } == true }) else { return nil }
         request.setValue("MediaBrowser Client=\"Bluefin Apple\", Token=\"\(session.token)\"", forHTTPHeaderField: "Authorization")
         do {
-            let (file, response) = try await cache.session.download(for: request, delegate: cache)
+            let (file, response) = try await SameOriginImages.session.download(for: request, delegate: cache)
             defer { try? FileManager.default.removeItem(at: file) }
             guard let http = response as? HTTPURLResponse, http.statusCode == 200, http.mimeType?.hasPrefix("image/") == true,
                   response.expectedContentLength <= 8 * 1024 * 1024 else { return nil }
             try Task.checkCancellation()
-            let decoded: UIImage? = await Task.detached(priority: .utility) {
-                guard let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 8 * 1024 * 1024,
-                      let source = CGImageSourceCreateWithURL(file as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-                      let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: backdrop ? 1600 : 500, kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else { return nil }
-                return UIImage(cgImage: cg)
-            }.value
-            try Task.checkCancellation()
-            guard let decoded else { return nil }
-            guard cache.generation() == generation else { return nil }
-            await Task.detached(priority: .utility) {
-                if let data = decoded.jpegData(compressionQuality: 0.82) { cache.storeFile(data, key: identity, generation: generation) }
-            }.value
-            try Task.checkCancellation()
-            guard cache.generation() == generation else { return nil }
-            cache.cache.setObject(decoded, forKey: cacheKey, cost: Int(decoded.size.width * decoded.size.height * 4))
+            guard let decoded = decode(file, width: width), cache.cacheImage(decoded, key: cacheKey, generation: generation) else { return nil }
+            // Show the decoded artwork before compressing or pruning the persistent cache.
+            Task.detached(priority: .utility) {
+                if let data = decoded.jpegData(compressionQuality: 0.82) { cache.storeFile(data, key: key, generation: generation) }
+            }
             return decoded
         } catch { return nil }
     }
-    static func clearCache() { SameOriginImages.shared.clear() }
+    @MainActor static func clearCache() {
+        for request in inFlight.values { request.cancel() }
+        inFlight.removeAll()
+        SameOriginImages.shared.clear()
+    }
 }

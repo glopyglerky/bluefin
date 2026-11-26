@@ -13,7 +13,7 @@ pub mod darwin;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
-#[cfg(any(target_os = "ios", target_os = "tvos"))]
+#[cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))]
 pub mod ios;
 
 #[cfg(target_os = "windows")]

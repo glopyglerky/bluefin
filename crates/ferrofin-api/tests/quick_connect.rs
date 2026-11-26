@@ -281,10 +281,15 @@ impl ServerConfigurationManager for MemConfig {
 struct OkQuickConnect {
     /// The user id the last `authorize_request` was made for.
     authorized_for: Mutex<Option<Uuid>>,
+    managed: bool,
+    managed_calls: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait]
 impl QuickConnect for OkQuickConnect {
+    fn managed_pairing(&self) -> Option<&dyn ferrofin_traits::managed_pairing::ManagedPairing> {
+        self.managed.then_some(self)
+    }
     async fn is_enabled(&self) -> Result<bool, ServiceError> {
         Ok(true)
     }
@@ -794,6 +799,155 @@ async fn authenticate_with_quick_connect_requires_a_secret() {
         assert_eq!(
             json["errors"]["Secret"][0], "The Secret field is required.",
             "{body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn managed_capability_fallback_and_auth_boundary() {
+    struct RefuseAuth;
+    #[async_trait]
+    impl AuthService for RefuseAuth {
+        async fn authenticate(
+            &self,
+            _: &RequestContext,
+        ) -> Result<AuthorizationInfo, ServiceError> {
+            Err(ServiceError::unauthorized("synthetic refusal"))
+        }
+    }
+    let app = create_router(state_full(
+        Arc::new(MemUsers::default()),
+        Arc::new(MemConfig::new(true)),
+        Arc::new(RefuseAuth),
+        Arc::new(OkQuickConnect::default()),
+    ));
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/Bluefin/Pairing/Capabilities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert_eq!(body_json(response).await["managed_pairing_v1"], false);
+    let response = app.oneshot(Request::builder().method("POST").uri("/Bluefin/Pairing/Authorize").header("content-type","application/json").body(Body::from(r#"{"proof":{"challenge":"synthetic","secret":"synthetic"},"device_id":"watch"}"#)).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+use ferrofin_traits::managed_pairing::{
+    ManagedPairing, PairingChallenge, PairingProof, PairingStatus,
+};
+
+#[async_trait]
+impl ManagedPairing for OkQuickConnect {
+    async fn initiate(&self, _: &AuthorizationInfo) -> Result<PairingChallenge, ServiceError> {
+        self.managed_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(PairingChallenge {
+            proof: PairingProof {
+                challenge: "synthetic".into(),
+                secret: "synthetic".into(),
+            },
+            device_id: "synthetic-watch".into(),
+            expires_at: 0,
+        })
+    }
+    async fn authorize(
+        &self,
+        _: &PairingProof,
+        _: &str,
+        _: Uuid,
+    ) -> Result<PairingStatus, ServiceError> {
+        Err(ServiceError::Unavailable("unused fixture operation".into()))
+    }
+    async fn status(&self, _: &PairingProof) -> Result<PairingStatus, ServiceError> {
+        Err(ServiceError::Unavailable("unused fixture operation".into()))
+    }
+    async fn cancel(&self, _: &PairingProof) -> Result<PairingStatus, ServiceError> {
+        Err(ServiceError::Unavailable("unused fixture operation".into()))
+    }
+    async fn exchange(&self, _: &PairingProof) -> Result<AuthenticationResultData, ServiceError> {
+        Err(ServiceError::Unavailable("unused fixture operation".into()))
+    }
+}
+
+fn managed_body_router(qc: Arc<OkQuickConnect>) -> axum::Router {
+    create_router(state_full(
+        Arc::new(MemUsers::default()),
+        Arc::new(MemConfig::new(true)),
+        Arc::new(AdminAuth),
+        qc,
+    ))
+}
+
+#[tokio::test]
+async fn managed_initiation_refuses_nonempty_and_oversized_bodies_before_provider() {
+    for (size, expected) in [
+        (0, StatusCode::OK),
+        (1, StatusCode::BAD_REQUEST),
+        (1024, StatusCode::BAD_REQUEST),
+        (1025, StatusCode::PAYLOAD_TOO_LARGE),
+        (2048, StatusCode::PAYLOAD_TOO_LARGE),
+    ] {
+        let qc = Arc::new(OkQuickConnect {
+            managed: true,
+            ..OkQuickConnect::default()
+        });
+        let response = managed_body_router(qc.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/Bluefin/Pairing/Initiate")
+                    .body(Body::from(vec![b'x'; size]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "body size {size}");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert_eq!(
+            qc.managed_calls.load(std::sync::atomic::Ordering::SeqCst),
+            usize::from(size == 0)
+        );
+    }
+}
+
+#[tokio::test]
+async fn managed_initiation_bounds_unknown_length_streams_before_provider() {
+    for (size, expected) in [
+        (0, StatusCode::OK),
+        (1024, StatusCode::BAD_REQUEST),
+        (1025, StatusCode::PAYLOAD_TOO_LARGE),
+        (2048, StatusCode::PAYLOAD_TOO_LARGE),
+    ] {
+        let qc = Arc::new(OkQuickConnect {
+            managed: true,
+            ..OkQuickConnect::default()
+        });
+        let chunks = [vec![b'x'; size / 2], vec![b'x'; size - size / 2]];
+        let stream = futures_util::stream::iter(
+            chunks
+                .into_iter()
+                .map(|v| Ok::<_, std::io::Error>(axum::body::Bytes::from(v))),
+        );
+        let request = Request::builder()
+            .method("POST")
+            .uri("/Bluefin/Pairing/Initiate")
+            .body(Body::from_stream(stream))
+            .unwrap();
+        assert!(!request.headers().contains_key("content-length"));
+        let response = managed_body_router(qc.clone())
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "stream size {size}");
+        assert_eq!(
+            qc.managed_calls.load(std::sync::atomic::Ordering::SeqCst),
+            usize::from(size == 0)
         );
     }
 }

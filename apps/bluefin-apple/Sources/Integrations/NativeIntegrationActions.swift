@@ -57,16 +57,24 @@ struct NativeProviderLink: Identifiable, Hashable {
                 .sheet(isPresented: $share) { NativeShareSheet(values: [item.title]) }
             #endif
             ForEach(NativeProviderLink.links(for: item)) { link in
-                Button("Open on \(link.title)") {
+                Button {
                     UIApplication.shared.open(link.url, options: [.universalLinksOnly: true]) { opened in
                         Task { @MainActor in if !opened { fallback = link } }
                     }
-                }
+                } label: { integrationLabel("Open on \(link.title)", symbol: "arrow.up.right.square") }
+                #if os(tvOS)
+                .buttonStyle(.plain)
+                #endif
             }
             #if BLUEFIN_SHAREPLAY
-            Button("SharePlay") {
-                Task { do { try await NativeIntegrations.shared.startSharing(item) } catch { message = error.localizedDescription } }
-            }.disabled(store.session == nil || store.preview)
+            if store.session != nil && !store.preview {
+                Button {
+                    Task { do { try await NativeIntegrations.shared.startSharing(item) } catch { message = error.localizedDescription } }
+                } label: { integrationLabel("SharePlay", symbol: "shareplay") }
+                #if os(tvOS)
+                .buttonStyle(.plain)
+                #endif
+            }
             #endif
         }
         .confirmationDialog("The provider app did not open", isPresented: Binding(get: { fallback != nil }, set: { if !$0 { fallback = nil } }), titleVisibility: .visible) {
@@ -89,6 +97,15 @@ struct NativeProviderLink: Identifiable, Hashable {
         } message: { Text(message ?? "") }
         #if os(iOS)
         .sheet(isPresented: $product) { NativeStoreProduct(productID: productID) }
+        #endif
+    }
+
+    @ViewBuilder
+    private func integrationLabel(_ title: String, symbol: String) -> some View {
+        #if os(tvOS)
+        TVDetailAction(title: title, symbol: symbol)
+        #else
+        Text(title)
         #endif
     }
 }

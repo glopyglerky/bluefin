@@ -55,6 +55,10 @@ struct MediaItem: Codable, Identifiable, Hashable {
     var IndexNumber: Int?
     var ImageTags: [String: String]?
     var BackdropImageTags: [String]?
+    var ParentBackdropItemId: String?
+    var ParentBackdropImageTags: [String]?
+    var ParentPrimaryImageItemId: String?
+    var ParentPrimaryImageTag: String?
     var UserData: UserData?
     var IsFolder: Bool?
     var CollectionType: String?
@@ -65,6 +69,20 @@ struct MediaItem: Codable, Identifiable, Hashable {
     var AlbumArtist: String?
     var MediaSources: [MediaSource]?
     var MediaStreams: [MediaStream]?
+    static func matchesID(_ left: String, _ right: String) -> Bool {
+        if left == right { return true }
+        func compactGUID(_ value: String) -> String? {
+            if let id = UUID(uuidString: value) {
+                return id.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+            }
+            guard value.utf8.count == 32, value.utf8.allSatisfy({
+                (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
+            }) else { return nil }
+            return value.lowercased()
+        }
+        guard let left = compactGUID(left), let right = compactGUID(right) else { return false }
+        return left == right
+    }
     var id: String { Id }
     var title: String { Name ?? "Untitled" }
     var isContainer: Bool { IsFolder == true || ["Series", "Season", "MusicAlbum", "MusicArtist", "CollectionFolder", "Folder", "BoxSet", "Playlist"].contains(Type ?? "") }
@@ -72,6 +90,11 @@ struct MediaItem: Codable, Identifiable, Hashable {
         if let series = SeriesName { return "\(series) · S\(ParentIndexNumber ?? 1) E\(IndexNumber ?? 1)" }
         if Type == "Audio" || Type == "MusicAlbum" { return Artists?.joined(separator: ", ") ?? AlbumArtist ?? Album ?? "" }
         return [ProductionYear.map(String.init), RunTimeTicks.map { "\(max(1, $0 / 600_000_000)) min" }].compactMap { $0 }.joined(separator: " · ")
+    }
+    var resumeTicks: Int64 {
+        guard let value = UserData?.PlaybackPositionTicks, value > 0 else { return 0 }
+        if let duration = RunTimeTicks, duration > 0, value >= duration { return 0 }
+        return value
     }
     var progress: Double {
         guard let duration = RunTimeTicks, duration > 0 else { return 0 }
@@ -89,6 +112,7 @@ struct MediaSource: Codable, Hashable {
     var Container: String?
     var MediaStreams: [MediaStream]?
     var LiveStreamId: String?
+    var DefaultAudioStreamIndex: Int?
 }
 
 struct MediaStream: Codable, Hashable {
@@ -124,15 +148,20 @@ struct LiveProgram: Codable, Hashable, Identifiable {
     var EndDate: String?
     var IsSports: Bool?
     var EpisodeTitle: String?
+    var ImageTags: [String: String]?
     var id: String { Id }
+    var artwork: MediaItem? {
+        guard let primary = ImageTags?["Primary"], !primary.isEmpty else { return nil }
+        return MediaItem(Id: Id, Type: "TvProgram", ImageTags: ["Primary": primary])
+    }
     var title: String { Name ?? "Live programme" }
     var start: Date? { StartDate.flatMap(Self.date) }
     var end: Date? { EndDate.flatMap(Self.date) }
     private static func date(_ value: String) -> Date? {
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return parser.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        (try? fractionalTimestamp.parse(value)) ?? (try? wholeTimestamp.parse(value))
     }
+    private static let fractionalTimestamp = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let wholeTimestamp = Date.ISO8601FormatStyle()
 }
 
 struct UserData: Codable, Hashable {
@@ -180,6 +209,62 @@ struct AccountSession: Codable {
     var allowHttp: Bool
     var irohPeerId: String?
     var irohPeerAddress: String?
+    var companionGeneration: UUID? = UUID()
+}
+
+struct MediaSkipSegment: Decodable, Equatable {
+    enum Kind: String {
+        case commercial = "Commercial", preview = "Preview", recap = "Recap", outro = "Outro", intro = "Intro"
+
+        var title: String {
+            switch self {
+            case .commercial: "Skip commercial"
+            case .preview: "Skip preview"
+            case .recap: "Skip recap"
+            case .outro: "Skip credits"
+            case .intro: "Skip intro"
+            }
+        }
+    }
+
+    let kind: Kind?
+    let itemID: String
+    let start: Int64
+    let end: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case type = "Type"
+        case ItemId, StartTicks, EndTicks
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        itemID = try values.decode(String.self, forKey: .ItemId)
+        start = try values.decode(Int64.self, forKey: .StartTicks)
+        end = try values.decode(Int64.self, forKey: .EndTicks)
+        if let name = try? values.decode(String.self, forKey: .type) {
+            kind = Kind(rawValue: name)
+        } else {
+            kind = switch try? values.decode(Int.self, forKey: .type) {
+            case 1: .commercial
+            case 2: .preview
+            case 3: .recap
+            case 4: .outro
+            case 5: .intro
+            default: nil
+            }
+        }
+    }
+
+    static func admitted(_ input: [Self], for item: MediaItem) -> [Self] {
+        input.lazy.filter { segment in
+            segment.kind != nil && MediaItem.matchesID(segment.itemID, item.Id)
+                && segment.start >= 0 && segment.end > segment.start
+                && (item.RunTimeTicks.map { $0 <= 0 || segment.end <= $0 } ?? true)
+        }.prefix(256).sorted { ($0.end, $0.start) < ($1.end, $1.start) }
+    }
+
+    func contains(_ ticks: Int64) -> Bool { start <= ticks && ticks < end }
 }
 
 struct PlaybackPlan: Decodable {

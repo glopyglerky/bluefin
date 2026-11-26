@@ -171,9 +171,9 @@ async fn get_display_preferences(
         .client
         .filter(|c| !c.is_empty())
         .ok_or_else(|| ApiError::BadRequest("missing required 'client'".to_owned()))?;
-    if client == super::bluefin::QUEUE_CLIENT {
+    if client == super::bluefin::QUEUE_CLIENT || client == super::sports::CLIENT {
         return Err(ApiError::Forbidden(
-            "reserved Bluefin queue preferences".to_owned(),
+            "reserved Bluefin preferences".to_owned(),
         ));
     }
     let item_id = resolve_item_id(&display_preferences_id);
@@ -290,9 +290,9 @@ async fn update_display_preferences(
         .client
         .filter(|c| !c.is_empty())
         .ok_or_else(|| ApiError::BadRequest("missing required 'client'".to_owned()))?;
-    if client == super::bluefin::QUEUE_CLIENT {
+    if client == super::bluefin::QUEUE_CLIENT || client == super::sports::CLIENT {
         return Err(ApiError::Forbidden(
-            "reserved Bluefin queue preferences".to_owned(),
+            "reserved Bluefin preferences".to_owned(),
         ));
     }
     let item_id = resolve_item_id(&display_preferences_id);

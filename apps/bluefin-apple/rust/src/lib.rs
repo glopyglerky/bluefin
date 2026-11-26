@@ -4,23 +4,29 @@ use serde_json::{json, Value};
 use std::{
     ffi::{c_char, CString},
     io::Read,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{OnceLock, atomic::{AtomicUsize, Ordering}},
     time::Duration,
 };
 use url::Url;
+mod client_platform;
+mod discovery;
 mod home_assistant;
 mod iroh_transport;
+mod karaoke;
 mod native_server;
 mod native_video;
 mod offline;
+mod playback_resources;
 mod premium;
 #[cfg(feature = "iroh-probe")]
 mod probe;
 mod sports;
 mod stream;
+mod trailers;
 const INPUT_MAX: usize = 65536;
 const RESPONSE_MAX: usize = 8 * 1024 * 1024;
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+static HTTP_CLIENT: OnceLock<Result<Client>> = OnceLock::new();
 type Result<T> = std::result::Result<T, String>;
 fn err(s: &str) -> String {
     s.to_owned()
@@ -84,17 +90,20 @@ struct Api<'a> {
 }
 impl<'a> Api<'a> {
     fn new(v: &'a Value) -> Result<Self> {
-        Ok(Self {
-            v,
-            base: server(v)?,
-            client: Client::builder()
+        client_platform::Platform::read(v)?;
+        let base = server(v)?;
+        let client = HTTP_CLIENT.get_or_init(|| {
+            Client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_secs(5))
                 .timeout(Duration::from_secs(15))
+                .pool_idle_timeout(Duration::from_secs(30))
+                .pool_max_idle_per_host(3)
                 .build()
-                .map_err(|_| err("HTTP client unavailable"))?,
-        })
+                .map_err(|_| err("HTTP client unavailable"))
+        }).as_ref().map_err(Clone::clone)?.clone();
+        Ok(Self { v, base, client })
     }
     fn url(&self, parts: &[&str]) -> Result<Url> {
         let mut u = self.base.clone();
@@ -117,11 +126,12 @@ impl<'a> Api<'a> {
         Ok(u)
     }
     fn auth(&self, required: bool) -> Result<String> {
+        let (client, platform, fallback) = client_platform::Platform::read(self.v)?.identity();
         let device = self
             .v
             .get("deviceId")
             .and_then(Value::as_str)
-            .unwrap_or("bluefin-apple");
+            .unwrap_or(fallback);
         if device.len() > 128
             || !device
                 .bytes()
@@ -129,7 +139,7 @@ impl<'a> Api<'a> {
         {
             return Err(err("Invalid deviceId"));
         }
-        let mut a = format!("MediaBrowser Client=\"Bluefin Apple\", Device=\"Apple\", DeviceId=\"{device}\", Version=\"0.1.0\"");
+        let mut a = format!("MediaBrowser Client=\"{client}\", Device=\"{platform}\", DeviceId=\"{device}\", Version=\"0.1.0\"");
         if required {
             let token = text(self.v, "token")?;
             if !token
@@ -317,9 +327,10 @@ fn playback(api: &Api<'_>) -> Result<Value> {
     let audio = index(v, "audioStreamIndex")?;
     let subtitle = index(v, "subtitleStreamIndex")?;
     let bitrate = playback_bitrate(v)?;
-    let mut device_profile = native_video::Capabilities::read(v)?.profile();
+    let mut device_profile = client_platform::VideoCapabilities::read(v)?.profile();
     device_profile["MaxStreamingBitrate"] = json!(bitrate);
-    let b = json!({"UserId":user,"MediaSourceId":selected_source(v)?,"MaxStreamingBitrate":bitrate,"StartTimeTicks":ticks,"AudioStreamIndex":audio,"SubtitleStreamIndex":subtitle,"IsPlayback":true,"AutoOpenLiveStream":true,"EnableDirectPlay":audio.is_none_or(|index| index < 0) && subtitle.is_none_or(|index| index < 0),"EnableDirectStream":false,"EnableTranscoding":true,"DeviceProfile":device_profile});
+    let server_start_ticks = if v["fullVideoTimeline"] == true && v["mediaType"] == "Video" { 0 } else { ticks };
+    let b = json!({"UserId":user,"MediaSourceId":selected_source(v)?,"MaxStreamingBitrate":bitrate,"StartTimeTicks":server_start_ticks,"AudioStreamIndex":audio,"SubtitleStreamIndex":subtitle,"IsPlayback":true,"AutoOpenLiveStream":true,"EnableDirectPlay":audio.is_none_or(|index| index < 0) && subtitle.is_none_or(|index| index < 0),"EnableDirectStream":false,"EnableTranscoding":true,"DeviceProfile":device_profile});
     let info = api.post(&["Items", item, "PlaybackInfo"], b)?;
     let result = plan_playback(api, &info);
     if let Err(error) = &result {
@@ -371,7 +382,7 @@ fn release_prepared(api: &Api<'_>, info: &Value) -> Result<()> {
 }
 fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
     let v = api.v;
-    let capabilities = native_video::Capabilities::read(v)?;
+    let capabilities = client_platform::VideoCapabilities::read(v)?;
     let item = text(v, "itemId")?;
     let ticks = count(v, "startTicks", 0, i64::MAX as u64)?;
     let audio = index(v, "audioStreamIndex")?;
@@ -389,7 +400,7 @@ fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
         .iter()
         .collect::<Vec<_>>();
     if is_audio {
-        sources.sort_by_key(|source| !native_audio(source));
+        sources.sort_by_key(|source| !client_platform::audio(v, source).unwrap_or(false));
     }
     for source in sources {
         let id = source["Id"]
@@ -412,10 +423,11 @@ fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
                 s.iter().any(|s| capabilities.accepts(s))
                     && s.iter()
                         .filter(|s| s["Type"] == "Audio")
-                        .all(|s| matches!(s["Codec"].as_str(), Some("aac" | "ac3" | "eac3")))
+                        .all(|s| capabilities.accepts_audio(s))
             })
             && subtitle.unwrap_or(-1) == -1;
-        let audio_direct = is_audio && native_audio(source) && audio.is_none_or(|index| index < 0);
+        let audio_direct =
+            is_audio && client_platform::audio(v, source)? && audio.is_none_or(|index| index < 0);
         let (mut url, uses_transcode) = if is_audio {
             if !streams.is_some_and(|ss| {
                 ss.iter().any(|s| s["Type"] == "Audio") && !ss.iter().any(|s| s["Type"] == "Video")
@@ -488,13 +500,42 @@ fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
             stream::stop(&proxy_id)?;
             return Err(err("Playback metadata too large"));
         }
+        if let Err(error) = playback_resources::register(api, &result) {
+            stream::stop(&proxy_id)?;
+            return Err(error);
+        }
         return Ok(result);
     }
-    Err(err("No supported Apple playback source"))
+    Err(err("No supported native playback source"))
 }
 /// JSON interface, also useful for non-FFI hosts. Synchronous and bounded.
 pub fn call(v: &Value) -> Result<Value> {
     let op = text(v, "operation")?;
+    if op == "androidSupport" {
+        let implemented = cfg!(target_os = "android");
+        return Ok(
+            json!({"schemaVersion":1,"clientIdentity":"Bluefin Android","media3Profiles":implemented,"scopedStorage":implemented,"signOutCleanup":implemented}),
+        );
+    }
+    if op == "androidSignOut" {
+        if client_platform::Platform::read(v)? != client_platform::Platform::Android {
+            return Err(err("Android cleanup requires Android identity"));
+        }
+        playback_resources::restore(v)?;
+        let (streams, released) = playback_resources::retire(v).unwrap_or((false, false));
+        let cache = offline::purge(v).is_ok();
+        // Preserve authority for failed producer cleanup. Revoke only after those
+        // operations have been acknowledged; a stored successful revoke is final.
+        let revoked = v["cleanupServerRevoked"] == true
+            || (released
+                && Api::new(v)
+                    .and_then(|api| api.post(&["Sessions", "Logout"], Value::Null))
+                    .is_ok());
+        let pending = playback_resources::snapshot(v)?;
+        return Ok(
+            json!({"localCleanupComplete":streams && cache,"serverRevoked":revoked,"playbackReleaseComplete":released,"cleanupResources":pending}),
+        );
+    }
     if matches!(op, "homeAssistantStates" | "homeAssistantControl") {
         return home_assistant::call(v, op);
     }
@@ -509,7 +550,7 @@ pub fn call(v: &Value) -> Result<Value> {
         }
     }
     if op == "stopPlaybackProxy" {
-        stream::stop(text(v, "proxyId")?)?;
+        playback_resources::stop_proxy(v)?;
         return Ok(json!({"stopped":true}));
     }
     if matches!(
@@ -522,6 +563,25 @@ pub fn call(v: &Value) -> Result<Value> {
         offline::logout(v)?;
     }
     let api = Api::new(v)?;
+    if matches!(
+        op,
+        "karaokeManifest"
+            | "karaokeStem"
+            | "prepareKaraoke"
+            | "karaokePreparationStatus"
+            | "cancelKaraokePreparation"
+    ) {
+        return karaoke::call(&api, op);
+    }
+    if matches!(
+        op,
+        "serverDiscoverySearch" | "serverDiscoveryAction" | "submitServerAction"
+    ) {
+        return discovery::call(&api, op);
+    }
+    if matches!(op, "trailersCatalog" | "trailersDetail") {
+        return trailers::call(&api, op);
+    }
     if matches!(
         op,
         "bluefinCapabilities"
@@ -559,6 +619,24 @@ pub fn call(v: &Value) -> Result<Value> {
             None,
             false,
         ),
+        "accountOptions" => api.request(
+            Method::GET, &["Bluefin", "Accounts", "Options"], vec![], None, false,
+        ),
+        "quickConnectEnabled" => api.request(
+            Method::GET, &["QuickConnect", "Enabled"], vec![], None, false,
+        ),
+        "createAccount" => api.request(
+            Method::POST, &["Bluefin", "Accounts", "Create"], vec![],
+            Some(json!({"username": text(v, "username")?, "password": text(v, "password")?})), false,
+        ),
+        "passkeyInitiate" => api.request(
+            Method::POST, &["Bluefin", "Accounts", "Passkey", "Initiate"], vec![], None, false,
+        ),
+        "passkeyExchange" | "passkeyCancel" => api.request(
+            Method::POST, &["Bluefin", "Accounts", "Passkey",
+                if op == "passkeyExchange" { "Exchange" } else { "Cancel" }],
+            vec![], Some(v.get("proof").cloned().ok_or_else(|| err("Missing passkey request"))?), false,
+        ),
         "login" => api.request(
             Method::POST,
             &["Users", "AuthenticateByName"],
@@ -566,22 +644,18 @@ pub fn call(v: &Value) -> Result<Value> {
             Some(json!({"Username":text(v,"username")?,"Pw":text(v,"password")?})),
             false,
         ),
-        "home" => {
-            let user = text(v, "userId")?;
-            let q = vec![
-                ("Limit", "20".into()),
-                ("Fields", "PrimaryImageAspectRatio,Overview".into()),
-            ];
-            let resume = api.get(&["Users", user, "Items", "Resume"], q.clone())?;
-            let latest = api.get(&["Users", user, "Items", "Latest"], q.clone())?;
-            let next = api.get(
-                &["Shows", "NextUp"],
-                vec![("UserId", user.into()), ("Limit", "20".into())],
-            )?;
-            Ok(
-                json!({"resume":array_items(resume)?,"latest":array_items(latest)?,"nextUp":array_items(next)?}),
-            )
-        }
+        "home" => Ok(json!({
+            "resume": home_shelf(&api, "homeResume")?,
+            "latest": home_shelf(&api, "homeLatest")?,
+            "nextUp": home_shelf(&api, "homeNextUp")?
+        })),
+        "homeResume" | "homeLatest" | "homeNextUp" => {
+            Ok(json!({"Items": home_shelf(&api, op)?}))
+        },
+        "mediaSegments" => api.get(
+            &["MediaSegments", text(v, "itemId")?],
+            vec![("includeSegmentTypes", "Intro,Recap,Outro,Commercial,Preview".into())],
+        ),
         "libraries" => api.get(&["Users", text(v, "userId")?, "Views"], vec![]),
         "items" => {
             let user = text(v, "userId")?;
@@ -640,6 +714,10 @@ pub fn call(v: &Value) -> Result<Value> {
             )
         }
         "releasePlayback" => {
+            if client_platform::Platform::read(v)? == client_platform::Platform::Android {
+                playback_resources::release(v)?;
+                return Ok(Value::Null);
+            }
             let mut failure = None;
             if v["playMethod"] == "Transcode" {
                 if let Err(error) = api.cleanup_request(
@@ -717,6 +795,19 @@ pub fn call(v: &Value) -> Result<Value> {
         _ => Err(err("Unknown operation")),
     }
 }
+fn home_shelf(api: &Api<'_>, operation: &str) -> Result<Value> {
+    let user = text(api.v, "userId")?;
+    let mut query = vec![("Limit", "20".into())];
+    let result = if operation == "homeNextUp" {
+        query.push(("UserId", user.into()));
+        api.get(&["Shows", "NextUp"], query)?
+    } else {
+        query.push(("Fields", "PrimaryImageAspectRatio,Overview".into()));
+        let endpoint = if operation == "homeResume" { "Resume" } else { "Latest" };
+        api.get(&["Users", user, "Items", endpoint], query)?
+    };
+    array_items(result)
+}
 fn array_items(v: Value) -> Result<Value> {
     if v.is_array() {
         Ok(v)
@@ -740,7 +831,12 @@ fn envelope(input: &[u8]) -> Value {
         // waits for ordinary network-call admission.
         if matches!(
             v["operation"].as_str(),
-            Some("stopPlaybackProxy" | "downloadCancel" | "downloadRemove")
+            Some(
+                "stopPlaybackProxy"
+                    | "downloadCancel"
+                    | "downloadRemove"
+                    | "cancelKaraokePreparation"
+            )
         ) {
             return call(&v);
         }
@@ -757,7 +853,22 @@ fn envelope(input: &[u8]) -> Value {
     })();
     match r {
         Ok(value) => json!({"ok":true,"value":value}),
-        Err(error) => json!({"ok":false,"error":error}),
+        Err(error) => {
+            let mut response = json!({"ok":false,"error":error});
+            // Partial progress is still an unsuccessful release. Let Android
+            // protect acknowledged suboperations before exposing that failure.
+            if let Ok(v) = serde_json::from_slice::<Value>(input) {
+                if v["operation"] == "releasePlayback"
+                    && client_platform::Platform::read(&v).ok()
+                        == Some(client_platform::Platform::Android)
+                {
+                    if let Ok(progress) = playback_resources::snapshot(&v) {
+                        response["cleanupResources"] = progress;
+                    }
+                }
+            }
+            response
+        }
     }
 }
 /// # Safety

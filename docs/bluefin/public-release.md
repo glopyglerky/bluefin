@@ -9,6 +9,11 @@ must inspect the exact source generation and built bundle, including resources
 and generated configuration. Keeping a private file untracked is not sufficient
 if a build copies it into the bundle.
 
+Run the [public-source privacy check](../../gates/public-source/README.md)
+with a private external marker file before staging and on the final clean
+candidate. Machine names, personal paths, deployment layouts and operational
+handoffs belong in private records. They are not build or fixture defaults.
+
 The included preview video and audio are original generated Bluefin samples.
 Preview playback uses bundled files and does not contact a media provider.
 `tools/GeneratePreview.swift` and `Tests/NativePlaybackFixtures.swift` reproduce
@@ -72,6 +77,12 @@ capability URLs must never be shared or logged. A participant uses their own
 authorized server session. A hash is a correlatable identifier, not a promise of
 anonymity. The privacy manifest and store disclosures must match the final
 enabled integrations and exact dependency graph.
+
+The Apple project leaves the export-encryption classification unset. Its Rust
+TLS and Iroh dependencies contain cryptography beyond Apple's system APIs;
+review the actual release graph before declaring an exemption or supplying an
+export compliance code. Apple's [encryption declaration documentation](https://developer.apple.com/documentation/bundleresources/information-property-list/itsappusesnonexemptencryption)
+explains the property and the upload questionnaire when it is omitted.
 
 Release evidence stays private and records source/artifact hashes, dependency
 and asset licenses, secret/personal-data checks, enabled capabilities and actual

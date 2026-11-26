@@ -1,6 +1,5 @@
 use super::*;
-pub(super) const FIELDS: &str =
-    "PrimaryImageAspectRatio,Overview,Genres,DateCreated,MediaStreams,Chapters,MediaSources,AlbumNormalizationGain";
+pub(super) const FIELDS: &str = "PrimaryImageAspectRatio,Overview,Genres,DateCreated,MediaStreams,Chapters,MediaSources,AlbumNormalizationGain";
 fn optional(
     v: &Value,
     q: &mut Vec<(&'static str, String)>,

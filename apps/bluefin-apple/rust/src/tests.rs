@@ -125,7 +125,7 @@ fn rejected_preparation_closes_opened_live_source() {
     });
     let error = call(&json!({"operation":"playback","server":format!("http://{address}"),"allowLocalHttp":true,"token":"viewer","userId":"u","itemId":"i"})).unwrap_err();
     let requests = worker.join().unwrap();
-    assert_eq!(error, "No supported Apple playback source");
+    assert_eq!(error, "No supported native playback source");
     assert!(requests[1].starts_with("POST /LiveStreams/Close?liveStreamId=live-one "));
     assert!(requests[1].contains("Token=\"viewer\""));
 }
@@ -442,7 +442,7 @@ fn unsupported_source_fails_closed() {
         "200 OK",
         r#"{"PlaySessionId":"p","MediaSources":[{"Id":"m","SupportsDirectPlay":true,"Container":"mkv","MediaStreams":[{"Type":"Video","Codec":"hevc"}]}]}"#,
     );
-    assert_eq!(call(&json!({"operation":"playback","server":server,"allowLocalHttp":true,"token":"valid","userId":"u","itemId":"i"})).unwrap_err(),"No supported Apple playback source");
+    assert_eq!(call(&json!({"operation":"playback","server":server,"allowLocalHttp":true,"token":"valid","userId":"u","itemId":"i"})).unwrap_err(),"No supported native playback source");
     h.join().unwrap();
 }
 
@@ -553,4 +553,50 @@ fn premium_lyrics_and_live_contract() {
     let req = h.join().unwrap();
     assert!(req.contains("channelIds=c"));
     assert!(!req.contains("isSports"));
+}
+
+#[test]
+fn individual_home_shelves_reuse_connection_with_current_request_auth() {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let serve = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut reader = BufReader::new(socket.try_clone().unwrap());
+        for (endpoint, token) in [("Resume", "first-viewer"), ("Latest", "second-viewer")] {
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                assert_ne!(reader.read_line(&mut line).unwrap(), 0, "client closed pooled connection");
+                if line == "\r\n" { break; }
+                request.push_str(&line);
+            }
+            assert!(request.starts_with(&format!("GET /Users/viewer/Items/{endpoint}?")));
+            assert!(request.contains(&format!("Token=\"{token}\"")));
+            let body = format!("{{\"Items\":[{{\"Id\":\"{endpoint}\"}}]}}");
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+        }
+    });
+    let server = format!("http://{address}");
+    for (operation, token, expected) in [("homeResume", "first-viewer", "Resume"), ("homeLatest", "second-viewer", "Latest")] {
+        let response = call(&json!({"operation":operation, "server":server, "userId":"viewer",
+            "token":token, "allowLocalHttp":true})).unwrap();
+        assert_eq!(response["Items"][0]["Id"], expected);
+    }
+    serve.join().unwrap();
+}
+
+#[test]
+fn full_video_timeline_keeps_native_resume_position() {
+    let (server, request) = mock("200 OK", r#"{"PlaySessionId":"session","MediaSources":[{"Id":"source","TranscodingUrl":"/jellyfin/Videos/video/master.m3u8"}]}"#);
+    let planned = call(&json!({"operation":"playback", "server":server, "token":"viewer", "userId":"u",
+        "itemId":"video", "mediaType":"Video", "startTicks":123_000_000, "fullVideoTimeline":true,
+        "allowLocalHttp":true})).unwrap();
+    let request = request.join().unwrap();
+    let posted: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(posted["StartTimeTicks"], 0);
+    assert_eq!(planned["startOffsetTicks"], 0);
+    assert_eq!(planned["startTicks"], 123_000_000);
+    stream::stop(planned["proxyId"].as_str().unwrap()).unwrap();
 }

@@ -168,6 +168,10 @@ fn _assert_object_safe_password_reset_manager(_: &dyn PasswordResetManager) {}
 /// ported [`AuthorizationInfo`] context.
 #[async_trait]
 pub trait QuickConnect: Send + Sync {
+    /// Explicit optional Bluefin capability; legacy providers default to absent.
+    fn managed_pairing(&self) -> Option<&dyn crate::managed_pairing::ManagedPairing> {
+        None
+    }
     /// Whether Quick Connect is currently enabled.
     async fn is_enabled(&self) -> Result<bool, ServiceError>;
 

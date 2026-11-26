@@ -15,9 +15,9 @@ pub(super) fn call(api: &Api<'_>, operation: &str) -> Result<Value> {
     let url = api
         .base
         .join(if preferences {
-            "/sports/api/v1/preferences"
+            "sports/api/v1/preferences"
         } else {
-            "/sports/api/v1/home"
+            "sports/api/v1/home"
         })
         .map_err(|_| err("Invalid sports endpoint"))?;
     let mut request = api
@@ -128,7 +128,44 @@ mod tests {
         )
     }
     #[test]
-    fn read_uses_same_origin_root_auth_and_matching_revision() {
+    fn operations_respect_configured_server_mount() {
+        for mount in ["/", "/media", "/nested/media/"] {
+            for operation in ["sportsPreferences", "saveSportsPreferences", "sportsHome"] {
+                let home = operation == "sportsHome";
+                let body = if home {
+                    json!({"schema":1,"games":[],"local_broadcasts":[],"presentation_only":true})
+                } else {
+                    json!({"version":7,"preferences":{}})
+                };
+                let (mut request, worker) = fixture("200 OK", Some("\"7\""), body);
+                let mut origin = Url::parse(request["server"].as_str().unwrap()).unwrap();
+                origin.set_path(mount);
+                request["server"] = json!(origin.as_str());
+                if operation == "saveSportsPreferences" {
+                    request["etag"] = json!("\"6\"");
+                    request["preferences"] = json!({"teams":[]});
+                }
+                assert!(call(&Api::new(&request).unwrap(), operation).is_ok());
+                let observed = worker.join().unwrap();
+                let method = if operation == "saveSportsPreferences" {
+                    "PUT"
+                } else {
+                    "GET"
+                };
+                let resource = if home { "home" } else { "preferences" };
+                let expected = format!(
+                    "{method} {}/sports/api/v1/{resource} HTTP/1.1",
+                    mount.trim_end_matches('/')
+                );
+                assert!(
+                    observed.starts_with(&expected),
+                    "{operation} lost mount {mount}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn read_uses_server_mount_auth_and_matching_revision() {
         for tag in [Some("\"7\""), Some("\"8\""), None] {
             let (request, worker) = fixture(
                 "200 OK",
@@ -144,7 +181,7 @@ mod tests {
                 assert!(result.is_err());
             }
             let request = worker.join().unwrap();
-            assert!(request.starts_with("GET /sports/api/v1/preferences HTTP/1.1"));
+            assert!(request.starts_with("GET /media/sports/api/v1/preferences HTTP/1.1"));
             assert!(request.contains("Token=\"viewer-token\""));
             assert!(
                 !request.contains("caller-ignored")
@@ -164,7 +201,7 @@ mod tests {
         let error = call(&Api::new(&request).unwrap(), "saveSportsPreferences").unwrap_err();
         assert!(error.contains("412") && !error.contains("private"));
         let observed = worker.join().unwrap();
-        assert!(observed.starts_with("PUT /sports/api/v1/preferences HTTP/1.1"));
+        assert!(observed.starts_with("PUT /media/sports/api/v1/preferences HTTP/1.1"));
         assert!(observed.to_ascii_lowercase().contains("if-match: \"7\""));
         assert_eq!(
             serde_json::from_str::<Value>(observed.split("\r\n\r\n").nth(1).unwrap()).unwrap(),
@@ -201,6 +238,6 @@ mod tests {
         assert!(worker
             .join()
             .unwrap()
-            .starts_with("GET /sports/api/v1/home HTTP/1.1"));
+            .starts_with("GET /media/sports/api/v1/home HTTP/1.1"));
     }
 }

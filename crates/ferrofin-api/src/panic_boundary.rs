@@ -11,7 +11,8 @@
 //! [`ERROR_BODY`].
 //!
 //! It is logged once, at `error`, as upstream logs it: the method and the path
-//! (`Request.Path`, so never the query, which can carry an `api_key`), with
+//! (never the query, which can carry an `api_key`, and with opaque playback
+//! grants redacted), with
 //! the panic's message. The panic hook has already logged the panic where it
 //! happened (LOGGING.md §7); this is the request's line, logged by the
 //! outermost layer that still has the request (§2). A boundary hands the
@@ -45,13 +46,13 @@ pub const ERROR_BODY: &str = "Error processing request.";
 /// state a handler held a lock on is that lock's concern.
 pub async fn panic_boundary_layer(request: Request, next: Next) -> Response {
     let method = request.method().clone();
-    let uri = request.uri().clone();
+    let path = crate::router::logged_path(request.uri().path()).to_owned();
     match AssertUnwindSafe(next.run(request)).catch_unwind().await {
         Ok(response) => response,
         Err(panic) => {
             tracing::error!(
                 http.request.method = %method,
-                url.path = %uri.path(),
+                url.path = %path,
                 panic = %ferrofin_util::panic::message(panic.as_ref()),
                 "Error processing request"
             );

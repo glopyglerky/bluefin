@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bluefin passkey</title>
+<link rel="stylesheet" href="./Passkey/accounts.css">
+<script src="./Passkey/client.js" defer></script>
+<main>
+    <h1>Sign in to Bluefin</h1>
+    <p>Confirm this code matches the one shown on your device.</p>
+    <p class="code" id="code"></p>
+    <form id="account">
+        <label>Username <input name="username" autocomplete="username" required maxlength="64"></label>
+        <button id="signin" type="submit">Sign in with a passkey</button>
+        <details id="enroll">
+            <summary>Add a passkey</summary>
+            <label>Current password <input name="password" type="password" autocomplete="current-password" maxlength="512"></label>
+            <button id="register" type="button">Verify account and add passkey</button>
+        </details>
+    </form>
+    <button id="continue" type="button" hidden>Continue with passkey</button>
+    <p id="status" role="status"></p>
+</main>
+</html>

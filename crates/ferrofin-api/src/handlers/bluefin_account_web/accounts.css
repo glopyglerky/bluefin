@@ -1,0 +1,45 @@
+:root {
+    color-scheme: light dark;
+    font-family: system-ui, sans-serif;
+    background: Canvas;
+    color: CanvasText;
+}
+body {
+    min-height: 100vh;
+    margin: 0;
+    display: grid;
+    place-items: center;
+}
+main {
+    box-sizing: border-box;
+    width: min(100%, 35rem);
+    padding: clamp(1.5rem, 5vw, 3.5rem);
+}
+h1 { font-size: clamp(1.7rem, 7vw, 2.6rem); }
+p { line-height: 1.5; }
+.code {
+    font: 700 1.8rem ui-monospace, monospace;
+    letter-spacing: .14em;
+}
+form, label, details[open] { display: grid; gap: .65rem; }
+form, details[open] { gap: 1rem; }
+input, button {
+    box-sizing: border-box;
+    width: 100%;
+    font: inherit;
+    padding: .8rem 1rem;
+    border: 1px solid GrayText;
+    border-radius: .65rem;
+}
+button {
+    background: #075d8c;
+    border-color: transparent;
+    color: white;
+    font-weight: 600;
+    cursor: pointer;
+}
+button:disabled { opacity: .55; }
+summary { cursor: pointer; }
+[hidden] { display: none !important; }
+.switch { grid-template-columns: auto 1fr; align-items: center; }
+.switch input { width: 1.3rem; height: 1.3rem; margin: 0; }

@@ -123,3 +123,12 @@ and was later rebranded to `netdev` by the author for future expansion, clearer 
 - iOS
     - 18.6.2
     - 18.1.1
+
+## Bluefin platform changes
+
+This vendored copy extends the Apple mobile implementation to tvOS and
+visionOS. visionOS uses the existing Network.framework path monitor and
+Darwin interface enumeration; its platform gates include the same Apple
+mobile dependencies and metadata helpers. Original upstream license and
+copyright notices remain unchanged. Compilation does not establish runtime
+network permissions or transport acceptance on a headset.

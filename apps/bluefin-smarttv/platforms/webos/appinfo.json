@@ -1,0 +1,1 @@
+{"id":"org.bluefin.tv","version":"0.1.0","vendor":"Bluefin contributors","type":"web","main":"index.html","title":"Bluefin","icon":"icon.png","largeIcon":"icon.png","uiRevision":2,"resolution":"1920x1080","disableBackHistoryAPI":true,"requiredACG":["application.launcher"]}

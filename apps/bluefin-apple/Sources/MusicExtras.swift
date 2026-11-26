@@ -8,6 +8,10 @@ struct MusicLyricsView: View {
     @State private var lyrics: BluefinLyrics?
     @State private var failure: String?
     @State private var loading = false
+    @State private var preparing: Task<Void, Never>?
+    @State private var preparationStatus: String?
+    @State private var karaokeFailure: String?
+    @State private var preparationID = UUID()
     private var identity: String { "\(store.session?.server ?? "")|\(store.session?.userId ?? "")|\(playback.item.Id)" }
     private var active: Int? {
         guard let lyrics, lyrics.Metadata.IsSynced == true else { return nil }
@@ -16,37 +20,65 @@ struct MusicLyricsView: View {
     }
     var body: some View {
         NavigationView {
-            ScrollViewReader { reader in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 24) {
-                        if let lyrics {
-                            ForEach(Array(lyrics.Lyrics.enumerated()), id: \.offset) { index, line in
-                                Button {
-                                    if let ticks = line.Start { playback.seek(seconds: max(0, (Double(ticks) + Double(lyrics.Metadata.Offset ?? 0)) / 10_000_000)) }
-                                } label: {
-                                    Text(line.Text.isEmpty ? "♪" : line.Text).font(.title2.bold())
-                                        .foregroundStyle(active == nil || active == index ? .primary : .secondary)
-                                        .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
-                                }.buttonStyle(.plain).disabled(line.Start == nil).id(index)
-                            }
+            Group {
+                if let karaoke = playback.karaoke {
+                    KaraokeLyricsView(playback: playback, audio: karaoke)
+                } else {
+                    ScrollViewReader { reader in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 24) {
+                                Button(preparing == nil ? "Sing" : "Cancel preparation") {
+                                    if let preparing { preparing.cancel() }
+                                    else { startSinging() }
+                                }.buttonStyle(.borderedProminent)
+                                    .disabled(store.session == nil && preparing == nil)
+                                if store.preview { Text("Connect a music library to use Sing.").font(.callout).foregroundStyle(.secondary) }
+                                if let preparationStatus { ProgressView(preparationStatus) }
+                                if let karaokeFailure { Text(karaokeFailure).foregroundStyle(.secondary) }
+                                Text("Adjust the vocals and follow the lyrics as you sing.").font(.caption).foregroundStyle(.secondary)
+                                if let lyrics {
+                                    ForEach(Array(lyrics.Lyrics.enumerated()), id: \.offset) { index, line in
+                                        Button {
+                                            if let ticks = line.Start { playback.seek(seconds: max(0, (Double(ticks) + Double(lyrics.Metadata.Offset ?? 0)) / 10_000_000)) }
+                                        } label: {
+                                            Text(line.Text.isEmpty ? "♪" : line.Text).font(.title2.bold())
+                                                .foregroundStyle(active == nil || active == index ? .primary : .secondary)
+                                                .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+                                        }.buttonStyle(.plain).disabled(line.Start == nil).id(index)
+                                    }
+                                }
+                                if loading { ProgressView("Loading lyrics") }
+                                if let failure { Text(failure).foregroundStyle(.secondary) }
+                                if !loading && failure == nil && lyrics?.Lyrics.isEmpty != false { Text("Lyrics aren't available for this track.").foregroundStyle(.secondary) }
+                            }.padding(28).frame(maxWidth: 700).frame(maxWidth: .infinity)
+                        }.onChange(of: active) { index in
+                            guard let index else { return }
+                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) { reader.scrollTo(index, anchor: .center) }
                         }
-                        if loading { ProgressView("Loading lyrics") }
-                        if let failure { Text(failure).foregroundStyle(.secondary) }
-                        if !loading && failure == nil && lyrics?.Lyrics.isEmpty != false { Text("Lyrics aren't available for this track.").foregroundStyle(.secondary) }
-                    }.padding(28).frame(maxWidth: 700).frame(maxWidth: .infinity)
-                }.onChange(of: active) { index in
-                    guard let index else { return }
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) { reader.scrollTo(index, anchor: .center) }
+                    }
                 }
-            }.navigationTitle("Lyrics")
+            }.navigationTitle(playback.karaoke == nil ? "Lyrics" : "Sing")
                 .toolbar { ToolbarItem(placement: .primaryAction) { Button("Done") { dismiss() } } }
-                .task(id: identity) {
+                .task(id: identity + "|karaoke=\(playback.karaoke != nil)") {
+                    guard playback.karaoke == nil else { return }
                     loading = true; failure = nil; lyrics = nil
                     defer { loading = false }
                     do { lyrics = try await store.lyrics(item: playback.item) }
                     catch is CancellationError {} catch { failure = error.localizedDescription }
                 }
         }.navigationViewStyle(.stack)
+            .onChange(of: identity) { _ in preparing?.cancel() }
+            .onDisappear { preparing?.cancel() }
+    }
+    @MainActor private func startSinging() {
+        guard let session = store.session else { return }
+        let request = UUID(); preparationID = request; karaokeFailure = nil
+        preparing = Task { @MainActor in
+            defer { if preparationID == request { preparing = nil; preparationStatus = nil } }
+            do { try await KaraokePreparation.enable(playback: playback, session: session, currentSession: { store.session }, status: { preparationStatus = $0 }) }
+            catch is CancellationError {}
+            catch { karaokeFailure = error.localizedDescription.contains("404") ? "Sing isn't available for this song." : error.localizedDescription }
+        }
     }
 }
 

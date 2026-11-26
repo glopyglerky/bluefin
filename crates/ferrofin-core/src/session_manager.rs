@@ -2471,14 +2471,21 @@ impl SessionManager for FerrofinSessionManager {
         &self,
         request: &AuthenticationRequest,
     ) -> Result<AuthenticationResultData, ServiceError> {
-        self.authenticate_internal(request, true).await
+        self.authenticate_internal(request, true, false).await
     }
 
     async fn authenticate_direct(
         &self,
         request: &AuthenticationRequest,
     ) -> Result<AuthenticationResultData, ServiceError> {
-        self.authenticate_internal(request, false).await
+        self.authenticate_internal(request, false, false).await
+    }
+
+    async fn authenticate_managed(
+        &self,
+        request: &AuthenticationRequest,
+    ) -> Result<AuthenticationResultData, ServiceError> {
+        self.authenticate_internal(request, false, true).await
     }
 
     async fn report_capabilities(
@@ -2922,13 +2929,35 @@ impl FerrofinSessionManager {
     }
 
     /// Shared authenticate path (C# `AuthenticateNewSessionInternal`).
+    async fn policy_device(&self, device_id: &str, managed: bool) -> Result<String, ServiceError> {
+        if device_id.starts_with("bluefin-managed:") != managed {
+            return Err(ServiceError::InvalidInput(
+                "reserved device identity".into(),
+            ));
+        }
+        if managed {
+            sqlx::query_scalar::<_, String>(
+                "SELECT ClientDeviceId FROM FerrofinManagedPairing WHERE DeviceId=?",
+            )
+            .bind(device_id)
+            .fetch_one(self.db.pool())
+            .await
+            .map_err(|_| ServiceError::unauthorized("managed challenge unavailable"))
+        } else {
+            Ok(device_id.to_owned())
+        }
+    }
+
+    /// Shared authenticate path (C# `AuthenticateNewSessionInternal`).
     async fn authenticate_internal(
         &self,
         request: &AuthenticationRequest,
         enforce_password: bool,
+        managed: bool,
     ) -> Result<AuthenticationResultData, ServiceError> {
         let app = require(request.app.as_deref(), "app")?;
         let device_id = require(request.device_id.as_deref(), "deviceId")?;
+        let policy_device_id = self.policy_device(device_id, managed).await?;
         let device_name = require(request.device_name.as_deref(), "deviceName")?;
         let app_version = require(request.app_version.as_deref(), "appVersion")?;
         let remote_endpoint = request.remote_endpoint.as_deref().unwrap_or("");
@@ -2959,7 +2988,7 @@ impl FerrofinSessionManager {
 
         if !self
             .device_manager
-            .can_access_device(&user, device_id)
+            .can_access_device(&user, &policy_device_id)
             .await?
         {
             tracing::warn!(
@@ -3754,6 +3783,52 @@ mod broadcast_lock_tests {
             db.clone(),
             "server-1".to_owned(),
         ))
+    }
+
+    /// A broadcast must not wedge the session table while one client is slow to
+    #[tokio::test]
+    async fn managed_real_session_mint_exchange_and_cancel() {
+        use ferrofin_traits::managed_pairing::ManagedPairing;
+        let db = crate::test_support::test_db().await;
+        let user = Uuid::new_v4();
+        crate::test_support::seed_user_with_defaults(&db, user).await;
+        let sessions = manager(&db);
+        let pairing = crate::managed_pairing::DurablePairing::new(db.clone(), sessions.clone());
+        let challenge = pairing
+            .initiate(&AuthorizationInfo {
+                device_id: Some("synthetic-watch".into()),
+                device: Some("Watch".into()),
+                client: Some("Bluefin".into()),
+                version: Some("1".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            pairing
+                .authorize(&challenge.proof, &challenge.device_id, user)
+                .await
+                .unwrap()
+                .state,
+            "authorized"
+        );
+        let first = pairing.exchange(&challenge.proof).await.unwrap();
+        let second = pairing.exchange(&challenge.proof).await.unwrap();
+        assert_eq!(first.access_token, second.access_token);
+        assert_eq!(first.session.user_id, user);
+        // Restart the pairing service, with the token still owned in SQLite.
+        let pairing = crate::managed_pairing::DurablePairing::new(db, sessions.clone());
+        assert_eq!(
+            pairing.cancel(&challenge.proof).await.unwrap().state,
+            "cancelled"
+        );
+        assert!(matches!(
+            sessions
+                .get_session_by_authentication_token(first.access_token.expose(), "", "")
+                .await,
+            Err(ServiceError::Unauthorized(_))
+        ));
+        assert!(pairing.exchange(&challenge.proof).await.is_err());
     }
 
     /// A broadcast must not wedge the session table while one client is slow to

@@ -1,0 +1,2 @@
+# This standalone client uses Clippy defaults. The parent workspace's server-only
+# extractor substitutions require dependencies that native clients must exclude.

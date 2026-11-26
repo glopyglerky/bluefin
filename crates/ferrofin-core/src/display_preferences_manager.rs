@@ -270,6 +270,65 @@ impl DisplayPreferencesManager for FerrofinDisplayPreferencesManager {
         tx.commit().await.map_err(db_err)
     }
 
+    async fn compare_exchange_custom_item_display_preferences(
+        &self,
+        user_id: Uuid,
+        item_id: Uuid,
+        client: &str,
+        expected: &HashMap<String, Option<String>>,
+        replacement: &HashMap<String, Option<String>>,
+    ) -> Result<bool, ServiceError> {
+        // Acquire SQLite's write reservation BEFORE reading. A deferred
+        // transaction could race another process between read and write.
+        let mut tx = self
+            .db
+            .writer()
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(db_err)?;
+        let rows = sqlx::query_as::<_, (String, Option<String>)>(
+            r#"SELECT "Key", "Value" FROM "CustomItemDisplayPreferences"
+               WHERE "UserId" = ?1 AND "ItemId" = ?2 AND "Client" = ?3"#,
+        )
+        .bind(guid_to_db(user_id))
+        .bind(guid_to_db(item_id))
+        .bind(client)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        let current: HashMap<_, _> = rows.iter().cloned().collect();
+        if rows.len() != current.len() || &current != expected {
+            tx.rollback().await.map_err(db_err)?;
+            return Ok(false);
+        }
+        sqlx::query(
+            r#"DELETE FROM "CustomItemDisplayPreferences"
+            WHERE "UserId" = ?1 AND "ItemId" = ?2 AND "Client" = ?3"#,
+        )
+        .bind(guid_to_db(user_id))
+        .bind(guid_to_db(item_id))
+        .bind(client)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        for (key, value) in replacement {
+            sqlx::query(
+                r#"INSERT INTO "CustomItemDisplayPreferences"
+                ("Client", "ItemId", "Key", "UserId", "Value") VALUES (?1, ?2, ?3, ?4, ?5)"#,
+            )
+            .bind(client)
+            .bind(guid_to_db(item_id))
+            .bind(key)
+            .bind(guid_to_db(user_id))
+            .bind(value.as_deref())
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        }
+        tx.commit().await.map_err(db_err)?;
+        Ok(true)
+    }
+
     async fn update_display_preferences(
         &self,
         display_preferences: &DisplayPreferencesEntity,

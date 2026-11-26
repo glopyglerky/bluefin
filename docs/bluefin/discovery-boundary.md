@@ -47,13 +47,21 @@ opt-in and a user's request do not establish copyright ownership or provider
 access. Apply the [authorized-use notice](authorized-use.md) and server access
 controls at every boundary.
 
-This is an implementation boundary and acceptance requirement. It does not
-assert that a Seerr connector or generic discovery endpoint is already shipped.
-Qualify the server adapter, administrator controls, viewer denial, account
-isolation, default-off behavior and native package dependency graphs before
-claiming the integration complete.
+The source implements a server-only adapter in
+[`bluefin-discovery`](../../crates/bluefin-discovery/src/lib.rs),
+authenticated [API routes](../../crates/ferrofin-api/src/handlers/bluefin_discovery.rs)
+and a server-hosted [web administration page](../../crates/ferrofin-extensions/assets/ferrofin/bluefin-discovery.html).
+Configuration defaults off. Credentials are write-only in administrator input;
+settings responses report only whether a credential is configured. Explicit
+viewer mappings and upstream permissions are checked before generic actions.
+
+This describes the implementation, not an installed integration. Qualify the
+exact upstream version, administrator controls, viewer denial, account isolation,
+default-off behavior and native package dependency graphs before claiming a
+completed server/client journey. Fixture tests do not establish access to a
+real provider or a user's library.
 
 The [native client boundary check](../../gates/client-boundary/README.md) enforces
 the current Apple dependency allowlist before Rust artifact builds and in CI.
-The server option and adapter still require implementation and runtime acceptance;
-passing the packaging check does not claim they are shipped.
+Passing the packaging check does not qualify the server adapter or establish
+that any deployment enables it.

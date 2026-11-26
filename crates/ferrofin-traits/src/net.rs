@@ -98,6 +98,18 @@ fn _assert_object_safe_authorization_context(_: &dyn AuthorizationContext) {}
 /// unauthenticated, which becomes [`ServiceError::Unauthorized`] here.
 #[async_trait]
 pub trait AuthService: Send + Sync {
+    /// Revalidate a normal MediaBrowser device session against current storage,
+    /// bypassing token/user-policy caches. Used by long-lived private audio work.
+    /// API keys and legacy credential fallbacks are never accepted here.
+    async fn authenticate_current_session(
+        &self,
+        _request: &RequestContext,
+    ) -> Result<AuthorizationInfo, ServiceError> {
+        Err(ServiceError::unauthorized(
+            "current session checks unavailable",
+        ))
+    }
+
     /// Authenticates the request, returning its [`AuthorizationInfo`] on success
     /// or [`ServiceError::Unauthorized`] when the credentials are missing or
     /// invalid.

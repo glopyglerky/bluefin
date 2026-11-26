@@ -161,6 +161,15 @@ impl From<&SessionInfoDto> for SessionSummary {
 /// [`AuthenticationResultData`] (session DTO + minted access token).
 #[async_trait]
 pub trait SessionManager: Send + Sync {
+    /// Reserved managed-device mint. Ordinary auth must not accept this namespace.
+    async fn authenticate_managed(
+        &self,
+        _request: &AuthenticationRequest,
+    ) -> Result<AuthenticationResultData, ServiceError> {
+        Err(ServiceError::Unavailable(
+            "managed pairing unavailable".into(),
+        ))
+    }
     /// Records session activity for a client, returning the session DTO.
     ///
     /// `user` is `None` for an API-key caller, which upstream's

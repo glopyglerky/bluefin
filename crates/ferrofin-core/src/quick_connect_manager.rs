@@ -124,6 +124,7 @@ pub struct FerrofinQuickConnect {
     authorized_secrets: Mutex<HashMap<String, AuthorizedSecret>>,
     /// Unauthorized requests one remote IP may hold at once.
     pending_per_ip: usize,
+    managed: Option<crate::managed_pairing::DurablePairing>,
 }
 
 impl std::fmt::Debug for FerrofinQuickConnect {
@@ -134,6 +135,15 @@ impl std::fmt::Debug for FerrofinQuickConnect {
 }
 
 impl FerrofinQuickConnect {
+    /// Enables durable managed pairing using the canonical auth database.
+    #[must_use]
+    pub fn with_managed_pairing(mut self, db: ferrofin_db::Database) -> Self {
+        self.managed = Some(crate::managed_pairing::DurablePairing::new(
+            db,
+            self.session_manager.clone(),
+        ));
+        self
+    }
     /// Creates a Quick Connect manager from its injected collaborators, with
     /// the [`DEFAULT_PENDING_PER_IP`] cap.
     #[must_use]
@@ -153,6 +163,7 @@ impl FerrofinQuickConnect {
         pending_per_ip: usize,
     ) -> Self {
         Self {
+            managed: None,
             configuration_manager,
             session_manager,
             current_requests: Mutex::new(HashMap::new()),
@@ -223,6 +234,11 @@ impl FerrofinQuickConnect {
 
 #[async_trait]
 impl QuickConnect for FerrofinQuickConnect {
+    fn managed_pairing(&self) -> Option<&dyn ferrofin_traits::managed_pairing::ManagedPairing> {
+        self.managed
+            .as_ref()
+            .map(|m| m as &dyn ferrofin_traits::managed_pairing::ManagedPairing)
+    }
     async fn is_enabled(&self) -> Result<bool, ServiceError> {
         self.is_enabled_inner().await
     }
@@ -402,6 +418,61 @@ impl QuickConnect for FerrofinQuickConnect {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn managed_proof_identity_refusal_and_durable_cleanup() {
+        use ferrofin_traits::managed_pairing::PairingProof;
+        let db = crate::test_support::test_db().await;
+        let mgr = manager(true).with_managed_pairing(db.clone());
+        let managed = mgr.managed_pairing().unwrap();
+        let challenge = managed.initiate(&auth_info()).await.unwrap();
+        assert!(
+            managed.initiate(&auth_info()).await.is_err(),
+            "admission rate"
+        );
+        let wrong = PairingProof {
+            challenge: challenge.proof.challenge.clone(),
+            secret: "wrong".into(),
+        };
+        assert!(matches!(
+            managed.cancel(&wrong).await,
+            Err(ServiceError::NotFound(_))
+        ));
+        assert!(matches!(
+            managed
+                .authorize(&challenge.proof, "other-device", Uuid::new_v4())
+                .await,
+            Err(ServiceError::Forbidden(_))
+        ));
+        assert_eq!(
+            managed.status(&challenge.proof).await.unwrap().state,
+            "pending"
+        );
+        // Fake session provider has no managed mint support: refusal must retain
+        // a terminal cleanup receipt, never claim a session was installed.
+        assert!(
+            managed
+                .authorize(&challenge.proof, &challenge.device_id, Uuid::new_v4())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            managed.status(&challenge.proof).await.unwrap().state,
+            "cancelled"
+        );
+        let restarted = manager(true).with_managed_pairing(db);
+        let managed = restarted.managed_pairing().unwrap();
+        assert_eq!(
+            managed.cancel(&challenge.proof).await.unwrap().state,
+            "cancelled"
+        );
+        assert!(managed.exchange(&challenge.proof).await.is_err());
+        assert!(
+            managed
+                .authorize(&challenge.proof, &challenge.device_id, Uuid::new_v4())
+                .await
+                .is_err()
+        );
+    }
     use std::sync::Arc;
 
     use async_trait::async_trait;

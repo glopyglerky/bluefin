@@ -1,5 +1,6 @@
 import XCTest
 import AVFoundation
+import Combine
 import CryptoKit
 #if os(tvOS)
 @testable import BluefinTV
@@ -15,6 +16,7 @@ import CryptoKit
     private var api: NativePlaybackHTTP!
     private var session: AccountSession!
     private var plans: [PlaybackPlan] = []
+    private var cachedItems: Set<String> = []
     private var availableBefore: Int64 = 0
     private struct Page: Decodable { let Items: [OfflineRecord] }
 
@@ -48,7 +50,7 @@ import CryptoKit
                 catch { cleanupFailure = cleanupFailure ?? error }
             }
             if let root {
-                for id in ["audio", "cancel"] {
+                for id in cachedItems {
                     do { try await RustBridge.notify("downloadRemove", session: session,
                         fields: ["cacheRoot": root.path, "itemId": id]) }
                     catch { cleanupFailure = cleanupFailure ?? error }
@@ -62,9 +64,160 @@ import CryptoKit
             XCTAssertFalse(FileManager.default.fileExists(atPath: root.path), "Owned test root survived cleanup")
         }
         print("Native test available bytes before=\(availableBefore) after=\(availableBytes()); volume-wide delta includes concurrent owners")
-        plans = []; api = nil; session = nil; files = nil; root = nil
+        plans = []; cachedItems = []; api = nil; session = nil; files = nil; root = nil
         try await super.tearDown()
         if let cleanupFailure { throw cleanupFailure }
+    }
+
+    func testResumeAndTimedSkipUseServerMarkers() async throws {
+        let store = LibraryStore()
+        store.session = session
+        let video = MediaItem(Id: "video", Name: "Original marked video", Type: "Movie",
+                              RunTimeTicks: 30_000_000, UserData: UserData(PlaybackPositionTicks: 6_000_000))
+        await store.play(video)
+        let playback = try XCTUnwrap(store.playback, store.error ?? "No player")
+        do {
+            for _ in 0..<100 {
+                if playback.activeSkipSegment?.kind == .intro { break }
+                if let failure = playback.failure { throw BluefinError.message(failure) }
+                try await Task.sleep(nanoseconds: 15_000_000)
+            }
+            let skip = try XCTUnwrap(playback.activeSkipSegment)
+            XCTAssertEqual(skip.kind, .intro)
+            XCTAssertGreaterThanOrEqual(playback.player.currentTime().seconds, 0.59)
+            XCTAssertLessThan(playback.player.currentTime().seconds, 1.6)
+            playback.skip(skip)
+            for _ in 0..<30 {
+                if playback.player.currentTime().seconds >= 1.59 { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertGreaterThanOrEqual(playback.player.currentTime().seconds, 1.59)
+            let requests = await api.requests()
+            let plan = try XCTUnwrap(requests.first { $0.path.hasPrefix("/Items/video/PlaybackInfo") })
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: plan.body) as? [String: Any])
+            XCTAssertEqual(body["StartTimeTicks"] as? Int, 0)
+            XCTAssertTrue(requests.contains { $0.path.hasPrefix("/MediaSegments/video?") })
+        } catch {
+            try await playback.stop().value
+            throw error
+        }
+        try await playback.stop().value
+    }
+
+    func testCommittedHomeShelvesAppearIndependently() async throws {
+        let server = try NativePlaybackHTTP(files: files)
+        let item = ["Id": "video", "Name": "Original fixture", "Type": "Movie"]
+        let payload = try JSONSerialization.data(withJSONObject: ["Items": [item]])
+        let queue = server.queue
+        server.intercept = { request, respond in
+            let path = request.path.components(separatedBy: "?")[0]
+            let delay: Double
+            switch path {
+            case "/Users/native-user/Items/Resume": delay = 0.06
+            case "/Users/native-user/Items/Latest": delay = 0.16
+            case "/Shows/NextUp": delay = 0.34
+            case "/Users/native-user/Views": delay = 0.42
+            default: return false
+            }
+            queue.asyncAfter(deadline: .now() + delay) { respond(.init(bytes: payload)) }
+            return true
+        }
+        try await server.start()
+        var testSession = try XCTUnwrap(session)
+        testSession.server = server.origin
+        for _ in 0..<3 {
+            let legacyStart = ProcessInfo.processInfo.systemUptime
+            async let legacyCollections: ItemPage = RustBridge.call("libraries", session: testSession)
+            async let legacyHome: HomePage = RustBridge.call("home", session: testSession)
+            let (collections, home) = try await (legacyCollections, legacyHome)
+            let legacy = ProcessInfo.processInfo.systemUptime - legacyStart
+            XCTAssertEqual(home.resume.first?.Id, "video")
+            XCTAssertEqual(collections.Items.first?.Id, "video")
+
+            let store = LibraryStore()
+            store.session = testSession
+            let revisedStart = ProcessInfo.processInfo.systemUptime
+            var ready: Double?
+            let observer = store.$home.sink { value in
+                if !value.resume.isEmpty, ready == nil { ready = ProcessInfo.processInfo.systemUptime - revisedStart }
+            }
+            await store.refresh()
+            observer.cancel()
+            XCTAssertNil(store.libraryProblem)
+            for shelf in [store.home.resume, store.home.latest, store.home.nextUp, store.libraries] {
+                XCTAssertEqual(shelf.first?.Id, "video")
+            }
+            let first = try XCTUnwrap(ready)
+            XCTAssertLessThan(first, legacy)
+            print("SHELF_TIMING baseline_ms=\(Int(legacy * 1_000)) first_ms=\(Int(first * 1_000)) complete_ms=\(Int((ProcessInfo.processInfo.systemUptime - revisedStart) * 1_000))")
+        }
+        await server.stop()
+    }
+
+    func testAccountOptionsDistinguishDisabledFromUnavailable() async throws {
+        let server = try NativePlaybackHTTP(files: files)
+        let prefixes = ["enabled", "blocked", "legacy", "off"]
+        server.publicPaths = Set(prefixes.flatMap {
+            ["/\($0)/Bluefin/Accounts/Options", "/\($0)/QuickConnect/Enabled"]
+        })
+        server.intercept = { request, respond in
+            switch request.path {
+            case "/enabled/Bluefin/Accounts/Options":
+                respond(.init(bytes: Data(#"{"allowSignups":true,"passkeys":true,"quickConnect":true}"#.utf8)))
+            case "/off/Bluefin/Accounts/Options":
+                respond(.init(bytes: Data(#"{"allowSignups":false,"passkeys":true,"quickConnect":false}"#.utf8)))
+            case "/blocked/Bluefin/Accounts/Options":
+                respond(.init(bytes: Data(), status: "401 Unauthorized"))
+            case "/legacy/Bluefin/Accounts/Options":
+                respond(.init(bytes: Data(), status: "404 Not Found"))
+            case "/legacy/QuickConnect/Enabled", "/blocked/QuickConnect/Enabled":
+                respond(.init(bytes: Data("true".utf8)))
+            default:
+                return false
+            }
+            return true
+        }
+        try await server.start()
+        var results: [AccountOptionsDiscovery] = []
+        for prefix in prefixes {
+            let http = AccountHTTP(server: server.origin + "/" + prefix, device: "native-fixture", allowHttp: true)
+            results.append(await http.discoverOptions())
+        }
+        XCTAssertEqual(results.map(\.discoveryFailed), [false, true, false, false])
+        XCTAssertEqual(results.map(\.choices.allowSignups), [true, false, false, false])
+        XCTAssertEqual(results.map(\.choices.passkeys), [true, false, false, true])
+        XCTAssertEqual(results.map(\.choices.quickConnect), [true, true, true, false])
+        await server.stop()
+    }
+
+    func testInheritedArtworkLoadsOnceForConcurrentConsumers() async throws {
+        let server = try NativePlaybackHTTP(files: files)
+        let png = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 160, height: 90)).image {
+            UIColor.blue.setFill()
+            $0.fill(CGRect(x: 0, y: 0, width: 160, height: 90))
+        }.pngData())
+        let queue = server.queue
+        server.intercept = { request, respond in
+            guard request.path.hasPrefix("/Items/series/Images/Backdrop/0?") else { return false }
+            queue.asyncAfter(deadline: .now() + 0.08) { respond(.init(bytes: png, type: "image/png")) }
+            return true
+        }
+        try await server.start()
+        var fixtureSession = try XCTUnwrap(session)
+        fixtureSession.server = server.origin
+        let item = MediaItem(Id: "episode", Type: "Episode", ParentBackdropItemId: "series",
+                             ParentBackdropImageTags: ["native-v1"])
+        async let hero = Artwork.nativeImage(for: item, session: fixtureSession, backdrop: true)
+        async let detail = Artwork.nativeImage(for: item, session: fixtureSession, backdrop: true)
+        let (heroImage, detailImage) = await (hero, detail)
+        XCTAssertNotNil(heroImage)
+        XCTAssertNotNil(detailImage)
+        let again = await Artwork.nativeImage(for: item, session: fixtureSession, backdrop: true)
+        XCTAssertNotNil(again)
+        let requests = await server.requests()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertTrue(requests.first?.path.hasPrefix("/Items/series/Images/Backdrop/0?") == true)
+        await server.stop()
     }
 
     func testRustCapabilityVideoDecodesAndReleasesAcrossProxyCapacity() async throws {
@@ -124,6 +277,7 @@ import CryptoKit
         }
         try await report("stopped", plan: plan, item: "audio", ticks: 4_000_000)
         try await RustBridge.cleanupPlaybackPlan(plan, session: session); plans.removeLast()
+        cachedItems.insert("audio")
         let _: OfflineRecord = try await RustBridge.call("downloadStart", session: session,
             fields: ["cacheRoot": root.path, "itemId": "audio", "maxBytes": 1_048_576, "quotaBytes": 2_097_152])
         let record = try await completedDownload("audio")
@@ -149,6 +303,7 @@ import CryptoKit
     func testOfflineCancellationAndSymlinkRootRefusal() async throws {
         let began = expectation(description: "Download response body opened")
         api.onHeldDownload = { began.fulfill() }
+        cachedItems.insert("cancel")
         let _: OfflineRecord = try await RustBridge.call("downloadStart", session: session,
             fields: ["cacheRoot": root.path, "itemId": "cancel", "maxBytes": 1_048_576, "quotaBytes": 2_097_152])
         await fulfillment(of: [began], timeout: 8)
@@ -216,8 +371,8 @@ import CryptoKit
     }
 
     private func play(_ url: URL, video: Bool) async throws {
-        #if os(iOS)
-        try AVAudioSession.sharedInstance().setCategory(.playback)
+        #if os(iOS) || os(tvOS)
+        try AVAudioSession.sharedInstance().setCategory(.playback, mode: video ? .moviePlayback : .default)
         try AVAudioSession.sharedInstance().setActive(true)
         defer {
             do { try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }

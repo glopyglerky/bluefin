@@ -1,5 +1,8 @@
 import AVFoundation
 import AudioToolbox
+#if targetEnvironment(macCatalyst)
+import CoreAudio
+#endif
 import MediaToolbox
 
 struct NativeAudioSettings: Equatable {

@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use ferrofin_db::entities::base_items::{
     AttachmentStreamInfoEntity, BaseItemEntity, MediaStreamInfoEntity,
 };
+use ferrofin_db::enums::PermissionKind;
 use ferrofin_model::dto::{MediaSourceInfo, MediaSourceType};
 use ferrofin_model::entities::MediaStreamType;
 use ferrofin_model::entities_media::{MediaAttachment, MediaStream};
@@ -49,6 +50,7 @@ use crate::scheduled_tasks::maintenance::CACHE_FILE_MAX_AGE;
 /// table keyed by the live-stream id.
 #[derive(Clone)]
 pub struct FerrofinMediaSourceManager {
+    pinned_input: Option<Arc<crate::source_pin::PinnedInput>>,
     items: Arc<dyn ItemRepository>,
     streams: Arc<dyn MediaStreamRepository>,
     attachments: Arc<dyn MediaAttachmentRepository>,
@@ -124,6 +126,7 @@ impl FerrofinMediaSourceManager {
         provider: Arc<dyn ProviderManager>,
     ) -> Self {
         Self {
+            pinned_input: None,
             items,
             streams,
             attachments,
@@ -139,6 +142,99 @@ impl FerrofinMediaSourceManager {
             probe_cache: Arc::new(Mutex::new(HashMap::new())),
             remote_probe: None,
         }
+    }
+
+    /// Reauthorize both today's row and the original input classification.
+    /// Known rows from an earlier handler never stand in for current policy.
+    async fn pinned_sources(
+        &self,
+        pin: &crate::source_pin::PinnedInput,
+        item_id: Uuid,
+        user_id: Option<Uuid>,
+    ) -> Result<Vec<MediaSourceInfo>, ServiceError> {
+        if !pin.accepts(item_id) || user_id.is_some_and(|id| id != pin.viewer) {
+            return Err(ServiceError::Forbidden("source pin scope mismatch".into()));
+        }
+        let (user, policy) = self.validated_pinned_policy(pin).await?;
+        let mut sources = vec![pin.source.clone()];
+        self.set_default_audio_and_subtitle_stream_indices(
+            &pin.captured.source,
+            &mut sources,
+            pin.viewer,
+            Some(&user),
+        )
+        .await?;
+        policy
+            .playback
+            .apply(pin.captured.source.media_type.as_deref(), &mut sources[0]);
+        Ok(sources)
+    }
+
+    async fn validated_pinned_policy(
+        &self,
+        pin: &crate::source_pin::PinnedInput,
+    ) -> Result<
+        (
+            ferrofin_db::entities::users::UserEntity,
+            ferrofin_traits::library::PinnedSourcePolicy,
+        ),
+        ServiceError,
+    > {
+        pin.captured.refresh_authorization(pin.viewer);
+        let users = self
+            .users
+            .as_ref()
+            .ok_or_else(|| ServiceError::unavailable("source pin user checks are unconfigured"))?;
+        let visibility = self
+            .visibility
+            .as_ref()
+            .ok_or_else(|| ServiceError::unavailable("source pin visibility is unconfigured"))?;
+        let user = users
+            .get_user_by_id(pin.viewer)
+            .await?
+            .ok_or_else(|| ServiceError::unauthorized("source pin account is absent"))?;
+        // User DTOs have a separate TTL cache. Read the owning database's
+        // current permission rows, even when an old binary made the change.
+        let permissions = crate::user_manager::user_repository::fresh_permissions(
+            pin.captured.database().pool(),
+            &user.id,
+        )
+        .await
+        .map_err(crate::db_error::db_err)?;
+        let allowed = |kind: PermissionKind| {
+            permissions
+                .iter()
+                .any(|&(k, value)| k == i32::from(kind) && value)
+        };
+        if allowed(PermissionKind::IsDisabled) || !allowed(PermissionKind::EnableMediaPlayback) {
+            return Err(ServiceError::Forbidden(
+                "source pin playback is forbidden".into(),
+            ));
+        }
+        if !allowed(PermissionKind::IsAdministrator)
+            && !crate::user_entity_ext::is_parental_schedule_allowed(
+                pin.captured.database().pool(),
+                &user.id,
+                chrono::Local::now(),
+            )
+            .await?
+        {
+            return Err(ServiceError::Forbidden(
+                "source pin access schedule denies playback".into(),
+            ));
+        }
+        pin.authorize_classification(self.items.as_ref(), visibility, &user)
+            .await?;
+        let policy = ferrofin_traits::library::PinnedSourcePolicy {
+            enable_media_playback: allowed(PermissionKind::EnableMediaPlayback),
+            enable_content_downloading: allowed(PermissionKind::EnableContentDownloading),
+            playback: ferrofin_traits::library::PlaybackPermissions {
+                audio_transcoding: allowed(PermissionKind::EnableAudioPlaybackTranscoding),
+                video_transcoding: allowed(PermissionKind::EnableVideoPlaybackTranscoding),
+                remuxing: allowed(PermissionKind::EnablePlaybackRemuxing),
+            },
+        };
+        Ok((user, policy))
     }
 
     /// The path of the item a playback must refresh with the remote probe
@@ -248,6 +344,9 @@ impl FerrofinMediaSourceManager {
         allow_media_probe: bool,
         enable_path_substitution: bool,
     ) -> Result<Vec<MediaSourceInfo>, ServiceError> {
+        if let Some(pin) = &self.pinned_input {
+            return self.pinned_sources(pin, item_id, Some(user_id)).await;
+        }
         // Playback sources build on the static sources; the per-user bitrate/profile
         // negotiation (MediaStreamSelector) is deferred, so the static set is the
         // playback set for v1.
@@ -295,6 +394,9 @@ impl FerrofinMediaSourceManager {
         user_id: Option<Uuid>,
         user: Option<&ferrofin_db::entities::users::UserEntity>,
     ) -> Result<Vec<MediaSourceInfo>, ServiceError> {
+        if let Some(pin) = &self.pinned_input {
+            return self.pinned_sources(pin, item_id, user_id).await;
+        }
         let read;
         let stored = if known.is_some() {
             known
@@ -1787,7 +1889,146 @@ impl StreamDefaults<'_> {
 
 #[async_trait]
 impl MediaSourceManager for FerrofinMediaSourceManager {
+    async fn current_local_audio(
+        &self,
+        item_id: Uuid,
+        viewer: Uuid,
+    ) -> Result<ferrofin_traits::library::LocalAudioEvidence, ServiceError> {
+        use sha2::{Digest, Sha256};
+        use std::fmt::Write as _;
+        use std::os::unix::fs::MetadataExt;
+        struct Fingerprint(Sha256);
+        impl std::fmt::Write for Fingerprint {
+            fn write_str(&mut self, text: &str) -> std::fmt::Result {
+                self.0.update(text.as_bytes());
+                Ok(())
+            }
+        }
+        let pin = self
+            .pinned_input
+            .as_ref()
+            .ok_or_else(|| ServiceError::unavailable("source-bound manager required"))?;
+        self.pinned_sources(pin, item_id, Some(viewer)).await?;
+        if pin.captured.source.media_type.as_deref() != Some("Audio")
+            || ferrofin_model::data::BaseItemKind::from_stored_type_name(&pin.captured.source.type_)
+                != Some(ferrofin_model::data::BaseItemKind::Audio)
+        {
+            return Err(ServiceError::unavailable("local audio required"));
+        }
+        let input = pin.captured.current_input().await?;
+        let identity = input
+            .metadata()
+            .map_err(|_| ServiceError::unavailable("source identity unavailable"))?;
+        let mut versions: Vec<_> = pin.captured.versions.iter().collect();
+        versions.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut ancestry: Vec<_> = pin.captured.ancestry.iter().collect();
+        ancestry.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut libraries: Vec<_> = pin.captured.libraries.iter().collect();
+        libraries.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut fingerprint = Fingerprint(Sha256::new());
+        write!(
+            &mut fingerprint,
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}:{}:{}:{}:{}:{}:{}",
+            pin.captured.item,
+            pin.captured.source,
+            versions,
+            pin.captured.streams,
+            pin.captured.attachments,
+            ancestry,
+            libraries,
+            identity.dev(),
+            identity.ino(),
+            identity.len(),
+            identity.mtime(),
+            identity.mtime_nsec(),
+            identity.ctime(),
+            identity.ctime_nsec()
+        )
+        .map_err(|_| ServiceError::unavailable("source fingerprint unavailable"))?;
+        let generation = fingerprint
+            .0
+            .finalize()
+            .iter()
+            .flat_map(|byte| {
+                let hex = b"0123456789abcdef";
+                [
+                    char::from(hex[usize::from(byte >> 4)]),
+                    char::from(hex[usize::from(byte & 15)]),
+                ]
+            })
+            .collect();
+        Ok(ferrofin_traits::library::LocalAudioEvidence {
+            input,
+            generation,
+            media_source_id: pin.source_id.simple().to_string(),
+            duration_ticks: pin
+                .captured
+                .source
+                .run_time_ticks
+                .filter(|ticks| *ticks > 0)
+                .ok_or_else(|| ServiceError::unavailable("source duration absent"))?,
+        })
+    }
+
+    async fn current_pinned_policy(
+        &self,
+    ) -> Result<ferrofin_traits::library::PinnedSourcePolicy, ServiceError> {
+        let pin = self
+            .pinned_input
+            .as_ref()
+            .ok_or_else(|| ServiceError::unavailable("source manager is not pinned"))?;
+        self.validated_pinned_policy(pin)
+            .await
+            .map(|(_, policy)| policy)
+    }
+    async fn pin_local_source(
+        &self,
+        item_id: Uuid,
+        source_id: &str,
+        expected_path: &str,
+        viewer: Uuid,
+    ) -> Result<Arc<dyn MediaSourceManager>, ServiceError> {
+        if self.pinned_input.is_some() || self.users.is_none() || self.visibility.is_none() {
+            return Err(ServiceError::unavailable(
+                "local source pin prerequisites are missing",
+            ));
+        }
+        let source_id = Uuid::parse_str(source_id)
+            .map_err(|_| ServiceError::invalid_input("source pin ID is not a GUID"))?;
+        let captured = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            self.items
+                .capture_local_source(item_id, source_id, expected_path),
+        )
+        .await
+        .map_err(|_| ServiceError::unavailable("source pin capture timed out"))??;
+        let source = Self::static_source(
+            &captured.source,
+            captured
+                .streams
+                .iter()
+                .cloned()
+                .map(|row| self.row_to_dto(row))
+                .collect(),
+            captured.attachments.iter().map(attachment_to_dto).collect(),
+        );
+        let pin = Arc::new(
+            crate::source_pin::prepare(captured, item_id, source_id, viewer, source).await?,
+        );
+        self.pinned_sources(&pin, item_id, Some(viewer)).await?;
+        let mut scoped = self.clone();
+        scoped.pinned_input = Some(pin);
+        Ok(Arc::new(scoped))
+    }
+
     async fn get_media_streams(&self, item_id: Uuid) -> Result<Vec<MediaStream>, ServiceError> {
+        if let Some(pin) = &self.pinned_input {
+            return Ok(self
+                .pinned_sources(pin, item_id, None)
+                .await?
+                .remove(0)
+                .media_streams);
+        }
         self.streams_dto(item_id).await
     }
 
@@ -1795,6 +2036,19 @@ impl MediaSourceManager for FerrofinMediaSourceManager {
         &self,
         item_ids: &[Uuid],
     ) -> Result<std::collections::HashMap<Uuid, Vec<MediaStream>>, ServiceError> {
+        if let Some(pin) = &self.pinned_input {
+            let mut map = HashMap::new();
+            for &id in item_ids {
+                map.insert(
+                    id,
+                    self.pinned_sources(pin, id, None)
+                        .await?
+                        .remove(0)
+                        .media_streams,
+                );
+            }
+            return Ok(map);
+        }
         // One `ItemId IN (…)` query for the whole page, then map each item's rows
         // to DTOs — the batch form used by list projection to avoid an N+1.
         let rows = self.streams.get_media_streams_batch(item_ids).await?;
@@ -1816,11 +2070,41 @@ impl MediaSourceManager for FerrofinMediaSourceManager {
         &self,
         item_ids: &[Uuid],
     ) -> Result<Vec<Uuid>, ServiceError> {
+        if self.pinned_input.is_some() {
+            let mut selected = Vec::new();
+            for &id in item_ids {
+                if self
+                    .get_media_streams(id)
+                    .await?
+                    .iter()
+                    .any(|stream| stream.stream_type == MediaStreamType::Subtitle)
+                {
+                    selected.push(id);
+                }
+            }
+            return Ok(selected);
+        }
+
         // Delegate to the repository's ids-only query (no stream rows load).
         self.streams.get_item_ids_with_subtitles(item_ids).await
     }
 
     async fn get_item_ids_with_lyrics(&self, item_ids: &[Uuid]) -> Result<Vec<Uuid>, ServiceError> {
+        if self.pinned_input.is_some() {
+            let mut selected = Vec::new();
+            for &id in item_ids {
+                if self
+                    .get_media_streams(id)
+                    .await?
+                    .iter()
+                    .any(|stream| stream.stream_type == MediaStreamType::Lyric)
+                {
+                    selected.push(id);
+                }
+            }
+            return Ok(selected);
+        }
+
         // Same ids-only delegation as the subtitle probe.
         self.streams.get_item_ids_with_lyrics(item_ids).await
     }
@@ -1829,6 +2113,19 @@ impl MediaSourceManager for FerrofinMediaSourceManager {
         &self,
         item_ids: &[Uuid],
     ) -> Result<std::collections::HashMap<Uuid, Vec<MediaAttachment>>, ServiceError> {
+        if let Some(pin) = &self.pinned_input {
+            let mut map = HashMap::new();
+            for &id in item_ids {
+                map.insert(
+                    id,
+                    self.pinned_sources(pin, id, None)
+                        .await?
+                        .remove(0)
+                        .media_attachments,
+                );
+            }
+            return Ok(map);
+        }
         let rows = self
             .attachments
             .get_media_attachments_batch(item_ids)
@@ -1843,6 +2140,13 @@ impl MediaSourceManager for FerrofinMediaSourceManager {
         &self,
         item_id: Uuid,
     ) -> Result<Vec<MediaAttachment>, ServiceError> {
+        if let Some(pin) = &self.pinned_input {
+            return Ok(self
+                .pinned_sources(pin, item_id, None)
+                .await?
+                .remove(0)
+                .media_attachments);
+        }
         let rows = self
             .attachments
             .get_media_attachments(&MediaAttachmentQuery {
@@ -1897,6 +2201,12 @@ impl MediaSourceManager for FerrofinMediaSourceManager {
         primary_ids: &[Uuid],
     ) -> Result<HashMap<Uuid, Vec<ferrofin_db::entities::base_items::BaseItemEntity>>, ServiceError>
     {
+        if self.pinned_input.is_some() {
+            return Err(ServiceError::unavailable(
+                "operation is outside the local source pin",
+            ));
+        }
+
         self.items
             .get_items_by_primary_version_batch(primary_ids)
             .await
@@ -1909,6 +2219,12 @@ impl MediaSourceManager for FerrofinMediaSourceManager {
         HashMap<Uuid, Vec<(ferrofin_db::entities::base_items::BaseItemEntity, bool)>>,
         ServiceError,
     > {
+        if self.pinned_input.is_some() {
+            return Err(ServiceError::unavailable(
+                "operation is outside the local source pin",
+            ));
+        }
+
         self.items
             .get_items_by_primary_version_batch_flagged(primary_ids)
             .await
@@ -1940,6 +2256,11 @@ impl MediaSourceManager for FerrofinMediaSourceManager {
         &self,
         request: &LiveStreamRequest,
     ) -> Result<MediaSourceInfo, ServiceError> {
+        if self.pinned_input.is_some() {
+            return Err(ServiceError::unavailable(
+                "live input is outside the local source pin",
+            ));
+        }
         // Port of `MediaSourceManager.OpenLiveStreamInternal`: the open token
         // names the provider and the key it opens, the provider opens (or
         // joins) the stream, and the result is probed and registered.
@@ -1995,6 +2316,12 @@ impl MediaSourceManager for FerrofinMediaSourceManager {
     }
 
     async fn get_live_stream(&self, id: &str) -> Result<MediaSourceInfo, ServiceError> {
+        if self.pinned_input.is_some() {
+            return Err(ServiceError::unavailable(
+                "live input is outside the local source pin",
+            ));
+        }
+
         self.open_streams
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -2004,6 +2331,12 @@ impl MediaSourceManager for FerrofinMediaSourceManager {
     }
 
     async fn close_live_stream(&self, id: &str) -> Result<(), ServiceError> {
+        if self.pinned_input.is_some() {
+            return Err(ServiceError::unavailable(
+                "operation is outside the local source pin",
+            ));
+        }
+
         // Port of `MediaSourceManager.CloseLiveStream`: the consumer count
         // lives with the tuner-side stream, so the Live TV manager decides
         // whether this was the last reader, and only then is the source
@@ -3247,7 +3580,6 @@ mod tests {
     /// was an HTTP M3U one.
     #[tokio::test]
     async fn a_dynamic_source_takes_its_direct_stream_flag_from_the_user_policy() {
-        use ferrofin_db::enums::PermissionKind;
         use ferrofin_traits::library::UserManager as _;
 
         let db = test_db().await;
@@ -3301,7 +3633,6 @@ mod tests {
     /// `if (user is not null)` tail (MediaSourceManager.cs:355-372).
     #[tokio::test]
     async fn a_static_video_source_takes_its_flags_from_the_user_policy() {
-        use ferrofin_db::enums::PermissionKind;
         use ferrofin_traits::library::UserManager as _;
 
         let db = test_db().await;
@@ -4411,3 +4742,7 @@ mod version_resume_tests {
         );
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "source_pin/tests_repository.rs"]
+mod source_pin_tests;

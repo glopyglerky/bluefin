@@ -1,4 +1,5 @@
 import AVKit
+import Combine
 import MediaPlayer
 import SwiftUI
 
@@ -22,6 +23,11 @@ import SwiftUI
     var onVideoOptions: ((VideoOptionSelection) -> Void)?
     @Published private(set) var presentationRate: Float = 1
     @Published private(set) var source: MediaSource?
+    @Published private(set) var selectedAudioStreamIndex: Int?
+    var audioSourceStream: MediaStream? {
+        AudioQualitySummary.selectedStream(source: source, index: selectedAudioStreamIndex)
+    }
+    private(set) var selectedMediaSourceID: String?
     @Published private(set) var playMethod: String
     private var reporter: PlaybackReporter?
     private var proxyId: String?
@@ -36,6 +42,27 @@ import SwiftUI
     var onMusicAdvance: ((MediaItem) -> Void)?
     @Published private(set) var audioProcessingStatus = "Bypassed"
     @Published private(set) var preloadingFailure: String?
+    @Published private(set) var karaoke: KaraokeAudio?
+    var isStopped: Bool { stopped }
+    let karaokeMicrophone = KaraokeMicrophone()
+    #if os(tvOS)
+    private var continuityMicrophoneStorage: AnyObject?
+    @available(tvOS 17.0, *)
+    var continuityMicrophone: KaraokeContinuityMicrophone {
+        if let existing = continuityMicrophoneStorage as? KaraokeContinuityMicrophone { return existing }
+        let microphone = KaraokeContinuityMicrophone()
+        continuityMicrophoneStorage = microphone
+        return microphone
+    }
+    #endif
+    func stopKaraokeMicrophones() {
+        karaokeMicrophone.stop()
+        #if os(tvOS)
+        if #available(tvOS 17.0, *) { (continuityMicrophoneStorage as? KaraokeContinuityMicrophone)?.stop() }
+        #endif
+    }
+    private var karaokeOriginal: AVPlayerItem?
+    private var karaokeGeneration = 0
     private var audioSettings = NativeAudioSettings()
     private var audioGeneration = 0
     private var audioTask: Task<Void, Never>?
@@ -54,6 +81,10 @@ import SwiftUI
     private var teardownTask: Task<Void, Error>?
     private var started = false
     private var initialSeekDone = false
+    private var seekingInitialPosition = false
+    private var skipSegments: [MediaSkipSegment] = []
+    private var segmentRequest: Task<Void, Never>?
+    @Published private(set) var activeSkipSegment: MediaSkipSegment?
     private var initialTicks: Int64
     private var timelineOffsetTicks: Int64
     private var lastReport: TimeInterval = 0
@@ -63,7 +94,10 @@ import SwiftUI
         accountSession = session
         isFavorite = item.UserData?.IsFavorite == true
         proxyId = plan?.proxyId
-        source = plan?.source ?? item.MediaSources?.first ?? item.MediaStreams.map { MediaSource(MediaStreams: $0) }
+        let observedSource = plan?.source ?? item.MediaSources?.first ?? item.MediaStreams.map { MediaSource(MediaStreams: $0) }
+        source = observedSource
+        selectedAudioStreamIndex = plan?.audioStreamIndex
+        selectedMediaSourceID = plan?.mediaSourceId ?? observedSource?.Id
         playMethod = plan?.playMethod ?? "DirectPlay"
         timelineOffsetTicks = max(0, plan?.startOffsetTicks ?? 0)
         initialTicks = max(0, (plan?.startTicks ?? 0) - (plan?.startOffsetTicks ?? 0))
@@ -73,7 +107,9 @@ import SwiftUI
         native.externalMetadata = Self.displayMetadata(for: item)
         currentNativeItem = native
         player = item.Type == "Audio" ? AVQueuePlayer(items: [native]) : AVPlayer(playerItem: native)
+        #if !os(visionOS)
         player.allowsExternalPlayback = true
+        #endif
         player.automaticallyWaitsToMinimizeStalling = true
         if let plan, let session {
             reporter = PlaybackReporter(session: session, itemId: item.Id, plan: plan) { operation, session, fields in
@@ -86,16 +122,19 @@ import SwiftUI
         currentItemObserver = player.observe(\.currentItem, options: [.new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in self?.adoptPreparedItem() }
         }
+        #if !os(visionOS)
         externalObserver = player.observe(\.isExternalPlaybackActive, options: [.new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.configureAudio(self.audioSettings)
             }
         }
+        #endif
         rateObserver = player.observe(\.rate, options: [.new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
                 guard let self, !self.stopped else { return }
                 self.isPlaying = self.player.rate > 0
+                guard self.initialSeekDone else { return }
                 if self.player.rate > 0 { self.presentationRate = self.player.rate }
                 if self.player.rate > 0 && !self.started {
                     self.started = true
@@ -115,6 +154,7 @@ import SwiftUI
                 guard let self, self.started, !self.stopped, self.player.currentItem === self.currentNativeItem else { return }
                 // Read the native current time after ownership reconciliation. The
                 // callback's captured time can belong to the preceding queue item.
+                self.updateSkipSegment()
                 let seconds = self.player.currentTime().seconds
                 self.positionSeconds = seconds.isFinite ? max(0, seconds + Double(self.timelineOffsetTicks) / 10_000_000) : 0
                 guard ProcessInfo.processInfo.systemUptime - self.lastReport >= 10 else { return }
@@ -149,18 +189,59 @@ import SwiftUI
                 guard let self, !self.stopped, self.currentNativeItem === playerItem, self.player.currentItem === playerItem else { return }
                 self.isPlaying = self.player.rate > 0
                 if playerItem.status == .failed { self.failure = "This stream could not be played. Try a different quality or check the server's playback settings." }
-                if playerItem.status == .readyToPlay, !self.initialSeekDone {
-                    self.initialSeekDone = true
+                if playerItem.status == .readyToPlay, !self.initialSeekDone, !self.seekingInitialPosition {
+                    self.seekingInitialPosition = true
+                    defer { self.seekingInitialPosition = false }
                     do { try AVAudioSession.sharedInstance().setActive(true) }
                     catch { self.failure = "The audio output could not be activated."; return }
                     if self.initialTicks > 0 {
-                        await self.player.seek(to: CMTime(value: self.initialTicks, timescale: 10_000_000), toleranceBefore: .zero, toleranceAfter: .zero)
+                        self.player.pause()
+                        let position = CMTime(value: self.initialTicks, timescale: 10_000_000)
+                        let completed = await self.player.seek(to: position, toleranceBefore: .zero, toleranceAfter: .zero)
+                        guard !self.stopped, self.currentNativeItem === playerItem, self.player.currentItem === playerItem else { return }
+                        guard completed else {
+                            self.failure = "The player could not reach your saved position."
+                            return
+                        }
                     }
                     guard !self.stopped, self.currentNativeItem === playerItem, self.player.currentItem === playerItem else { return }
+                    self.initialSeekDone = true
                     self.resume()
+                    self.updateSkipSegment()
                 }
             }
         }
+    }
+
+    func loadSkipSegments(for session: AccountSession) {
+        guard item.Type != "Audio", item.Type != "TvChannel" else { return }
+        let itemID = item.Id
+        segmentRequest?.cancel()
+        segmentRequest = Task { [weak self] in
+            struct Page: Decodable, Sendable { let Items: [MediaSkipSegment] }
+            guard let page: Page = try? await RustBridge.call("mediaSegments", session: session, fields: ["itemId": itemID]),
+                  !Task.isCancelled else { return }
+            self?.setSkipSegments(page.Items)
+        }
+    }
+
+    func setSkipSegments(_ segments: [MediaSkipSegment]) {
+        guard !stopped else { return }
+        skipSegments = MediaSkipSegment.admitted(segments, for: item)
+        updateSkipSegment()
+    }
+
+    private func updateSkipSegment() {
+        guard !skipSegments.isEmpty || activeSkipSegment != nil else { return }
+        let position = ticks
+        let active = initialSeekDone ? skipSegments.first { $0.contains(position) } : nil
+        if activeSkipSegment != active { activeSkipSegment = active }
+    }
+
+    func skip(_ segment: MediaSkipSegment) {
+        guard !stopped, initialSeekDone, activeSkipSegment == segment, segment.contains(ticks) else { return }
+        activeSkipSegment = nil
+        seek(seconds: Double(segment.end) / 10_000_000)
     }
 
     private func refreshArtwork() {
@@ -179,7 +260,7 @@ import SwiftUI
 
     /// Store owns ordering/repeat. This method owns only the exact supplied candidate.
     func setNextMusicCandidate(_ candidate: MediaItem?, session: AccountSession) {
-        guard item.Type == "Audio", !stopped, let queue = player as? AVQueuePlayer else { return }
+        guard item.Type == "Audio", !stopped, karaoke == nil, let queue = player as? AVQueuePlayer else { return }
         guard let owner = accountSession, owner.server == session.server, owner.userId == session.userId,
               owner.deviceId == session.deviceId, owner.token == session.token else {
             preloadingFailure = "The next track belongs to a different playback account."; return
@@ -239,6 +320,7 @@ import SwiftUI
 
     private func adoptPreparedItem(ended: AVPlayerItem? = nil) {
         guard !stopped, let next = nextPrepared, player.currentItem === next.native || ended === next.native else { return }
+        stopKaraokeMicrophones()
         let oldReporter = reporter, oldStarted = started
         let endTicks = item.RunTimeTicks ?? Int64(positionSeconds * 10_000_000)
         let prior = retirement
@@ -251,6 +333,8 @@ import SwiftUI
         nextPrepared = nil
         currentNativeItem = next.native
         item = next.item; source = next.plan.source; playMethod = next.plan.playMethod ?? "DirectPlay"
+        selectedAudioStreamIndex = next.plan.audioStreamIndex
+        selectedMediaSourceID = next.plan.mediaSourceId
         reporter = next.reporter; proxyId = next.plan.proxyId
         timelineOffsetTicks = 0; initialTicks = 0; initialSeekDone = true
         started = true; positionSeconds = 0; lastReport = 0
@@ -263,6 +347,7 @@ import SwiftUI
     }
 
     func configureAudio(_ settings: NativeAudioSettings) {
+        stopKaraokeMicrophones()
         audioSettings = settings
         audioGeneration += 1
         audioTask?.cancel()
@@ -272,6 +357,7 @@ import SwiftUI
     }
 
     private func attachAudio(to native: AVPlayerItem, media: MediaItem, generation: Int, isCurrent: Bool) {
+        if karaoke?.nativeItem === native { return }
         native.audioMix = nil
         let settings = audioSettings, gain = settings.gainDB(for: media)
         let publish: (String) -> Void = { [weak self, weak native] value in
@@ -281,7 +367,7 @@ import SwiftUI
             }
         }
         guard media.Type == "Audio", settings.bands.contains(where: { $0 != 0 }) || gain != 0 else { if isCurrent { audioProcessingStatus = "Bypassed" }; return }
-        guard !player.isExternalPlaybackActive else { publish("Unavailable: external playback uses the receiver's audio path"); return }
+        guard !externalPlaybackActive else { publish("Unavailable: external playback uses the receiver's audio path"); return }
         guard let url = (native.asset as? AVURLAsset)?.url, url.pathExtension.lowercased() != "m3u8", (isCurrent ? source?.Container : nextPrepared?.plan.source?.Container)?.lowercased() != "hls" else { publish("Unavailable: HLS audio processing is bypassed"); return }
         let fileContainers: Set<String> = ["mp3", "mp4", "m4a", "aac", "flac", "alac", "wav", "aiff", "aif", "caf", "ogg", "opus"]
         guard url.isFileURL || fileContainers.contains(url.pathExtension.lowercased()) || fileContainers.contains((isCurrent ? source?.Container : nextPrepared?.plan.source?.Container)?.lowercased() ?? "") else {
@@ -305,11 +391,77 @@ import SwiftUI
         if isCurrent { audioTask = task }
     }
 
+    /// Caller admits rights, verifies files and binds this package to the current authenticated account.
+    /// Original playback plan/reporter remains owned until normal teardown; no new proxy is allocated.
+    func enableKaraoke(_ package: KaraokePackage, retaining resource: AnyObject? = nil,
+                       isCurrent: () -> Bool = { true }) async throws {
+        guard !stopped, item.Type == "Audio", karaoke == nil, timelineOffsetTicks == 0,
+              !externalPlaybackActive, presentationRate == 1, initialSeekDone,
+              currentNativeItem?.status == .readyToPlay else { throw KaraokeError.unavailable }
+        guard let accountSession, package.itemID == item.Id, package.accountUserID == accountSession.userId, package.accountServer == accountSession.server else { throw KaraokeError.unauthorized }
+        guard isCurrent() else { throw KaraokeError.stale }
+        karaokeGeneration += 1; let generation = karaokeGeneration
+        let original = currentNativeItem
+        let prepared = try await KaraokeAudio.prepare(package)
+        // Retain local inputs before publishing the item or suspending for a seek.
+        if let resource { prepared.retainResources(resource) }
+        if let ticks = item.RunTimeTicks {
+            guard abs(Double(ticks) / 10_000_000 - prepared.duration) <= 0.05 else { throw KaraokeError.invalidStems }
+        }
+        try Task.checkCancellation()
+        guard generation == karaokeGeneration, !stopped, currentNativeItem === original else { throw KaraokeError.stale }
+        try await discardNextMusicCandidate().value
+        try Task.checkCancellation()
+        guard generation == karaokeGeneration, !stopped, currentNativeItem === original,
+              !externalPlaybackActive, isCurrent() else { throw KaraokeError.stale }
+        let position = player.currentTime(), playing = player.rate > 0
+        guard position.seconds.isFinite else { throw KaraokeError.unavailable }
+        player.pause()
+        karaokeOriginal = original; karaoke = prepared
+        currentNativeItem = prepared.nativeItem
+        prepared.nativeItem.externalMetadata = Self.displayMetadata(for: item)
+        initialSeekDone = true
+        #if !os(visionOS)
+        player.allowsExternalPlayback = false
+        #endif
+        player.replaceCurrentItem(with: prepared.nativeItem)
+        observeCurrentStatus()
+        await player.seek(to: position, toleranceBefore: .zero, toleranceAfter: .zero)
+        guard !stopped, karaoke === prepared else { return }
+        audioProcessingStatus = prepared.qualityDescription
+        if playing { resume() }
+    }
+
+    func disableKaraoke() async {
+        karaokeGeneration += 1
+        stopKaraokeMicrophones()
+        guard karaoke != nil, let original = karaokeOriginal, !stopped else { return }
+        let position = player.currentTime(), playing = player.rate > 0
+        player.pause(); karaoke = nil; karaokeOriginal = nil
+        currentNativeItem = original
+        player.replaceCurrentItem(with: original)
+        #if !os(visionOS)
+        player.allowsExternalPlayback = true
+        #endif
+        observeCurrentStatus(); configureAudio(audioSettings)
+        await player.seek(to: position, toleranceBefore: .zero, toleranceAfter: .zero)
+        if playing, !stopped, currentNativeItem === original { resume() }
+    }
+
+    private var externalPlaybackActive: Bool {
+        #if os(visionOS)
+        false
+        #else
+        player.isExternalPlaybackActive
+        #endif
+    }
+
     func toggle() {
         if stopped { onReplay?(); return }
         if player.rate > 0 { player.pause() } else { resume() }
     }
     var supportedPresentationRates: [Float] {
+        if karaoke != nil { return [1] }
         guard let current = player.currentItem, current.status == .readyToPlay else { return [1] }
         return (current.canPlaySlowForward ? [0.5] : []) + [1] + (current.canPlayFastForward ? [1.25, 1.5, 2] : [])
     }
@@ -318,7 +470,13 @@ import SwiftUI
         presentationRate = rate
         if player.rate > 0 { player.rate = rate }
     }
-    func resume() { if stopped { onReplay?() } else { player.play(); player.rate = presentationRate } }
+    func resume() {
+        if stopped { onReplay?() }
+        else if initialSeekDone || initialTicks == 0 && !seekingInitialPosition {
+            player.play()
+            player.rate = presentationRate
+        }
+    }
     func seek(seconds: Double) {
         guard seconds.isFinite, seconds >= 0 else { return }
         let offset = Double(timelineOffsetTicks) / 10_000_000
@@ -358,6 +516,9 @@ import SwiftUI
         if let teardownTask { return teardownTask }
         adoptPreparedItem()
         stopped = true
+        karaokeGeneration += 1
+        stopKaraokeMicrophones()
+        karaoke = nil; karaokeOriginal = nil
         candidateGeneration += 1
         audioGeneration += 1
         audioTask?.cancel()
@@ -372,6 +533,8 @@ import SwiftUI
         rateObserver?.invalidate()
         controlObserver?.invalidate()
         artworkTask?.cancel()
+        segmentRequest?.cancel()
+        activeSkipSegment = nil
         for observer in audioObservers { NotificationCenter.default.removeObserver(observer) }
         audioObservers.removeAll()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
@@ -428,6 +591,7 @@ import SwiftUI
             Task { @MainActor [weak self] in
                 guard let self, !self.stopped else { return }
                 if type == .began {
+                    self.stopKaraokeMicrophones()
                     self.resumeAfterInterruption = self.player.rate > 0
                     self.player.pause()
                 } else if type == .ended {
@@ -476,9 +640,186 @@ import SwiftUI
     }
 }
 
+#if os(iOS) || os(visionOS)
+/// Present AVKit itself so the system owns the close button and its visibility.
+struct NativeVideoPresentation: UIViewControllerRepresentable {
+    let playback: PlaybackController?
+    let onClose: (PlaybackController) -> Void
+
+    func makeUIViewController(context: Context) -> Host { Host() }
+
+    func updateUIViewController(_ host: Host, context: Context) {
+        host.pending = playback
+        host.onClose = onClose
+        Task { @MainActor [weak host] in host?.reconcile() }
+    }
+
+    final class Host: UIViewController, AVPlayerViewControllerDelegate, UIAdaptivePresentationControllerDelegate {
+        var pending: PlaybackController?
+        var onClose: ((PlaybackController) -> Void)?
+        private var shown: PlaybackController?
+        private var native: AVPlayerViewController?
+        private var transitioning = false
+        private var pictureInPicture = false
+        private var failureObservation: AnyCancellable?
+        private var skipObservation: AnyCancellable?
+        #if os(iOS)
+        private var skipButton: UIButton?
+        #endif
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            if let native, native.presentingViewController == nil, !transitioning, !pictureInPicture { didClose(native) }
+            reconcile()
+        }
+
+        func reconcile() {
+            guard !transitioning, viewIfLoaded?.window != nil else { return }
+            if let native {
+                if let pending {
+                    if shown !== pending {
+                        native.player = pending.player
+                        observe(pending)
+                    }
+                } else {
+                    transitioning = true
+                    native.dismiss(animated: true) { [weak self, weak native] in
+                        guard let self, let native else { return }
+                        self.transitioning = false
+                        self.didClose(native)
+                        self.reconcile()
+                    }
+                }
+                return
+            }
+            guard let pending, presentedViewController == nil else { return }
+            let controller = AVPlayerViewController()
+            controller.player = pending.player
+            controller.modalPresentationStyle = .fullScreen
+            controller.delegate = self
+            #if os(iOS)
+            controller.allowsPictureInPicturePlayback = true
+            #endif
+            native = controller
+            observe(pending)
+            transitioning = true
+            present(controller, animated: true) { [weak self] in
+                self?.transitioning = false
+                self?.reconcile()
+                if let message = self?.shown?.failure { self?.showFailure(message) }
+            }
+            controller.presentationController?.delegate = self
+        }
+
+        private func observe(_ playback: PlaybackController) {
+            shown = playback
+            failureObservation = playback.$failure.compactMap { $0 }.sink { [weak self] text in
+                self?.showFailure(text)
+            }
+            skipObservation = playback.$activeSkipSegment.sink { [weak self, weak playback] segment in
+                guard let self, let playback, let native = self.native else { return }
+                #if os(visionOS)
+                native.contextualActions = segment.flatMap { value in
+                    value.kind.map { kind in UIAction(title: kind.title) { [weak playback] _ in playback?.skip(value) } }
+                }.map { [$0] } ?? []
+                #else
+                self.skipButton?.removeFromSuperview()
+                self.skipButton = nil
+                guard let segment, let kind = segment.kind else { return }
+                var style = UIButton.Configuration.filled()
+                style.title = kind.title
+                style.cornerStyle = .capsule
+                let button = UIButton(configuration: style, primaryAction: UIAction { [weak playback] _ in playback?.skip(segment) })
+                button.accessibilityIdentifier = "bluefinSkipSegment"
+                button.translatesAutoresizingMaskIntoConstraints = false
+                native.view.addSubview(button)
+                let safeArea = native.view.safeAreaLayoutGuide
+                NSLayoutConstraint.activate([
+                    button.trailingAnchor.constraint(equalTo: safeArea.trailingAnchor, constant: -16),
+                    button.bottomAnchor.constraint(equalTo: safeArea.bottomAnchor, constant: -110)
+                ])
+                self.skipButton = button
+                #endif
+            }
+        }
+
+        private func showFailure(_ text: String) {
+            guard !transitioning, let native, native.viewIfLoaded?.window != nil,
+                  native.presentedViewController == nil else { return }
+            let alert = UIAlertController(title: "Playback interrupted", message: text, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Close player", style: .default) { [weak self, weak native] _ in
+                guard let self, let native, native === self.native else { return }
+                self.pending = nil
+                self.reconcile()
+            })
+            native.present(alert, animated: true)
+        }
+
+        private func didClose(_ controller: UIViewController) {
+            guard controller === native, let shown else { return }
+            native = nil
+            self.shown = nil
+            failureObservation = nil
+            skipObservation = nil
+            #if os(iOS)
+            skipButton?.removeFromSuperview()
+            skipButton = nil
+            #endif
+            if pending === shown { pending = nil }
+            onClose?(shown)
+        }
+
+        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+            if !pictureInPicture { didClose(presentationController.presentedViewController) }
+        }
+
+        func playerViewController(_ playerViewController: AVPlayerViewController,
+                                  willEndFullScreenPresentationWithAnimationCoordinator coordinator: any UIViewControllerTransitionCoordinator) {
+            coordinator.animate(alongsideTransition: nil) { [weak self, weak playerViewController] context in
+                guard !context.isCancelled, let self, let playerViewController, !self.pictureInPicture else { return }
+                self.didClose(playerViewController)
+            }
+        }
+
+        #if os(iOS)
+        func playerViewControllerWillStartPictureInPicture(_ playerViewController: AVPlayerViewController) {
+            pictureInPicture = true
+        }
+
+        func playerViewController(_ playerViewController: AVPlayerViewController,
+                                  restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completion: @escaping (Bool) -> Void) {
+            if playerViewController.presentingViewController != nil {
+                completion(true)
+            } else if viewIfLoaded?.window != nil {
+                present(playerViewController, animated: true) { completion(true) }
+            } else {
+                completion(false)
+            }
+        }
+
+        func playerViewControllerDidStopPictureInPicture(_ playerViewController: AVPlayerViewController) {
+            pictureInPicture = false
+            if playerViewController.presentingViewController == nil { didClose(playerViewController) }
+        }
+
+        func playerViewController(_ playerViewController: AVPlayerViewController, failedToStartPictureInPictureWithError error: any Error) {
+            pictureInPicture = false
+        }
+        #endif
+    }
+}
+#endif
+
 struct NativePlayer: UIViewControllerRepresentable {
     @ObservedObject var playback: PlaybackController
     var onOptions: (() -> Void)? = nil
+    final class Coordinator {
+        var segment: MediaSkipSegment?
+        weak var playback: PlaybackController?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
         controller.player = playback.player
@@ -495,7 +836,22 @@ struct NativePlayer: UIViewControllerRepresentable {
         #endif
         return controller
     }
-    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) { controller.player = playback.player }
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        if controller.player !== playback.player { controller.player = playback.player }
+        #if os(tvOS)
+        let segment = playback.activeSkipSegment
+        guard context.coordinator.segment != segment || context.coordinator.playback !== playback else { return }
+        context.coordinator.segment = segment
+        context.coordinator.playback = playback
+        if let segment, let kind = segment.kind {
+            controller.contextualActions = [UIAction(title: kind.title) { [weak playback] _ in
+                playback?.skip(segment)
+            }]
+        } else {
+            controller.contextualActions = []
+        }
+        #endif
+    }
 }
 
 struct PlaybackScreen: View {
@@ -504,24 +860,15 @@ struct PlaybackScreen: View {
     @Environment(\.dismiss) private var dismiss
     @State private var optionsVisible = false
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack {
             NativePlayer(playback: playback, onOptions: { optionsVisible = true }).ignoresSafeArea()
             if let failure = playback.failure {
                 VStack(spacing: 20) {
-                    Image(systemName: "exclamationmark.triangle").font(.largeTitle)
                     Text("Playback interrupted").font(.title2.bold())
                     Text(failure).multilineTextAlignment(.center)
-                    Button("Close player") { playback.stop(); dismiss() }.buttonStyle(.borderedProminent)
+                    Button("Close player") { dismiss() }.buttonStyle(.borderedProminent)
                 }.padding(32).background(.regularMaterial).cornerRadius(20).padding()
             }
-            #if os(iOS)
-            HStack(spacing: 18) {
-                Button { optionsVisible = true } label: { Image(systemName: "slider.horizontal.3").font(.title2).foregroundStyle(.white).frame(width: 44, height: 44).background(.black.opacity(0.5), in: Circle()) }
-                    .accessibilityLabel("Video options")
-                Button { playback.stop(); dismiss() } label: { Image(systemName: "xmark.circle.fill").font(.title).symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.5)) }
-                    .accessibilityLabel("Close player")
-            }.padding(20)
-            #endif
         }
         .sheet(isPresented: $optionsVisible) {
             NavigationView {
@@ -534,7 +881,6 @@ struct PlaybackScreen: View {
                 .toolbar { ToolbarItem(placement: .primaryAction) { Button("Done") { optionsVisible = false } } }
             }.navigationViewStyle(.stack)
         }
-        .onDisappear { playback.stop() }
         .alert("Watch progress", isPresented: Binding(get: { playback.reportingFailure != nil }, set: { if !$0 { playback.reportingFailure = nil } })) {
             Button("OK") { playback.reportingFailure = nil }
         } message: { Text(playback.reportingFailure ?? "") }

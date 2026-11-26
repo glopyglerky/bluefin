@@ -29,6 +29,15 @@ process termination or an unreachable server; such failures are surfaced.
 
 `char *bluefin_call(const char *json)` blocks. Call it from a background thread, outside a Tokio runtime. Supply valid readable NUL-terminated UTF-8 of at most 65,536 bytes, excluding the terminator. The returned allocated UTF-8 JSON always has either `{"ok":true,"value":...}` or `{"ok":false,"error":"safe message"}`. Copy it, then release it exactly once with `bluefin_free`. NULL input is an error; freeing NULL is safe. Invalid/dangling pointers, double frees and foreign allocations violate the C contract and cannot be caught as Rust panics.
 
+An Android `releasePlayback` error may also include a bounded `cleanupResources`
+snapshot for the exact captured account. Independent remote acknowledgments are
+retained even when local retirement or another remote step fails. This remains
+`ok: false`; the snapshot is not a local-retirement receipt. Android protects
+this progress before surfacing the error and retains the unfinished resource.
+Other platforms keep their existing release behavior. Android release requires
+its registered captured resource; sign-out restores protected pending receipts
+after process recreation instead of operating on unregistered identifiers.
+
 Panics during dispatch are caught. Four FFI calls may run concurrently; further calls fail with `Client busy`. Each HTTP request has a 5-second connection timeout, 15-second total timeout and 8 MiB body limit. Home performs three requests sequentially, so its bound is approximately 45 seconds. The final JSON envelope is limited to 8 MiB. Allocation exhaustion and host process termination are outside panic recovery. HTTP errors expose status only; transport and JSON errors never echo response bodies, credentials or URLs. The core installs no logging or global panic hook.
 
 Common JSON fields are `operation`, `server`, `token`, `userId`, `deviceId`. Server must be an absolute HTTPS URL, optionally with a base path. Credentials, query and fragment are forbidden. Local HTTP requires `allowLocalHttp:true` and localhost, a `.local` hostname, or a private/loopback/link-local IP literal. The HTTP opt-in is intended for trusted local networks. Tokens are carried in the MediaBrowser Authorization header. No redirects, ambient proxy configuration, cookie storage or persistent credential storage are enabled. Swift owns Keychain persistence. Device ID defaults to `bluefin-apple`; supply a stable per-install ID.
@@ -49,6 +58,27 @@ Common JSON fields are `operation`, `server`, `token`, `userId`, `deviceId`. Ser
 | `quickConnectStatus` | `secret`; no token needed | raw connection status |
 | `quickConnectAuthenticate` | `secret`; no token needed | raw authentication result |
 | `irohProbe` | `peerId`, `peerAddress` numeric IP:port | feature-gated real handshake result, never media acceptance |
+| `karaokeManifest` | `itemId`; optional `mediaSourceId` | validated authorized package metadata |
+| `prepareKaraoke` | `itemId`, nonnil UUID `requestId`; optional `mediaSourceId` | validated preparation status |
+| `karaokePreparationStatus` | same job fields | validated preparation status |
+| `cancelKaraokePreparation` | `itemId`, `requestId` | `{cancelRequested:true}` after a successful DELETE; not a worker-join receipt |
+| `karaokeStem` | `itemId`, `revision`, `role`, `sha256`, `bytes`, app-owned `destination`; optional `mediaSourceId` | verified temporary-file download |
+
+Sing inference and model assets belong to the server. The client first checks
+for an authorized package, then requests preparation when it is absent. A job is
+bound to its item, client-generated request UUID and selected source. Only the
+defined queued/preparing/ready/unavailable/failed/cancelling/cancelled states are
+accepted. The server must authorize each request and retain cancellation before
+a delayed POST; the request UUID is an idempotency key, not an access credential.
+Cancellation uses the reserved cleanup path and a three-second request timeout.
+
+Packages distinguish supplied stems from model-separated stems. Processed
+packages require a public processing reference and a media source identity;
+they do not establish original-audio fidelity. Selected source identity is sent
+on manifest and stem requests. Stem transfers check the exact byte count and
+SHA-256, reject redirects, and remove partial output on failure. The destination
+is a native temporary path and is never transmitted to the server. Word timing
+must be provided by the authorized package; the client invents none.
 
 Additional operations are `favorite`, with `userId`, `itemId`, and a Boolean
 `favorite`; `releasePlayback`, with `playSessionId`, `deviceId`, `playMethod`,
@@ -100,6 +130,17 @@ The optional `iroh-probe` feature uses the same modern Iroh version for a real
 pinned handshake with `bluefin/apple-probe/1`. Its `mediaRouteQualified:false`
 result is only a probe. Workspace-gateway MCP framing is not a media protocol.
 The retired compatibility experiment is not part of the active core graph.
+
+### Streaming resource bounds
+
+The proxy keeps at most 4,096 upstream routes per session. Sliding HLS windows
+replace old segment mappings; expired local IDs are never recycled. The item
+entry point remains available, and up to 256 recent rendition, key and
+initialization references take precedence over old segments. A single manifest
+that exceeds the active route budget is refused rather than publishing expired
+URLs. This bounds memory without a lifetime segment limit for normal live
+windows. Active responses use an idle read timeout, not a 30-second total media
+deadline. Transport fixtures do not establish native decoder or provider access.
 
 ## Building and verification
 
@@ -202,6 +243,14 @@ HTTP409 and are never automatically retried. Metadata fetches are user scoped,
 batched and reordered to preserve duplicate tracks. Missing extensions return
 normal errors; clients must not infer support from a server name.
 
+`bluefinCapabilities` also projects the optional authenticated
+`irohMediaTransport` advertisement through the shared transport DTO. The client
+accepts version 1, ALPN `bluefin/http/1`, a 64-character hexadecimal endpoint ID and
+up to 16 numeric direct addresses. Unsupported extensions are omitted without
+disabling queue capabilities. This metadata grants no playback rights and makes
+no reachability claim. Native transport settings can load it from the signed-in
+HTTPS server; saving a pin remains an explicit action scoped to that account.
+
 `sportsPreferences` and `sportsHome` use the selected origin's root
 `/sports/api/v1/preferences` and `/sports/api/v1/home`. Saving preferences takes
 the preferences object and the exact quoted numeric `etag`; PUT sends only
@@ -216,3 +265,20 @@ remains conservative SDR. Source and track choices are preserved when planning.
 Explicit audio selection requests a transcode so static playback cannot ignore
 it. Subtitle index -1 means off. A lower bitrate choice cannot silently select
 a known over-limit static source. Source quality does not prove output quality.
+
+
+Foreground Iroh proxy shutdown aborts and joins every proxy request before
+checking exclusive session ownership and calling the transport's checked drain.
+The proxy thread returns that result to `stopPlaybackProxy`; an unconfirmed drain
+returns a safe error instead of `stopped: true`. Existing account cleanup callers
+receive the same failure. Proxy admission remains locked through actual thread
+exit. Drop remains a best-effort fallback for startup failures and unwind.
+Call cleanup off the UI thread. Injected drain failures test receipt propagation;
+real loopback HTTPS and pinned Iroh tests separately exercise transport behavior.
+
+`tools/BuildCore.rs` remaps native C/ASM file, macro and debug source prefixes as
+well as Rust paths. It enables cc's shell-escaped flag parsing only in child
+commands and preserves inherited native flag arguments, including target-specific
+flags. SDK selection and minimum OS 15 remain explicit. Inspect delivered static
+archives with matching Rust LLVM tools; a bounded marker scan is not a universal
+privacy or linked-app acceptance claim.

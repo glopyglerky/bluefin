@@ -3,7 +3,7 @@ use cfg_aliases::cfg_aliases;
 fn main() {
     // Setup cfg aliases
     cfg_aliases! {
-        apple_mobile: { any(target_os = "ios", target_os = "tvos", all(target_os = "macos", feature = "portable-apple")) },
+        apple_mobile: { any(target_os = "ios", target_os = "tvos", target_os = "visionos", all(target_os = "macos", feature = "portable-apple")) },
         // Convenience aliases
         wasm_browser: { all(target_family = "wasm", target_os = "unknown") },
         // Limited POSIX platforms (not wasm)

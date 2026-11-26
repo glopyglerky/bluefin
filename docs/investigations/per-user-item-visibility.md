@@ -46,7 +46,7 @@ sources; the runtime tests are not represented as a run of rc7.
 Ferrofin was rebuilt from the investigation worktree with:
 
 ```sh
-CARGO_TARGET_DIR=/home/mango/dev/ferrofin/target RUSTC_WRAPPER= \
+CARGO_TARGET_DIR=$CARGO_TARGET_DIR RUSTC_WRAPPER= \
   cargo build --locked --offline -p ferrofin-server
 ```
 
@@ -100,7 +100,7 @@ The harness requires Python 3, ffmpeg with libx264, and these server binaries:
 
 ```sh
 python3 /tmp/ferrofin-visibility-live.py ferrofin \
-  /home/mango/dev/ferrofin/target/debug/ferrofin-server
+  $CARGO_TARGET_DIR/debug/ferrofin-server
 python3 /tmp/ferrofin-visibility-live.py jellyfin \
   /tmp/ferrofin-extras-jellyfin-bin/jellyfin.dll \
   --dotnet /tmp/ferrofin-extras-dotnet/dotnet

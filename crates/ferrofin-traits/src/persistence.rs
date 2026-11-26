@@ -237,6 +237,20 @@ pub struct PlaylistItemsWithAccess {
 /// `BaseItem` return type becomes [`BaseItemEntity`].
 #[async_trait]
 pub trait ItemRepository: Send + Sync {
+    /// Capture a consistent database source generation and its owned input.
+    /// Custom stores without atomic capture support fail closed. The media
+    /// manager must still validate version membership and live authorization.
+    async fn capture_local_source(
+        &self,
+        _item_id: Uuid,
+        _source_id: Uuid,
+        _expected_path: &str,
+    ) -> Result<ferrofin_db::source_pin::OpenedSourceGeneration, ServiceError> {
+        Err(ServiceError::unavailable(
+            "local source capture is unsupported",
+        ))
+    }
+
     /// Retrieves a single item row by id, or `None` if it does not exist.
     async fn retrieve_item(&self, id: Uuid) -> Result<Option<BaseItemEntity>, ServiceError>;
 

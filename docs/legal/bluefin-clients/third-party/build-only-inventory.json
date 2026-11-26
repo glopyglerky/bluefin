@@ -1,0 +1,498 @@
+[
+  {
+    "platform": "android",
+    "target": "aarch64-linux-android",
+    "package": "cc",
+    "version": "1.11.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cc/1.11.1"
+  },
+  {
+    "platform": "android",
+    "target": "aarch64-linux-android",
+    "package": "find-msvc-tools",
+    "version": "0.1.15",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/find-msvc-tools/0.1.15"
+  },
+  {
+    "platform": "android",
+    "target": "aarch64-linux-android",
+    "package": "shlex",
+    "version": "2.0.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/shlex/2.0.1"
+  },
+  {
+    "platform": "android",
+    "target": "aarch64-linux-android",
+    "package": "rustc_version",
+    "version": "0.4.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/rustc_version/0.4.1"
+  },
+  {
+    "platform": "android",
+    "target": "aarch64-linux-android",
+    "package": "semver",
+    "version": "1.0.28",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/semver/1.0.28"
+  },
+  {
+    "platform": "android",
+    "target": "aarch64-linux-android",
+    "package": "walkdir",
+    "version": "2.5.0",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/walkdir/2.5.0"
+  },
+  {
+    "platform": "android",
+    "target": "aarch64-linux-android",
+    "package": "same-file",
+    "version": "1.0.6",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/same-file/1.0.6"
+  },
+  {
+    "platform": "android",
+    "target": "aarch64-linux-android",
+    "package": "cfg_aliases",
+    "version": "0.2.2",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cfg_aliases/0.2.2"
+  },
+  {
+    "platform": "android",
+    "target": "aarch64-linux-android",
+    "package": "version_check",
+    "version": "0.9.5",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/version_check/0.9.5"
+  },
+  {
+    "platform": "android",
+    "target": "armv7-linux-androideabi",
+    "package": "cc",
+    "version": "1.11.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cc/1.11.1"
+  },
+  {
+    "platform": "android",
+    "target": "armv7-linux-androideabi",
+    "package": "find-msvc-tools",
+    "version": "0.1.15",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/find-msvc-tools/0.1.15"
+  },
+  {
+    "platform": "android",
+    "target": "armv7-linux-androideabi",
+    "package": "shlex",
+    "version": "2.0.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/shlex/2.0.1"
+  },
+  {
+    "platform": "android",
+    "target": "armv7-linux-androideabi",
+    "package": "rustc_version",
+    "version": "0.4.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/rustc_version/0.4.1"
+  },
+  {
+    "platform": "android",
+    "target": "armv7-linux-androideabi",
+    "package": "semver",
+    "version": "1.0.28",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/semver/1.0.28"
+  },
+  {
+    "platform": "android",
+    "target": "armv7-linux-androideabi",
+    "package": "walkdir",
+    "version": "2.5.0",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/walkdir/2.5.0"
+  },
+  {
+    "platform": "android",
+    "target": "armv7-linux-androideabi",
+    "package": "same-file",
+    "version": "1.0.6",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/same-file/1.0.6"
+  },
+  {
+    "platform": "android",
+    "target": "armv7-linux-androideabi",
+    "package": "cfg_aliases",
+    "version": "0.2.2",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cfg_aliases/0.2.2"
+  },
+  {
+    "platform": "android",
+    "target": "armv7-linux-androideabi",
+    "package": "version_check",
+    "version": "0.9.5",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/version_check/0.9.5"
+  },
+  {
+    "platform": "android",
+    "target": "x86_64-linux-android",
+    "package": "cc",
+    "version": "1.11.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cc/1.11.1"
+  },
+  {
+    "platform": "android",
+    "target": "x86_64-linux-android",
+    "package": "find-msvc-tools",
+    "version": "0.1.15",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/find-msvc-tools/0.1.15"
+  },
+  {
+    "platform": "android",
+    "target": "x86_64-linux-android",
+    "package": "shlex",
+    "version": "2.0.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/shlex/2.0.1"
+  },
+  {
+    "platform": "android",
+    "target": "x86_64-linux-android",
+    "package": "rustc_version",
+    "version": "0.4.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/rustc_version/0.4.1"
+  },
+  {
+    "platform": "android",
+    "target": "x86_64-linux-android",
+    "package": "semver",
+    "version": "1.0.28",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/semver/1.0.28"
+  },
+  {
+    "platform": "android",
+    "target": "x86_64-linux-android",
+    "package": "walkdir",
+    "version": "2.5.0",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/walkdir/2.5.0"
+  },
+  {
+    "platform": "android",
+    "target": "x86_64-linux-android",
+    "package": "same-file",
+    "version": "1.0.6",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/same-file/1.0.6"
+  },
+  {
+    "platform": "android",
+    "target": "x86_64-linux-android",
+    "package": "cfg_aliases",
+    "version": "0.2.2",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cfg_aliases/0.2.2"
+  },
+  {
+    "platform": "android",
+    "target": "x86_64-linux-android",
+    "package": "version_check",
+    "version": "0.9.5",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/version_check/0.9.5"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios",
+    "package": "cc",
+    "version": "1.11.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cc/1.11.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios",
+    "package": "find-msvc-tools",
+    "version": "0.1.15",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/find-msvc-tools/0.1.15"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios",
+    "package": "shlex",
+    "version": "2.0.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/shlex/2.0.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios",
+    "package": "rustc_version",
+    "version": "0.4.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/rustc_version/0.4.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios",
+    "package": "semver",
+    "version": "1.0.28",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/semver/1.0.28"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios",
+    "package": "cfg_aliases",
+    "version": "0.2.2",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cfg_aliases/0.2.2"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios",
+    "package": "version_check",
+    "version": "0.9.5",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/version_check/0.9.5"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios-sim",
+    "package": "cc",
+    "version": "1.11.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cc/1.11.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios-sim",
+    "package": "find-msvc-tools",
+    "version": "0.1.15",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/find-msvc-tools/0.1.15"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios-sim",
+    "package": "shlex",
+    "version": "2.0.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/shlex/2.0.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios-sim",
+    "package": "rustc_version",
+    "version": "0.4.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/rustc_version/0.4.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios-sim",
+    "package": "semver",
+    "version": "1.0.28",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/semver/1.0.28"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios-sim",
+    "package": "cfg_aliases",
+    "version": "0.2.2",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cfg_aliases/0.2.2"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios-sim",
+    "package": "version_check",
+    "version": "0.9.5",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/version_check/0.9.5"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-tvos",
+    "package": "cc",
+    "version": "1.11.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cc/1.11.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-tvos",
+    "package": "find-msvc-tools",
+    "version": "0.1.15",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/find-msvc-tools/0.1.15"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-tvos",
+    "package": "shlex",
+    "version": "2.0.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/shlex/2.0.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-tvos",
+    "package": "rustc_version",
+    "version": "0.4.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/rustc_version/0.4.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-tvos",
+    "package": "semver",
+    "version": "1.0.28",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/semver/1.0.28"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-tvos",
+    "package": "cfg_aliases",
+    "version": "0.2.2",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cfg_aliases/0.2.2"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-tvos",
+    "package": "version_check",
+    "version": "0.9.5",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/version_check/0.9.5"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-tvos-sim",
+    "package": "cc",
+    "version": "1.11.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cc/1.11.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-tvos-sim",
+    "package": "find-msvc-tools",
+    "version": "0.1.15",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/find-msvc-tools/0.1.15"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-tvos-sim",
+    "package": "shlex",
+    "version": "2.0.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/shlex/2.0.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-tvos-sim",
+    "package": "rustc_version",
+    "version": "0.4.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/rustc_version/0.4.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-tvos-sim",
+    "package": "semver",
+    "version": "1.0.28",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/semver/1.0.28"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-tvos-sim",
+    "package": "cfg_aliases",
+    "version": "0.2.2",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cfg_aliases/0.2.2"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-tvos-sim",
+    "package": "version_check",
+    "version": "0.9.5",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/version_check/0.9.5"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios-macabi",
+    "package": "cc",
+    "version": "1.11.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cc/1.11.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios-macabi",
+    "package": "find-msvc-tools",
+    "version": "0.1.15",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/find-msvc-tools/0.1.15"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios-macabi",
+    "package": "shlex",
+    "version": "2.0.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/shlex/2.0.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios-macabi",
+    "package": "rustc_version",
+    "version": "0.4.1",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/rustc_version/0.4.1"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios-macabi",
+    "package": "semver",
+    "version": "1.0.28",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/semver/1.0.28"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios-macabi",
+    "package": "cfg_aliases",
+    "version": "0.2.2",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/cfg_aliases/0.2.2"
+  },
+  {
+    "platform": "apple",
+    "target": "aarch64-apple-ios-macabi",
+    "package": "version_check",
+    "version": "0.9.5",
+    "scope": "build-only; not classified as redistributed runtime",
+    "reference": "https://crates.io/crates/version_check/0.9.5"
+  }
+]

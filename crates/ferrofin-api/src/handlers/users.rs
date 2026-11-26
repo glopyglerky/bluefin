@@ -414,7 +414,7 @@ async fn authenticate_with_quick_connect(
 ///
 /// The token is echoed back to the client as `AccessToken` so subsequent
 /// requests can authenticate.
-async fn authentication_result(
+pub(crate) async fn authentication_result(
     state: &AppState,
     result: AuthenticationResultData,
 ) -> AuthenticationResult {

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Bluefin TV</title><link rel="stylesheet" href="tv.css"></head>
+<body><div class="watermark" aria-hidden="true">B</div><header><div class="brand">BLUEFIN <span>TV</span></div><nav id="nav" hidden><button data-view="library">Home</button><button data-view="movies">Movies</button><button data-view="shows">TV Shows</button><button data-view="guide">Live TV</button><button data-view="music">Music</button><button data-view="search">Search</button><button data-view="queue">Queue</button><button id="signout">Sign out</button></nav></header>
+<main id="content">
+  <section class="signin">
+    <h1>Bluefin</h1>
+    <form id="connect">
+      <label>Server address<input id="server" type="url" placeholder="https://media.example.com" required autocomplete="url"></label>
+      <button type="submit">Continue</button>
+    </form>
+    <div id="account" hidden>
+      <h2 id="serverName">Sign in</h2>
+      <div id="accountChoices" class="actions">
+        <button id="passwordChoice">Sign in</button>
+        <button id="passkeyChoice" hidden>Sign in with a passkey</button>
+        <button id="codeChoice" hidden>Quick Connect</button>
+        <button id="signupChoice" hidden>Create account</button>
+      </div>
+      <form id="signin" hidden>
+        <label>Username<input id="username" required autocomplete="username" maxlength="64"></label>
+        <label>Password<input id="password" type="password" autocomplete="current-password" maxlength="512"></label>
+        <button id="credentialSubmit" type="submit">Sign in</button>
+      </form>
+      <div id="deviceChallenge" hidden></div>
+      <button id="changeServer">Change server</button>
+    </div>
+  </section>
+</main>
+<section id="now" hidden tabindex="-1" aria-label="Now playing"><div id="playerHost"><video id="video" playsinline></video></div><div class="playbar"><strong id="playingTitle"></strong><span id="clock"></span><button id="previous">Previous</button><button id="rewind">Back 10s</button><button id="pause">Pause</button><button id="forward">Forward 30s</button><button id="next">Next</button><button id="tracks">Tracks</button><button id="stop">Stop</button></div><div id="tracklist"></div></section>
+<p id="status" role="status" aria-live="polite">Loading…</p><script src="platform.js"></script><script src="policy.js"></script><script src="app.js"></script></body></html>

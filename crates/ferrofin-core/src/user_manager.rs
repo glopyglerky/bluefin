@@ -86,7 +86,7 @@ const DEFAULT_BOOTSTRAP_USERNAME: &str = "MyJellyfinUser";
 type LoginLocks = Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>;
 
 mod login_backoff;
-mod user_repository;
+pub(crate) mod user_repository;
 
 pub use login_backoff::LoginBackoffSettings;
 
@@ -1332,6 +1332,40 @@ impl UserManager for FerrofinUserManager {
             .await
     }
 
+    async fn create_signup_user(
+        &self,
+        name: &str,
+        password: &str,
+    ) -> Result<UserEntity, ServiceError> {
+        require_valid_username(name)?;
+        if name.chars().count() > 64 || password.chars().count() < 15
+            || password.len() > 512 || password.trim().is_empty()
+        {
+            return Err(ServiceError::invalid_input(
+                "Use a username of up to 64 characters and a password of at least 15 characters.",
+            ));
+        }
+        let hash = self.default_provider.format_password_hash(password).await?;
+        self.insert_user(name, move |tx, id| {
+            Box::pin(async move {
+                user_repository::set_password(&mut **tx, id, hash.as_deref())
+                    .await
+                    .map_err(db_err)?;
+                for permission in [
+                    PermissionKind::EnableAllFolders,
+                    PermissionKind::EnableLiveTvAccess,
+                    PermissionKind::EnableAllChannels,
+                    PermissionKind::EnableSharedDeviceControl,
+                    PermissionKind::EnablePublicSharing,
+                ] {
+                    set_permission_tx(tx, id, permission, false).await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+    }
+
     async fn create_external_user(
         &self,
         name: &str,
@@ -1907,6 +1941,18 @@ impl UserManager for FerrofinUserManager {
         Ok(())
     }
 
+    async fn current_media_playback_allowed(
+        &self,
+        user: &UserEntity,
+    ) -> Result<bool, ServiceError> {
+        let permissions = user_repository::fresh_permissions(self.db.pool(), &user.id)
+            .await
+            .map_err(db_err)?;
+        Ok(permissions
+            .iter()
+            .any(|&(kind, value)| kind == i32::from(PermissionKind::EnableMediaPlayback) && value))
+    }
+
     async fn update_policy(&self, user_id: Uuid, policy: &UserPolicy) -> Result<(), ServiceError> {
         self.save_policy(user_id, policy, false).await.map(|_| ())
     }
@@ -2116,6 +2162,17 @@ fn guid_pref(map: &HashMap<i32, String>, kind: PreferenceKind) -> Vec<Uuid> {
         .iter()
         .filter_map(|v| ferrofin_util::guid_extensions::parse_dotnet_guid(v))
         .collect()
+}
+
+pub(crate) async fn current_user_policy(
+    db: &Database,
+    user: &UserEntity,
+) -> Result<UserPolicy, ServiceError> {
+    let id = Uuid::parse_str(&user.id)
+        .map_err(|_| ServiceError::unauthorized("invalid current account"))?;
+    let (permissions, preferences) =
+        load_permission_and_preference_maps(db.pool(), &user.id).await?;
+    build_user_policy(db.pool(), user, id, &permissions, &preferences).await
 }
 
 async fn build_user_policy(

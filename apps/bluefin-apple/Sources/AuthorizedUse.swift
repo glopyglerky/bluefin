@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum BluefinAuthorizedUse {
-    static let connectionNotice = "Connect only libraries and provider accounts you own or are authorized to use. Bluefin does not include media or unlock subscriptions."
+    static let connectionNotice = "Connect only libraries and provider accounts you own or are authorized to use. Bluefin does not provide commercial media or unlock streaming subscriptions."
 }
 
 struct AuthorizedUseView: View {
@@ -21,7 +21,8 @@ struct AuthorizedUseView: View {
             Section("Independent software") {
                 Text("Bluefin is independent of Apple, Jellyfin, Plex and connected providers. Their names identify compatibility. Media, artwork, lyrics and other third-party materials retain their owners' rights.")
                 Text("Bluefin does not bundle, install or require the arr applications. Optional integrations connect separate applications through supported interfaces.")
-                Link("Source and licenses", destination: URL(string: "https://github.com/glopyglerky/bluefin")!)
+                NavigationLink("Software licenses", destination: SoftwareLicensesView())
+                Link("Project source", destination: URL(string: "https://github.com/glopyglerky/bluefin")!)
             }
         }.navigationTitle("Libraries and rights")
     }

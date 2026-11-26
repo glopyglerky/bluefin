@@ -1,0 +1,74 @@
+<!doctype html><html lang="en"><head><title>Bluefin discovery</title></head><body>
+<div data-role="page" class="page type-interior pluginConfigurationPage bluefinDiscoveryPage" data-require="emby-input,emby-button,emby-checkbox">
+  <div data-role="content"><div class="content-primary">
+    <h2>Discovery and requests</h2>
+    <p>Connect a separately installed Seerr service. Bluefin does not include or manage the arr applications.</p>
+    <p>Connect only libraries and accounts you own or are authorized to use. Search results and requests do not establish playback, copying or sharing rights. Follow provider terms and rights-holder permissions.</p>
+    <p class="status" role="status" aria-live="polite">Loading settings…</p>
+    <form class="settings" hidden>
+      <label class="field"><input type="checkbox" name="enabled"> Enable discovery on this server</label>
+      <label class="field"><input type="checkbox" name="clients"> Offer discovery and request actions in client apps</label>
+      <p>Client access is off by default. Apps communicate only with Bluefin. Credentials, upstream account mapping and request processing stay on this server. Disabling client access also rejects stale client actions.</p>
+      <label class="field">Service address <input is="emby-input" name="base" type="url" placeholder="https://requests.example.com" autocomplete="off"></label>
+      <label class="field">New service API key <input is="emby-input" name="key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the existing key"></label>
+      <p class="credential"></p>
+      <label class="field"><input type="checkbox" name="clear"> Remove the saved credential</label>
+      <label class="field"><input type="checkbox" name="local"> Allow unencrypted HTTP to an explicitly configured private IP address</label>
+      <h3>Connected accounts</h3>
+      <p>Map each Bluefin account to its existing account in the connected service. Requests retain that account's permissions, quotas and approval rules. No automatic administrator fallback is used.</p>
+      <div class="mappings"></div>
+      <button is="emby-button" type="button" class="raised add">Add account</button>
+      <p><button is="emby-button" type="submit" class="raised button-submit save">Save changes</button>
+      <button is="emby-button" type="button" class="raised reload">Reload</button></p>
+    </form>
+  </div></div>
+  <style>
+    .bluefinDiscoveryPage .content-primary{max-width:64em}.bluefinDiscoveryPage .field{display:block;margin:1.2em 0}.bluefinDiscoveryPage input[type=url],.bluefinDiscoveryPage input[type=password]{display:block;width:min(100%,42em);margin-top:.5em}.bluefinDiscoveryPage .mapping{display:flex;flex-wrap:wrap;align-items:end;gap:1em;padding:1em;margin:1em 0;background:rgba(128,128,128,.12);border-radius:.6em}.bluefinDiscoveryPage .mapping label{display:flex;flex-direction:column;gap:.4em}.bluefinDiscoveryPage .mapping input[type=number]{max-width:8em}.bluefinDiscoveryPage .status{min-height:1.5em}.bluefinDiscoveryPage button{min-height:44px}
+  </style>
+  <script>
+    (function(){'use strict';
+      function bind(page){
+      if(page.dataset.bluefinBound==='true')return;page.dataset.bluefinBound='true';
+      const form=page.querySelector('form'),status=page.querySelector('.status'),mappings=page.querySelector('.mappings');
+      let revision=0,users=[],busy=false,generation=0;
+      const field=name=>form.elements.namedItem(name);
+      function say(text){status.textContent=text;}
+      async function api(path,method,body){
+        const headers={Accept:'application/json'};ApiClient.setRequestHeaders(headers);
+        if(body!==undefined)headers['Content-Type']='application/json';
+        const response=await fetch(ApiClient.getUrl(path),{method:method||'GET',headers,cache:'no-store',credentials:'omit',body:body===undefined?undefined:JSON.stringify(body)});
+        if(!response.ok){const error=new Error(response.status===409?'Settings changed in another session. Reload before saving.':response.status===403?'Administrator access is required.':response.status===404?'Discovery is unavailable on this server.':'The operation failed. Reload before retrying.');error.status=response.status;throw error;}
+        return response.json();
+      }
+      function addMapping(grant){
+        const row=document.createElement('div');row.className='mapping';
+        function label(text,node){const label=document.createElement('label');label.textContent=text;label.append(node);row.append(label);return node;}
+        const user=document.createElement('select');user.className='user';
+        const normalized=id=>String(id).replace(/-/g,'').toLowerCase();
+        const available=users.slice();const matching=grant&&available.find(u=>normalized(u.Id)===normalized(grant.userId));if(grant&&!matching)available.push({Id:grant.userId,Name:'Unavailable account'});
+        for(const value of available){const option=document.createElement('option');option.value=value.Id;option.textContent=value.Name||'Account';user.append(option);}user.value=grant?(matching?.Id||grant.userId):(available[0]?.Id||'');label('Bluefin account',user);
+        const upstream=document.createElement('input');upstream.type='number';upstream.min='1';upstream.max='2147483647';upstream.required=true;upstream.className='upstream';upstream.value=grant?grant.upstreamUserId:'';label('Existing service account ID',upstream);
+        for(const [name,text]of [['search','Search'],['requests','Request']]){const input=document.createElement('input');input.type='checkbox';input.className=name;input.checked=Boolean(grant?.[name]);label(text,input);}
+        const remove=document.createElement('button');remove.type='button';remove.textContent='Remove';remove.addEventListener('click',()=>row.remove());row.append(remove);mappings.append(row);
+      }
+      async function load(){
+        const request=++generation;busy=true;say('Loading settings…');
+        try{const [config,accounts]=await Promise.all([api('Bluefin/Admin/Discovery'),api('Users')]);if(request!==generation)return;
+          users=accounts;revision=config.revision;field('enabled').checked=config.enabled;field('clients').checked=config.exposeToClients;field('base').value=config.baseUrl||'';field('key').value='';field('clear').checked=false;field('local').checked=config.allowLocalHttp;
+          page.querySelector('.credential').textContent=config.credentialConfigured?'A credential is saved. It is never returned to this page.':'No credential is saved.';
+          mappings.replaceChildren();config.viewers.forEach(addMapping);form.hidden=false;say('Settings loaded. Changes apply immediately.');
+        }catch(error){if(request===generation)say(error.message);}finally{if(request===generation)busy=false;}
+      }
+      form.addEventListener('submit',async event=>{event.preventDefault();if(busy||!form.reportValidity())return;busy=true;page.querySelector('.save').disabled=true;say('Saving…');
+        const body={expectedRevision:revision,enabled:field('enabled').checked,exposeToClients:field('clients').checked,baseUrl:field('base').value.trim()||null,allowLocalHttp:field('local').checked,clearCredential:field('clear').checked,viewers:Array.from(mappings.children).map(row=>({userId:row.querySelector('.user').value,upstreamUserId:Number(row.querySelector('.upstream').value),search:row.querySelector('.search').checked,requests:row.querySelector('.requests').checked}))};
+        if(field('key').value)body.apiKey=field('key').value;
+        try{await api('Bluefin/Admin/Discovery','PUT',body);field('key').value='';busy=false;await load();say('Saved. Client access follows this server setting.');}
+        catch(error){say(error.message);}finally{field('key').value='';busy=false;page.querySelector('.save').disabled=false;}
+      });
+      page.querySelector('.add').addEventListener('click',()=>{if(!busy)addMapping();});page.querySelector('.reload').addEventListener('click',()=>{if(!busy)load();});
+      page.addEventListener('pageshow',load);page.addEventListener('pagehide',()=>{generation++;field('key').value='';});
+      }
+      document.querySelectorAll('.bluefinDiscoveryPage').forEach(bind);
+    }());
+  </script>
+</div></body></html>

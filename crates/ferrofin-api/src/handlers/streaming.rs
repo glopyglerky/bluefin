@@ -97,6 +97,9 @@ pub(crate) async fn require_streamable_item(
     };
     let client = state.client_address_of(extensions, headers);
     let policy = user_authorization(auth, client, state, true).await?;
+    if !policy.enable_media_playback || !state.users.current_media_playback_allowed(user).await? {
+        return Err(ApiError::Forbidden("media playback refused".into()));
+    }
     let refused = match row_access(state, item_id, user).await? {
         RowAccess::Visible => false,
         RowAccess::Hidden => true,
@@ -273,6 +276,53 @@ pub(crate) async fn serve_static_source(
     output_container: Option<&str>,
     request: Request,
 ) -> Result<Response, ApiError> {
+    let viewer = request
+        .extensions()
+        .get::<AuthorizationInfo>()
+        .filter(|auth| !auth.is_api_key)
+        .and_then(|auth| auth.user.clone());
+    if let Some(user) = &viewer {
+        check_playback(state, user).await?;
+    }
+    let response = static_source_response(state, source, output_container, request).await?;
+    let Some(user) = viewer else {
+        return Ok(response);
+    };
+    let (parts, body) = response.into_parts();
+    let state = state.clone();
+    let stream = futures_util::stream::try_unfold(
+        (body.into_data_stream(), state, user),
+        |(mut body, state, user)| async move {
+            use futures_util::StreamExt as _;
+            // Check both sides of the await. The producer may remain pending
+            // while the owning account's playback permission is revoked.
+            check_playback(&state, &user).await?;
+            match body.next().await {
+                Some(Ok(bytes)) => {
+                    check_playback(&state, &user).await?;
+                    Ok(Some((bytes, (body, state, user))))
+                }
+                Some(Err(_)) => Err(ApiError::BadRequest("media body unavailable".into())),
+                None => Ok(None),
+            }
+        },
+    );
+    Ok(Response::from_parts(parts, Body::from_stream(stream)))
+}
+
+async fn check_playback(state: &AppState, user: &UserEntity) -> Result<(), ApiError> {
+    if !state.users.current_media_playback_allowed(user).await? {
+        return Err(ApiError::Forbidden("media playback refused".into()));
+    }
+    Ok(())
+}
+
+async fn static_source_response(
+    state: &AppState,
+    source: StaticSource,
+    output_container: Option<&str>,
+    request: Request,
+) -> Result<Response, ApiError> {
     use ferrofin_model::media_info::MediaProtocol;
     if source.is_live_stream
         && let Some(unique_id) = live_buffer_id(&source.path)
@@ -286,6 +336,9 @@ pub(crate) async fn serve_static_source(
                 0,
                 infinite_stream_content_type(output_container, &source.path),
             ))
+        }
+        MediaProtocol::File if state.has_scoped_media() => {
+            serve_scoped_file(state, source.path, output_container, request).await
         }
         MediaProtocol::File => serve_static_file(&source.path, request).await,
         MediaProtocol::Http => {
@@ -468,6 +521,136 @@ pub(crate) async fn serve_static_file(path: &str, request: Request) -> Result<Re
         tracing::warn!(path, error = reason, "direct-stream file is not accessible");
     }
     Ok(response.map(Body::new))
+}
+
+/// Unlike a path-only tokio open, the queued blocking operation owns the input
+/// even when its request future is dropped. Once opened, reads own this file.
+async fn serve_scoped_file(
+    state: &AppState,
+    path: String,
+    container: Option<&str>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    use std::io::{Seek as _, SeekFrom};
+    let owner = state.clone();
+    let (file, metadata) = state
+        .blocking_file_system(move |_| {
+            let _owner = owner;
+            let file = std::fs::File::open(path)?;
+            let metadata = file.metadata()?;
+            Ok::<_, std::io::Error>((file, metadata))
+        })
+        .await?
+        .map_err(|_| ApiError::NotFound("local source input unavailable".into()))?;
+    let length = metadata.len();
+    let modified = metadata.modified().ok();
+    let range = request.headers().get(header::RANGE).filter(|_| {
+        request.headers().get(header::IF_RANGE).is_none_or(|value| {
+            value
+                .to_str()
+                .ok()
+                .and_then(|v| httpdate::parse_http_date(v).ok())
+                .zip(modified)
+                .is_some_and(|(since, modified)| {
+                    modified
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .ok()
+                        .map(|d| d.as_secs())
+                        <= since
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .ok()
+                            .map(|d| d.as_secs())
+                })
+        })
+    });
+    let mut status = StatusCode::OK;
+    let mut start = 0;
+    let mut end = length.saturating_sub(1);
+    if let Some(range) = range {
+        let parsed = range.to_str().ok().and_then(|v| scoped_range(v, length));
+        let Some((first, last)) = parsed else {
+            return Ok(Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .header(header::CONTENT_RANGE, format!("bytes */{length}"))
+                .body(Body::empty())
+                .expect("fixed range response"));
+        };
+        start = first;
+        end = last;
+        status = StatusCode::PARTIAL_CONTENT;
+    }
+    let count = if length == 0 { 0 } else { end - start + 1 };
+    let mut response = Response::builder()
+        .status(status)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_LENGTH, count)
+        .header(
+            header::CONTENT_TYPE,
+            infinite_stream_content_type(container, ""),
+        );
+    if let Some(modified) = modified {
+        response = response.header(header::LAST_MODIFIED, httpdate::fmt_http_date(modified));
+    }
+    if status == StatusCode::PARTIAL_CONTENT {
+        response = response.header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{length}"),
+        );
+    }
+    if request.method() == axum::http::Method::HEAD {
+        return Ok(response.body(Body::empty()).expect("fixed HEAD response"));
+    }
+    // Move the opened file into each blocking read. Cancellation never leaves
+    // a detached read holding only a numeric descriptor path.
+    let body = futures_util::stream::try_unfold(
+        (file, start, count),
+        |(mut file, offset, remaining)| async move {
+            if remaining == 0 {
+                return Ok(None);
+            }
+            let (file, bytes) = tokio::task::spawn_blocking(move || {
+                file.seek(SeekFrom::Start(offset))?;
+                let mut bytes = Vec::new();
+                file.by_ref()
+                    .take(remaining.min(FILE_CHUNK_BYTES))
+                    .read_to_end(&mut bytes)?;
+                Ok::<_, std::io::Error>((file, bytes))
+            })
+            .await
+            .map_err(std::io::Error::other)??;
+            let read = bytes.len() as u64;
+            Ok::<_, std::io::Error>(
+                (read > 0).then(|| (Bytes::from(bytes), (file, offset + read, remaining - read))),
+            )
+        },
+    );
+    response
+        .body(Body::from_stream(body))
+        .map_err(|_| ApiError::BadRequest("local source response unavailable".into()))
+}
+
+fn scoped_range(value: &str, length: u64) -> Option<(u64, u64)> {
+    let (start, end) = value.strip_prefix("bytes=")?.split_once('-')?;
+    if length == 0 {
+        return None;
+    }
+    let (start, end) = if start.is_empty() {
+        let suffix: u64 = end.parse().ok()?;
+        if suffix == 0 {
+            return None;
+        }
+        (length.saturating_sub(suffix), length - 1)
+    } else {
+        (
+            start.parse::<u64>().ok()?,
+            if end.is_empty() {
+                length - 1
+            } else {
+                end.parse::<u64>().ok()?.min(length - 1)
+            },
+        )
+    };
+    (start < length && end >= start).then_some((start, end))
 }
 
 /// How much of a file one blocking-pool hop of [`opened_file_response`] reads.

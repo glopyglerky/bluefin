@@ -32,6 +32,7 @@ pub mod intro_skipper;
 pub mod ldap;
 pub mod library;
 pub mod localization;
+pub mod managed_pairing;
 pub mod media_analysis;
 pub mod media_encoding;
 pub mod media_segments;

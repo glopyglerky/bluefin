@@ -506,9 +506,29 @@ struct RegisteredJob {
     /// Whether the job re-encodes any stream, so a [`TranscodeLimits`] cap
     /// counts it ([`EncodingJobInfo::encodes_any_stream`]).
     encodes: bool,
+    /// A stopping entry reserves capacity but is never reused or evicted.
+    phase: JobPhase,
+    /// Serializes registration and teardown without holding the registry lock.
+    lifecycle: std::sync::Arc<tokio::sync::Mutex<()>>,
+    /// Generic session/device controls cannot reach private source-bound jobs.
+    private_input: bool,
+}
+
+enum StartRegistration {
+    Ready(tokio::sync::OwnedMutexGuard<()>),
+    Evict(TranscodingJobHandle),
+}
+
+#[derive(PartialEq, Eq)]
+enum JobPhase {
+    Active,
+    Stopping,
 }
 
 impl RegisteredJob {
+    fn is_stopping(&self) -> bool {
+        self.phase == JobPhase::Stopping
+    }
     fn ping_timeout_for(job_type: TranscodingJobType) -> i64 {
         match job_type {
             TranscodingJobType::Progressive => PROGRESSIVE_PING_TIMEOUT_MS,
@@ -533,7 +553,8 @@ impl RegisteredJob {
     /// nobody is reading from it right now. A job still starting has its start
     /// as a consumer, unless the client hung up on that start.
     fn is_evictable_for(&self, user: uuid::Uuid, device: &str) -> bool {
-        self.user_id == Some(user)
+        !self.is_stopping()
+            && self.user_id == Some(user)
             && self
                 .handle
                 .device_id
@@ -545,8 +566,8 @@ impl RegisteredJob {
 }
 
 /// Makes room in `jobs` for one more re-encoding job of `user` from `device`,
-/// the request's `DeviceId`: `Ok(None)` when there is room, the job taken out
-/// to make it, or the cap that refuses it.
+/// the request's `DeviceId`: `Ok(None)` when there is room, the job marked
+/// stopping to make room after exit, or the cap that refuses it.
 ///
 /// One job is always enough, since every job counted came through here. It is
 /// the longest-idle job of the same user on the same device, so "next episode"
@@ -557,11 +578,11 @@ impl RegisteredJob {
 /// job in turn. That start is refused instead, until a job ends. A start
 /// without a user or without a device has no idle job to give up.
 fn take_job_to_admit(
-    jobs: &mut Vec<RegisteredJob>,
+    jobs: &mut [RegisteredJob],
     limits: TranscodeLimits,
     user: Option<uuid::Uuid>,
     device: Option<&str>,
-) -> Result<Option<RegisteredJob>, TranscodeRefused> {
+) -> Result<Option<TranscodingJobHandle>, TranscodeRefused> {
     let running = |user: Option<uuid::Uuid>| {
         jobs.iter()
             .filter(|job| job.holds_transcode_slot() && (user.is_none() || job.user_id == user))
@@ -581,7 +602,10 @@ fn take_job_to_admit(
             .map(|(index, _)| index)
     });
     match longest_idle {
-        Some(index) => Ok(Some(jobs.remove(index))),
+        Some(index) => {
+            jobs[index].phase = JobPhase::Stopping;
+            Ok(Some(jobs[index].handle.clone()))
+        }
         None if user_full => Err(TranscodeRefused::User),
         None => Err(TranscodeRefused::Server),
     }
@@ -615,12 +639,12 @@ pub struct TranscodeManagerImpl<S: SessionReporter, C: FileCleaner = FsFileClean
 /// restarts the idle countdown.
 pub struct TranscodeRequestGuard<'a, S: SessionReporter, C: FileCleaner> {
     manager: &'a TranscodeManagerImpl<S, C>,
-    handle: TranscodingJobHandle,
+    lifecycle: std::sync::Arc<tokio::sync::Mutex<()>>,
 }
 
 impl<S: SessionReporter, C: FileCleaner> Drop for TranscodeRequestGuard<'_, S, C> {
     fn drop(&mut self) {
-        self.manager.end_request_sync(&self.handle);
+        self.manager.end_request_sync(&self.lifecycle);
     }
 }
 
@@ -727,11 +751,12 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
         let file = Path::new(file);
         let mut jobs = self.jobs.lock().expect("jobs lock poisoned");
         let job = jobs.iter_mut().find(|job| {
-            job.running.as_ref().is_some_and(|running| {
-                (job.handle.job_type == TranscodingJobType::Progressive
-                    && running.playlist_path == file)
-                    || running.segment_endings.contains_key(file)
-            })
+            !job.is_stopping()
+                && job.running.as_ref().is_some_and(|running| {
+                    (job.handle.job_type == TranscodingJobType::Progressive
+                        && running.playlist_path == file)
+                        || running.segment_endings.contains_key(file)
+                })
         })?;
         let running = job.running.as_ref()?;
         let observer = DownloadObserver {
@@ -770,7 +795,8 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
     {
         let mut jobs = self.jobs.lock().expect("jobs lock poisoned");
         let job = jobs.iter_mut().find(|job| {
-            job.handle.job_type == TranscodingJobType::Hls
+            !job.is_stopping()
+                && job.handle.job_type == TranscodingJobType::Hls
                 && job.handle.path.eq_ignore_ascii_case(playlist)
         })?;
         let running = job.running.as_ref()?;
@@ -943,6 +969,9 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
             running: None,
             user_id: None,
             encodes: false,
+            phase: JobPhase::Active,
+            lifecycle: std::sync::Arc::default(),
+            private_input: false,
         };
         self.jobs.lock().expect("jobs lock poisoned").push(job);
         handle
@@ -963,13 +992,29 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
         handle: &TranscodingJobHandle,
         user: Option<uuid::Uuid>,
         encodes: bool,
-    ) -> Result<Option<RegisteredJob>, TranscodeRefused> {
+        private_input: bool,
+    ) -> Result<StartRegistration, TranscodeRefused> {
         let mut jobs = self.jobs.lock().expect("jobs lock poisoned");
+        // A path still starting/stopping owns its output and reservation. Do
+        // not attach a second process or let old cleanup target a new job.
+        if jobs.iter().any(|job| {
+            job.handle.job_type == handle.job_type
+                && job.handle.path.eq_ignore_ascii_case(&handle.path)
+        }) {
+            return Err(TranscodeRefused::Server);
+        }
         let evicted = if encodes {
             take_job_to_admit(&mut jobs, self.limits, user, handle.device_id.as_deref())?
         } else {
             None
         };
+        if let Some(evicted) = evicted {
+            return Ok(StartRegistration::Evict(evicted));
+        }
+        let lifecycle = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let registration = std::sync::Arc::clone(&lifecycle)
+            .try_lock_owned()
+            .expect("new lifecycle");
         jobs.push(RegisteredJob {
             ping_timeout_ms: RegisteredJob::ping_timeout_for(handle.job_type),
             display: String::new(),
@@ -980,8 +1025,31 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
             running: None,
             user_id: user,
             encodes,
+            phase: JobPhase::Active,
+            lifecycle,
+            private_input,
         });
-        Ok(evicted)
+        Ok(StartRegistration::Ready(registration))
+    }
+
+    async fn admit_encoding(
+        &self,
+        handle: &TranscodingJobHandle,
+        user: Option<uuid::Uuid>,
+        encodes: bool,
+        private_input: bool,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, StartFfmpegError> {
+        loop {
+            let evicted = match self.register_job_for_user(handle, user, encodes, private_input)? {
+                StartRegistration::Ready(registration) => return Ok(registration),
+                StartRegistration::Evict(evicted) => evicted,
+            };
+            let same_live_stream =
+                evicted.live_stream_id.is_some() && evicted.live_stream_id == handle.live_stream_id;
+            self.stop_job(&evicted, true, !same_live_stream)
+                .await
+                .map_err(|error| StartFfmpegError::Failed(error.to_string()))?;
+        }
     }
 
     /// Returns the number of currently registered jobs (test/inspection helper).
@@ -1079,14 +1147,18 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
         // reaper must not kill the job this request is waiting on. A guard, not
         // a count that stays: a start cancelled by a client disconnect drops
         // it, so its job is still reaped.
-        let evicted = self.register_job_for_user(&handle, user_id, state.encodes_any_stream())?;
-        let _startup = TranscodeRequestGuard {
+        let registration = self
+            .admit_encoding(
+                &handle,
+                user_id,
+                state.encodes_any_stream(),
+                transcoder.has_private_input(),
+            )
+            .await?;
+        let startup = TranscodeRequestGuard {
             manager: self,
-            handle: handle.clone(),
+            lifecycle: std::sync::Arc::clone(tokio::sync::OwnedMutexGuard::mutex(&registration)),
         };
-        if let Some(job) = evicted {
-            self.evict_job(job, &handle).await;
-        }
 
         let (log_path, directory, display) =
             match prepare_transcode_output(program, state, output_path, &arguments, &log_dir) {
@@ -1121,32 +1193,37 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
                 .await;
         }
 
-        // 5. Spawn; on failure remove the job (OnTranscodeFailedToStart).
-        let child = match transcoder.start_transcode(&req).await {
-            Ok(child) => child,
-            Err(e) => {
-                self.remove_job_by_path(&handle.path, handle.job_type);
-                self.reporter.on_job_failed_to_start(&handle).await;
-                return Err(e.into());
-            }
-        };
-
-        // 6. Store the live job so kill/cleanup can reach the child + cache dir.
-        self.attach_running(
-            &handle,
-            RunningJob {
-                start_number,
-                ..RunningJob::new(
-                    child,
-                    state,
-                    directory,
-                    output_path.to_path_buf(),
-                    segment_extension,
-                    stderr_log.clone(),
-                    hardware_acceleration_type,
-                )
-            },
-        );
+        if !self.is_current(&startup.lifecycle) {
+            return Err("transcode stopped before spawn".to_owned().into());
+        }
+        // Publish the actual child before post-spawn log I/O. The registration
+        // lock fences stop against a spawn that has not returned yet; dropping
+        // this future leaves the child in the counted registry for teardown.
+        let result = transcoder
+            .start_registered(&req, &|child| {
+                self.attach_running(
+                    &handle,
+                    RunningJob {
+                        start_number,
+                        ..RunningJob::new(
+                            Box::new(child),
+                            state,
+                            directory.clone(),
+                            output_path.to_path_buf(),
+                            segment_extension.clone(),
+                            stderr_log.clone(),
+                            hardware_acceleration_type,
+                        )
+                    },
+                );
+            })
+            .await;
+        drop(registration);
+        if let Err(error) = result {
+            self.kill_and_remove(&handle, true, false).await;
+            self.reporter.on_job_failed_to_start(&handle).await;
+            return Err(error.into());
+        }
 
         // 7. Wait until the target file exists OR the process exits, bounded.
         let target = state
@@ -1162,12 +1239,21 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
 
         // 9. Only a live eligible process receives a timer. The option itself
         // is read on each tick, so enabling it applies to existing eligible jobs.
+        self.start_throttle_timer(state, &handle).await;
+        self.start_segment_cleaner(state, &handle);
+        if !self.is_current(&startup.lifecycle) {
+            return Err("transcode stopped during startup".to_owned().into());
+        }
+        // 10. Return the handle.
+        Ok(handle)
+    }
+
+    async fn start_throttle_timer(&self, state: &EncodingJobInfo, handle: &TranscodingJobHandle) {
         if super::throttler::eligible(state)
-            && self.with_running(&handle, |running| running.child.has_exited()) == Some(false)
+            && self.with_running(handle, |running| running.child.has_exited()) == Some(false)
         {
-            let controller = self.with_running(&handle, |running| {
-                std::sync::Arc::clone(&running.controller)
-            });
+            let controller =
+                self.with_running(handle, |running| std::sync::Arc::clone(&running.controller));
             if let Some(controller) = controller {
                 let mut controller = controller.lock().await;
                 controller.keys = self.pause_keys.get();
@@ -1175,9 +1261,89 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
                 controller.next_tick = Instant::now() + super::throttler::THROTTLE_INTERVAL;
             }
         }
-        self.start_segment_cleaner(state, &handle);
-        // 10. Return the handle.
-        Ok(handle)
+    }
+
+    /// Stops this exact viewer/device/session ownership tuple. Used by private
+    /// source-bound playback, separate from authenticated ordinary control.
+    ///
+    /// # Errors
+    /// Refuses incomplete ownership or a failed child stop. A failed live
+    /// child remains registered and counted against the runtime's limits.
+    ///
+    /// # Panics
+    /// Panics if the job-registry mutex has been poisoned.
+    pub async fn kill_owned_encoding(
+        &self,
+        user: uuid::Uuid,
+        device: &str,
+        play_session: &str,
+    ) -> Result<(), ServiceError> {
+        if user.is_nil() || device.is_empty() || play_session.is_empty() {
+            return Err(ServiceError::invalid_input("encoding owner is incomplete"));
+        }
+        let handles: Vec<_> = self
+            .jobs
+            .lock()
+            .expect("jobs lock poisoned")
+            .iter()
+            .filter(|job| {
+                job.user_id == Some(user)
+                    && job.handle.device_id.as_deref() == Some(device)
+                    && job.handle.play_session_id.as_deref() == Some(play_session)
+            })
+            .map(|job| job.handle.clone())
+            .collect();
+        for handle in handles {
+            self.stop_job(&handle, true, true).await?;
+        }
+        Ok(())
+    }
+
+    /// Legacy HTTP control carries actual caller authority, independent of
+    /// knowledge of a job's session/device. Private input jobs are excluded.
+    ///
+    /// # Errors
+    /// Refuses a missing caller without explicit controller privilege or a
+    /// failed stop; a child without observed exit keeps its reservation.
+    ///
+    /// # Panics
+    /// Panics if the registry mutex is poisoned.
+    pub async fn kill_authorized_encoding(
+        &self,
+        caller: uuid::Uuid,
+        control_others: bool,
+        device: &str,
+        session: Option<&str>,
+    ) -> Result<(), ServiceError> {
+        if caller.is_nil() && !control_others {
+            return Err(ServiceError::Forbidden(
+                "encoding caller is required".into(),
+            ));
+        }
+        let handles: Vec<_> = self
+            .jobs
+            .lock()
+            .expect("jobs lock poisoned")
+            .iter()
+            .filter(|job| !job.private_input && (control_others || job.user_id == Some(caller)))
+            .filter(|job| match session.filter(|s| !s.trim().is_empty()) {
+                Some(session) => job
+                    .handle
+                    .play_session_id
+                    .as_deref()
+                    .is_some_and(|s| s.eq_ignore_ascii_case(session)),
+                None => job
+                    .handle
+                    .device_id
+                    .as_deref()
+                    .is_some_and(|d| d.eq_ignore_ascii_case(device)),
+            })
+            .map(|job| job.handle.clone())
+            .collect();
+        for handle in handles {
+            self.stop_job(&handle, true, false).await?;
+        }
+        Ok(())
     }
 
     /// `start_ffmpeg`'s wait for `target` (its first segment, or the
@@ -1189,21 +1355,33 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
         handle: &TranscodingJobHandle,
         target: &Path,
     ) -> Result<(), String> {
+        self.wait_for_first_output_until(
+            handle,
+            target,
+            Instant::now() + Duration::from_millis(WAIT_FOR_FILE_TIMEOUT_MS),
+        )
+        .await
+    }
+
+    async fn wait_for_first_output_until(
+        &self,
+        handle: &TranscodingJobHandle,
+        target: &Path,
+        deadline: Instant,
+    ) -> Result<(), String> {
         let waiter = FsWaiter::new(target);
-        let deadline = Instant::now() + Duration::from_millis(WAIT_FOR_FILE_TIMEOUT_MS);
         loop {
-            let exited = self.with_running(handle, |r| r.child.has_exited());
-            if target.exists() || exited == Some(true) {
-                return Ok(());
-            }
             // The job was killed while it started (a stop report, a device's
             // jobs killed): nothing will ever write the target.
-            let Some(false) = exited else {
+            let Some(exited) = self.with_running(handle, |r| r.child.has_exited()) else {
                 return Err(format!(
                     "transcode job was stopped before {} appeared",
                     target.display()
                 ));
             };
+            if target.exists() || exited {
+                return Ok(());
+            }
             if Instant::now() >= deadline {
                 self.kill_and_remove(handle, true, false).await;
                 return Err(format!(
@@ -1225,7 +1403,8 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
             if let Some(running) = jobs
                 .iter_mut()
                 .find(|job| {
-                    job.handle.job_type == handle.job_type
+                    !job.is_stopping()
+                        && job.handle.job_type == handle.job_type
                         && job.handle.path.eq_ignore_ascii_case(&handle.path)
                 })
                 .and_then(|job| job.running.as_mut())
@@ -1392,93 +1571,88 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
         delete_files: bool,
         close_live_stream: bool,
     ) {
-        let (display, running) = {
-            let mut jobs = self.jobs.lock().expect("jobs lock poisoned");
-            let idx = jobs.iter().position(|j| {
-                j.handle.job_type == handle.job_type
-                    && j.handle.path.eq_ignore_ascii_case(&handle.path)
-            });
-            match idx.map(|i| jobs.remove(i)) {
-                Some(job) => (job.display, job.running),
-                None => (String::new(), None),
-            }
-        };
-        self.tear_down(handle, &display, running, delete_files, close_live_stream)
-            .await;
+        if let Err(error) = self.stop_job(handle, delete_files, close_live_stream).await {
+            tracing::error!(error = %super::retained_input::redact_inputs(&error.to_string()), "transcode teardown failed; reservation retained");
+        }
     }
 
-    /// Kills an idle job taken out of the registry to admit `next`, another of
-    /// its user's from the same device. The same teardown as the idle reaper's,
-    /// which this job would otherwise have met at its ping timeout, except for
-    /// a `next` on the same live stream: as on a seek restart, that one is
-    /// about to re-open ffmpeg on the same tuner, so the tuner stays open.
-    async fn evict_job(&self, job: RegisteredJob, next: &TranscodingJobHandle) {
-        let RegisteredJob {
-            handle,
-            display: playing_label,
-            running,
-            ..
-        } = job;
-        tracing::info!(
-            path = %handle.path,
-            play_session_id = handle.play_session_id.as_deref().unwrap_or(""),
-            device_id = handle.device_id.as_deref().unwrap_or(""),
-            playing = %playing_label,
-            "killing idle transcode job to admit the same device's next one"
-        );
-        let same_live_stream =
-            handle.live_stream_id.is_some() && handle.live_stream_id == next.live_stream_id;
-        self.tear_down(&handle, &playing_label, running, true, !same_live_stream)
-            .await;
-    }
-
-    /// Stops a job already out of the registry: its process, its rolling
-    /// deletion and, when `delete_files` is set, its partial output.
-    async fn tear_down(
+    async fn stop_job(
         &self,
         handle: &TranscodingJobHandle,
-        playing_label: &str,
-        running: Option<RunningJob>,
         delete_files: bool,
         close_live_stream: bool,
-    ) {
-        if let Some(mut running) = running {
+    ) -> Result<(), ServiceError> {
+        let lifecycle = {
+            let mut jobs = self.jobs.lock().expect("jobs lock poisoned");
+            let Some(job) = jobs.iter_mut().find(|j| {
+                j.handle.job_type == handle.job_type
+                    && j.handle.path.eq_ignore_ascii_case(&handle.path)
+            }) else {
+                return Ok(());
+            };
+            job.phase = JobPhase::Stopping;
+            std::sync::Arc::clone(&job.lifecycle)
+        };
+        // Registration, concurrent stops and retries after cancellation all
+        // join here. No synchronous registry mutex is held across an await.
+        let _lifecycle = lifecycle.lock().await;
+        let running = {
+            let mut jobs = self.jobs.lock().expect("jobs lock poisoned");
+            let Some(job) = jobs
+                .iter_mut()
+                .find(|job| std::sync::Arc::ptr_eq(&job.lifecycle, &lifecycle))
+            else {
+                return Ok(());
+            };
+            job.running.as_mut().map(|running| {
+                drop(running.segment_cleaner.take());
+                (
+                    std::sync::Arc::clone(&running.child),
+                    std::sync::Arc::clone(&running.controller),
+                    running.playlist_path.clone(),
+                    running.output_dir.clone(),
+                )
+            })
+        };
+        if let Some((child, controller, playlist_path, output_dir)) = running {
             // Stop rolling deletion before process and partial-file teardown.
-            drop(running.segment_cleaner.take());
             tracing::info!(
                 play_session_id = handle.play_session_id.as_deref().unwrap_or(""),
-                playing = %playing_label,
                 delete_files,
-                "transcode job killed"
+                "stopping transcode job"
             );
             // Stop the timer under the same lock as control writes, resuming
             // before kill so ffmpeg cannot remain in its paused command loop.
-            let mut controller = running.controller.lock().await;
+            let mut controller = controller.lock().await;
             controller.stopped = true;
             if controller.paused
                 && let Some(keys) = controller.keys
             {
-                match running.child.write_stdin(keys.resume()).await {
+                match child.write_stdin(keys.resume()).await {
                     Ok(()) => controller.paused = false,
                     Err(error) => {
-                        tracing::error!(path = %handle.path, %error, "resuming transcode before teardown failed");
+                        tracing::error!(error = %super::retained_input::redact_inputs(&error), "resuming transcode before teardown failed");
                     }
                 }
             }
-            if let Err(error) = running.child.kill().await {
-                tracing::error!(path = %handle.path, %error, "killing ffmpeg at teardown failed; it may still be running");
+            child.kill().await.map_err(|error| {
+                ServiceError::backend(super::retained_input::redact_inputs(&error).into_owned())
+            })?;
+            child.wait().await;
+            if !child.has_exited() {
+                return Err(ServiceError::unavailable(
+                    "transcode exit was not established",
+                ));
             }
             drop(controller);
             if delete_files {
-                let stem = running
-                    .playlist_path
+                let stem = playlist_path
                     .file_stem()
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 // The directory scan and unlinks block, so they run on the
                 // blocking pool; awaited, so callers still go on only after them.
                 let cleaner = std::sync::Arc::clone(&self.file_cleaner);
-                let output_dir = running.output_dir;
                 if let Err(error) = tokio::task::spawn_blocking(move || {
                     cleaner.delete_partial_stream_files(&output_dir, &stem);
                 })
@@ -1491,6 +1665,12 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
         self.reporter
             .on_job_killed(handle, delete_files, close_live_stream)
             .await;
+        // Keep output/source ownership until cleanup and reporter completion.
+        self.jobs
+            .lock()
+            .expect("jobs lock poisoned")
+            .retain(|job| !std::sync::Arc::ptr_eq(&job.lifecycle, &lifecycle));
+        Ok(())
     }
 
     /// One sweep of the idle reaper: kills every job that has **no active
@@ -1512,9 +1692,11 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
             let jobs = self.jobs.lock().expect("jobs lock poisoned");
             jobs.iter()
                 .filter(|j| {
-                    j.active_request_count <= 0
-                        && i64::try_from(j.last_activity.elapsed().as_millis()).unwrap_or(i64::MAX)
-                            > j.ping_timeout_ms
+                    j.is_stopping()
+                        || (j.active_request_count <= 0
+                            && i64::try_from(j.last_activity.elapsed().as_millis())
+                                .unwrap_or(i64::MAX)
+                                > j.ping_timeout_ms)
                 })
                 .map(|j| (j.handle.clone(), j.display.clone()))
                 .collect()
@@ -1539,8 +1721,8 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
     ///
     /// A sweep that panics is logged and ends alone (`survive_panic`): the
     /// jobs it had not reached are still registered, so the next sweep reaps
-    /// them. The job it was tearing down is already out of the registry and
-    /// is not retried.
+    /// them. A job interrupted during teardown remains stopping/counting and
+    /// is retried by the next sweep.
     pub async fn run_idle_reaper(self: std::sync::Arc<Self>, interval: Duration) {
         let mut failing = false;
         loop {
@@ -1567,16 +1749,18 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
         job_type: TranscodingJobType,
     ) -> Option<TranscodeRequestGuard<'_, S, C>> {
         let mut jobs = self.jobs.lock().expect("jobs lock poisoned");
-        let job = jobs
-            .iter_mut()
-            .find(|j| j.handle.job_type == job_type && j.handle.path.eq_ignore_ascii_case(path))?;
+        let job = jobs.iter_mut().find(|j| {
+            !j.is_stopping()
+                && j.handle.job_type == job_type
+                && j.handle.path.eq_ignore_ascii_case(path)
+        })?;
         job.active_request_count += 1;
         job.last_activity = std::time::Instant::now();
-        let handle = job.handle.clone();
+        let lifecycle = std::sync::Arc::clone(&job.lifecycle);
         drop(jobs);
         Some(TranscodeRequestGuard {
             manager: self,
-            handle,
+            lifecycle,
         })
     }
 
@@ -1639,11 +1823,12 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
 
     /// Synchronous end-request: decrements the job's active-consumer count and
     /// refreshes its activity stamp (the idle countdown starts *now*).
-    fn end_request_sync(&self, handle: &TranscodingJobHandle) {
+    fn end_request_sync(&self, lifecycle: &std::sync::Arc<tokio::sync::Mutex<()>>) {
         let mut jobs = self.jobs.lock().expect("jobs lock poisoned");
-        if let Some(job) = jobs.iter_mut().find(|j| {
-            j.handle.job_type == handle.job_type && j.handle.path.eq_ignore_ascii_case(&handle.path)
-        }) {
+        if let Some(job) = jobs
+            .iter_mut()
+            .find(|j| std::sync::Arc::ptr_eq(&j.lifecycle, lifecycle))
+        {
             job.active_request_count = (job.active_request_count - 1).max(0);
             job.last_activity = std::time::Instant::now();
         }
@@ -1672,8 +1857,20 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
     /// Removes the registered job for `path`/`job_type` (no child teardown).
     fn remove_job_by_path(&self, path: &str, job_type: TranscodingJobType) {
         self.jobs.lock().expect("jobs lock poisoned").retain(|j| {
-            !(j.handle.job_type == job_type && j.handle.path.eq_ignore_ascii_case(path))
+            !(j.handle.job_type == job_type
+                && j.handle.path.eq_ignore_ascii_case(path)
+                && j.running
+                    .as_ref()
+                    .is_none_or(|running| running.child.has_exited()))
         });
+    }
+
+    fn is_current(&self, lifecycle: &std::sync::Arc<tokio::sync::Mutex<()>>) -> bool {
+        self.jobs
+            .lock()
+            .expect("jobs lock poisoned")
+            .iter()
+            .any(|job| std::sync::Arc::ptr_eq(&job.lifecycle, lifecycle) && !job.is_stopping())
     }
 
     /// Attaches the live [`RunningJob`] to the registered entry for `handle`.
@@ -1695,7 +1892,8 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManagerImpl<S, C> {
         let jobs = self.jobs.lock().expect("jobs lock poisoned");
         jobs.iter()
             .find(|j| {
-                j.handle.job_type == handle.job_type
+                !j.is_stopping()
+                    && j.handle.job_type == handle.job_type
                     && j.handle.path.eq_ignore_ascii_case(&handle.path)
             })
             .and_then(|j| j.running.as_ref())
@@ -1881,7 +2079,8 @@ fn read_tail(path: &Path, max_bytes: u64) -> String {
 /// HTTP error body — on every failed segment request, exactly when a source is
 /// killing ffmpeg repeatedly.
 fn stderr_log_tail(log_path: &Path) -> String {
-    let contents = read_tail(log_path, STDERR_TAIL_BYTES);
+    let raw = read_tail(log_path, STDERR_TAIL_BYTES);
+    let contents = super::retained_input::redact_inputs(&raw);
     let lines: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
     let tail = lines
         .iter()
@@ -1935,7 +2134,11 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManager for TranscodeManagerIm
         let jobs = self.jobs.lock().expect("jobs lock poisoned");
         Ok(jobs
             .iter()
-            .find(|j| j.handle.job_type == job_type && j.handle.path.eq_ignore_ascii_case(path))
+            .find(|j| {
+                !j.is_stopping()
+                    && j.handle.job_type == job_type
+                    && j.handle.path.eq_ignore_ascii_case(path)
+            })
             .map(|j| j.handle.clone()))
     }
 
@@ -1996,7 +2199,7 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManager for TranscodeManagerIm
         for job in &killed {
             // `KillTranscodingJobs` passes `closeLiveStream: false`; the session
             // layer releases the stream on the stop report instead.
-            self.kill_and_remove(job, delete_files, false).await;
+            self.stop_job(job, delete_files, false).await?;
         }
         Ok(())
     }
@@ -2021,9 +2224,11 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManager for TranscodeManagerIm
         job_type: TranscodingJobType,
     ) -> Result<Option<TranscodingJobHandle>, ServiceError> {
         let mut jobs = self.jobs.lock().expect("jobs lock poisoned");
-        let job = jobs
-            .iter_mut()
-            .find(|j| j.handle.job_type == job_type && j.handle.path.eq_ignore_ascii_case(path));
+        let job = jobs.iter_mut().find(|j| {
+            !j.is_stopping()
+                && j.handle.job_type == job_type
+                && j.handle.path.eq_ignore_ascii_case(path)
+        });
         Ok(job.map(|j| {
             // A new consumer arrived: bump the active-request count so the idle
             // reaper does not fire (OnTranscodeBeginRequest).
@@ -2049,6 +2254,9 @@ impl<S: SessionReporter, C: FileCleaner> TranscodeManager for TranscodeManagerIm
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod teardown_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2378,7 +2586,8 @@ mod tests {
         let guard = logs.install();
         let reaper =
             tokio::spawn(Arc::clone(&m).run_idle_reaper(std::time::Duration::from_secs(10)));
-        // Each sweep reaches one job: the first two panic in its teardown.
+        // The first two sweeps retry the retained first job. Once the fault
+        // clears, every job still receives its successful teardown.
         for _ in 0..60 {
             if m.active_job_count() == 0 && !reporter.killed.lock().unwrap().is_empty() {
                 break;
@@ -2389,7 +2598,10 @@ mod tests {
 
         assert!(!reaper.is_finished(), "the reaper ended at its first panic");
         reaper.abort();
-        assert_eq!(*reporter.killed.lock().unwrap(), ["/t/c.m3u8"]);
+        assert_eq!(
+            *reporter.killed.lock().unwrap(),
+            ["/t/a.m3u8", "/t/b.m3u8", "/t/c.m3u8"]
+        );
         assert_eq!(m.active_job_count(), 0);
         let reaper_lines = |level| -> Vec<String> {
             logs.lines_at(level)
@@ -2404,7 +2616,7 @@ mod tests {
         );
         let repeats = reaper_lines("DEBUG");
         assert!(
-            repeats.len() == 1 && repeats[0].contains("teardown of /t/b.m3u8 failed"),
+            repeats.len() == 1 && repeats[0].contains("teardown of /t/a.m3u8 failed"),
             "{repeats:#?}"
         );
         let recovered = reaper_lines("INFO");
@@ -2426,6 +2638,35 @@ mod start_ffmpeg_tests {
 
     use crate::encoding_helper::{BaseEncodingJobOptions, EncodingJobInfo};
     use crate::transcoding::segment_transcoder::{FakeScript, FakeSegmentTranscoder};
+
+    #[tokio::test]
+    async fn owned_teardown_preserves_other_users_and_clients_with_the_same_session() {
+        let manager = TranscodeManagerImpl::new(super::NoopSessionReporter);
+        let user = uuid::Uuid::from_u128(1);
+        for (path, device, owner) in [
+            ("/one.m3u8", "one", user),
+            ("/two.m3u8", "two", user),
+            ("/other.m3u8", "one", uuid::Uuid::from_u128(2)),
+        ] {
+            let handle = ferrofin_traits::media_encoding::TranscodingJobHandle {
+                path: path.into(),
+                device_id: Some(device.into()),
+                play_session_id: Some("same-session".into()),
+                job_type: TranscodingJobType::Hls,
+                live_stream_id: None,
+            };
+            manager
+                .register_job_for_user(&handle, Some(owner), true, false)
+                .unwrap();
+        }
+        manager
+            .kill_owned_encoding(user, "one", "same-session")
+            .await
+            .unwrap();
+        let jobs = manager.jobs.lock().unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert!(jobs.iter().all(|job| job.handle.path != "/one.m3u8"));
+    }
 
     use super::{
         FileCleaner, FsFileCleaner, HLS_PING_TIMEOUT_MS, NoopSessionReporter, StartFfMpegRequest,
@@ -3877,12 +4118,16 @@ pub(super) mod throttle_tests {
         drop(guard);
         let errors = logs.lines_at("ERROR");
         assert!(
-            errors
-                .iter()
-                .any(|line| line.contains("killing ffmpeg at teardown failed")
-                    && line.contains("fixture kill failure")),
+            errors.iter().any(|line| line
+                .contains("transcode teardown failed; reservation retained")
+                && line.contains("fixture kill failure")),
             "{errors:#?}"
         );
+        assert_eq!(manager.active_job_count(), 1);
+        assert!(!child.exited.load(Ordering::SeqCst));
+        child.fail_kill.store(false, Ordering::SeqCst);
+        manager.reap_idle_jobs().await;
+        assert!(child.exited.load(Ordering::SeqCst));
         assert_eq!(manager.active_job_count(), 0);
     }
 

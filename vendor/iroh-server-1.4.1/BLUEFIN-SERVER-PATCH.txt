@@ -1,0 +1,59 @@
+Server-only Iroh fixed-path extension, 2026-11-09
+
+Origin: https://github.com/n0-computer/iroh, package iroh 1.4.1.
+Registry archive SHA256:
+e3689cab508af9bcef7816c1201b403595ec6aa20e7d15e1f9683bb4be4a5b17
+Published .cargo_vcs_info.json commit:
+d6c6963b9602d1b8dd2ba53b6519e7eb19cc7940, path_in_vcs=iroh.
+Complete published source, Cargo.toml.orig, README, MIT and Apache-2.0
+licenses and upstream notices are retained. No upstream copyright changed.
+This is visibly modified upstream Rust, not a new release or independent Noq.
+
+Modified upstream files: src/endpoint/quic.rs, src/socket.rs and
+src/socket/remote_map/remote_state.rs only.
+Adds QuicTransportConfigBuilder::fixed_path(). At build, after all ordinary
+setters, it disables QNT, multipath, server handshake migration and observed
+address reports. The immutable config carries this policy into BOTH initial
+server-config creation and ServerConfigBuilder::set_transport_config, which
+disable ordinary migration. No raw Noq handle is exposed. Unselected configs
+retain upstream behavior. Noq 1.4.0 and the existing reviewed Noq source are
+unchanged; this calls its existing public configuration APIs.
+
+The remote actor also selects each non-multipath connection's own path zero,
+rather than projecting a peer-global preferred tuple from an older connection.
+Without this, a new handshake over a changed socket has no selected public
+path while the previous blackholed connection remains retained. New admission
+would fail closed, making ordinary same-identity reconnection unusable. This
+correction neither moves old paths nor admits changed-address frames.
+
+Noq early_discard_packet rejects a changed remote before application-frame
+processing when peer_may_probe is false. That condition requires disabling
+ordinary migration AND negotiated QNT. Multipath and handshake migration must
+also be disabled to prevent alternate initial or additional paths. Cached
+Iroh path snapshots remain additional conservative checks, not the boundary
+that enforces this policy. No network-address getter polling is introduced.
+
+API implication: fixed-path is an additive, server-selected opt-in. It does
+not support path migration, QNT, relay fallback or NAT traversal. A client
+whose path changes must make a new connection and undergo new admission.
+Rejected packets do not necessarily produce a wire-visible close; a timeout
+is not proof of closure or resource return. Normal unchanged-path bounded
+idle/write lifetimes and explicit joined shutdown remain in force.
+
+Selection: only the root SERVER Cargo.toml patch uses this directory.
+Independent Apple/Android/universal/client manifests, locks and vendor bytes
+are unchanged. No global registry/cache edits. The root keeps the one
+existing reviewed noq-proto path; no second Noq implementation is introduced.
+
+Maintenance: on any Iroh/Noq update, recheck early rejection order, migration
+and extension negotiation, both server-config construction paths, config
+clone/replacement behavior and the encrypted two-direction physical-socket
+regression with 8/16/16 MiB windows and original five-second observation.
+Keep exact upstream/modified manifests, archive hash and licenses with imports.
+Official API references:
+https://docs.rs/noq/1.4.0/noq/struct.ServerConfig.html#method.migration
+https://docs.rs/noq/1.4.0/noq/struct.TransportConfig.html
+
+Actual patch author: gpt-6.1-sol; T3 Code -> Codex. No independent review or
+publication is claimed. Future external GitHub publication requires the user's
+verified author/reviewer/model/harness attribution footer; none is authorized.

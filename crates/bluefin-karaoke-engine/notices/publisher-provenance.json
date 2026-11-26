@@ -1,0 +1,20 @@
+{
+  "modelPublisher": "deezer/spleeter",
+  "release": "v1.4.0",
+  "releaseCommit": "556ef2121492d72398a988af1b38b55176f5973a",
+  "officialModelURL": "https://github.com/deezer/spleeter/releases/download/v1.4.0/2stems.tar.gz",
+  "releaseChecksumMatches": true,
+  "licenseEvidence": "Official authors paper.md at6f2c8a2e283914faa544631430f65b793f1b1218 explicitly covers source and pretrained models; original release MIT LICENSE retained. No legal opinion or training-data-rights representation.",
+  "hashes": {
+    "checksum.json": "61b20d91d73b7462b921cfa4838172d74849a3bece110eb0e46cdc50e7bc9935",
+    "LICENSE": "b15e40c921ec6fe997e0d88ddab9c26fb915bebbbb9496530d3f98f317d4325a",
+    "2stems.tar.gz": "f3a90b39dd2874269e8b05a48a86745df897b848c61f3958efc80a39152bd692",
+    "unet.py": "862837c9f60cd025a5949ebfb904b76b60bad35a0ba094b71364a7c8dbba9415",
+    "__init__.py": "d34d6f6a9c1ea6e36906ad402e3c80001ac3b5994d6e85a866fc70c62a5af406",
+    "paper-source-commit.json": "f5b5b7253d6518e02131141b5b5717e12ff28e3a6e2f441f6cec3e6a166ba169",
+    "release.json": "47bed4f1ffa9f9a5a456a0138da0e7af9e1cc742ea138e0abd1e17c52d369287",
+    "tag.json": "48dea93bc866251a9a8029f7c555b823a4a71df9e247c41d905a4a1f799ccdc3",
+    "2stems.json": "c0cdb7c3c3b9ecdf378cda45f8a6254ddbc50f1035c24072a21df52d8890788d",
+    "paper.md": "32fd4a4d55bc454f9fe5340d426819436da0c9f0151b7b8ebee0a37d95759983"
+  }
+}

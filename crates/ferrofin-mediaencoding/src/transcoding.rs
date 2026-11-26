@@ -5,6 +5,7 @@ pub mod fs_wait;
 pub mod limits;
 pub mod manager;
 pub mod progress;
+pub mod retained_input;
 pub mod segment_cleaner;
 pub mod segment_transcoder;
 pub mod throttler;

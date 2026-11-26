@@ -1,0 +1,14 @@
+{
+  "images" : [
+    {
+      "filename" : "Bluefin.png",
+      "idiom" : "universal",
+      "platform" : "watchos",
+      "size" : "1024x1024"
+    }
+  ],
+  "info" : {
+    "author" : "org.glopyglerky.bluefin",
+    "version" : 1
+  }
+}

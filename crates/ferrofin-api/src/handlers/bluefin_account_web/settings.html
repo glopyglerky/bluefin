@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bluefin account settings</title>
+<link rel="stylesheet" href="./Passkey/accounts.css">
+<script src="./Admin/client.js" defer></script>
+<main>
+    <h1>Account settings</h1>
+    <form id="login">
+        <label>Administrator username <input name="username" autocomplete="username" required></label>
+        <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+        <button>Sign in</button>
+    </form>
+    <form id="settings" hidden>
+        <label class="switch"><input type="checkbox" name="allowSignups"> Allow clients to create accounts</label>
+        <p>Give each new account access to the libraries you want it to see.</p>
+        <button>Save settings</button>
+        <button id="logout" type="button">Sign out</button>
+    </form>
+    <p id="status" role="status"></p>
+</main>
+</html>

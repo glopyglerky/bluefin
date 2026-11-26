@@ -195,7 +195,7 @@ features = [
     "test-util",
 ]
 
-[target.'cfg(not(any(target_os = "espidf", all(target_family = "wasm", target_os = "unknown"), target_os = "windows", target_os = "ios", target_os = "tvos")))'.dependencies.netdev]
+[target.'cfg(not(any(target_os = "espidf", all(target_family = "wasm", target_os = "unknown"), target_os = "windows", target_os = "ios", target_os = "tvos", target_os = "visionos")))'.dependencies.netdev]
 version = "0.46.1"
 
 [target.'cfg(not(any(target_os = "espidf", all(target_family = "wasm", target_os = "unknown"), target_os = "windows")))'.dependencies.tokio]
@@ -251,6 +251,6 @@ check-cfg = [
 [features]
 portable-apple = []
 
-[target.'cfg(any(target_os = "ios", target_os = "tvos"))'.dependencies.netdev]
+[target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))'.dependencies.netdev]
 version = "0.46"
 default-features = false

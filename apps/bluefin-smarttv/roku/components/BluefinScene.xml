@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component name="BluefinScene" extends="Scene"><script type="text/brightscript" uri="BluefinScene.brs"/><children>
+<Label id="brand" text="BLUEFIN TV" translation="[70,40]" width="1100" height="55" color="0x65D5DFFF"><Font role="font" size="32"/></Label>
+<Label id="title" text="Bluefin" translation="[70,115]" width="1130" height="80"><Font role="font" size="38"/></Label>
+<LabelList id="list" translation="[70,215]" itemSize="[1120,64]" numRows="6"/><Label id="status" text="" translation="[70,650]" width="1130" height="55" wrap="true"/>
+<Poster id="accountQr" translation="[860,240]" width="280" height="280" visible="false"/><Timer id="accountPoll" duration="3" repeat="true"/>
+<TimeGrid id="guide" translation="[70,210]" itemSize="[1120,63]" numRows="6" duration="7200" channelInfoWidth="220" fillProgramGaps="true" visible="false"/>
+<Video id="video" width="1280" height="720" visible="false"/><Audio id="audio"/><Timer id="progress" duration="10" repeat="true"/>
+</children></component>

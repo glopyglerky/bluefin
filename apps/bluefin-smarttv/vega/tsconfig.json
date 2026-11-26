@@ -1,0 +1,1 @@
+{"extends":"@react-native/typescript-config","compilerOptions":{"types":["@amazon-devices/react-native-kepler"],"allowJs":true},"include":["App.tsx","HlsPlayer.ts","session.mjs","media-policy.mjs"]}
