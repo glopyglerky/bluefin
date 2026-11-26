@@ -13,6 +13,7 @@ import AVFoundation
             guard let now = currentSession() else { return false }
             return now.server == session.server && now.userId == session.userId && now.token == session.token
                 && now.deviceId == session.deviceId && now.allowHttp == session.allowHttp
+                && now.meshSessionId == session.meshSessionId
                 && playback.item.Id == id && playback.selectedMediaSourceID == sourceID && !playback.isStopped
         }
         try Task.checkCancellation(); guard current() else { throw KaraokeError.stale }

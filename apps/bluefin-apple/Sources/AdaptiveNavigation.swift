@@ -226,6 +226,7 @@ struct TVWelcomeView: View {
     @State private var passkey = false
     @State private var passwordConfirmation = ""
     @State private var quickConnect = false
+    @State private var meshPairing = false
     @State private var working = false
     @State private var problem: String?
     @FocusState private var focus: Field?
@@ -262,7 +263,12 @@ struct TVWelcomeView: View {
                         wordmark
                         VStack(spacing: 24) {
                             if let connectedServer { signInOptions(connectedServer) }
-                            else { connectServer }
+                            else {
+                                Button { meshPairing = true } label: {
+                                    AccountActionLabel(title: "Connect with QR or invitation")
+                                }.accountButtonStyle().accessibilityIdentifier("meshPairing")
+                                connectServer
+                            }
                             if let problem {
                                 Label(problem, systemImage: "exclamationmark.circle")
                                     .font(.callout).foregroundStyle(.secondary)
@@ -290,6 +296,7 @@ struct TVWelcomeView: View {
             .background(BluefinBackground())
             .accountFocusScope(signInFocus)
         }
+        .sheet(isPresented: $meshPairing) { MeshPairingView().environmentObject(store) }
         .sheet(isPresented: $quickConnect) {
             QuickConnectView(server: address, allowHttp: localHTTP && allowHTTP)
                 .environmentObject(store)

@@ -262,7 +262,8 @@ import SwiftUI
     func setNextMusicCandidate(_ candidate: MediaItem?, session: AccountSession) {
         guard item.Type == "Audio", !stopped, karaoke == nil, let queue = player as? AVQueuePlayer else { return }
         guard let owner = accountSession, owner.server == session.server, owner.userId == session.userId,
-              owner.deviceId == session.deviceId, owner.token == session.token else {
+              owner.deviceId == session.deviceId, owner.token == session.token,
+              owner.meshSessionId == session.meshSessionId else {
             preloadingFailure = "The next track belongs to a different playback account."; return
         }
         adoptPreparedItem()

@@ -81,6 +81,6 @@ enum TrailersAccount {
     // Memory-only identity includes credential rotation; never render or persist it.
     static func identity(_ session: AccountSession?) -> String {
         guard let session else { return "signed-out" }
-        return [session.server, session.userId, session.token].joined(separator: "\u{0}")
+        return [session.server, session.userId, session.token, session.meshSessionId ?? ""].joined(separator: "\u{0}")
     }
 }

@@ -5,20 +5,33 @@ enum RustBridge {
     /// Rust owns protocol validation, device profiles, playback planning, and API requests.
     /// A detached task keeps synchronous FFI off the main actor.
     static func call<T: Decodable & Sendable>(_ operation: String, session: AccountSession? = nil, fields: [String: Any] = [:], as type: T.Type = T.self) async throws -> T {
-        let cleanup = ["releasePlayback", "stopPlaybackProxy", "downloadCancel", "cancelKaraokePreparation"].contains(operation)
+        let cleanup = ["releasePlayback", "stopPlaybackProxy", "downloadCancel", "cancelKaraokePreparation", "meshCloseResources", "meshLocalSignOut", "meshRevoke"].contains(operation)
         let permit: UUID?
         if cleanup { permit = nil } else { permit = try await CoreAdmission.shared.acquire() }
         defer { if let permit { Task { await CoreAdmission.shared.release(permit) } } }
         if !cleanup { try Task.checkCancellation() }
         var request = fields
         request["operation"] = operation
+        request["relayAllowlist"] = Bundle.main.object(forInfoDictionaryKey: "BluefinMeshRelayAllowlist") as? [String] ?? []
         if let session {
             request["server"] = session.server
             request["token"] = session.token
             request["userId"] = session.userId
             request["deviceId"] = session.deviceId
             request["allowLocalHttp"] = session.allowHttp
-            if operation == "playback", let pin = session.irohPeerId, let address = session.irohPeerAddress {
+            if let reference = session.meshSessionId {
+                if !cleanup, try MeshRevocationVault.contains(reference) {
+                    throw BluefinError.message("This device connection is being signed out.")
+                }
+                let mesh = try MeshSessionVault.load(reference: reference)
+                guard mesh.sessionId == reference, mesh.apiOrigin == session.server,
+                      mesh.deviceId == session.deviceId, mesh.userId == session.userId else {
+                    throw BluefinError.message("The saved device connection does not match this account.")
+                }
+                request["mesh"] = mesh.fields
+                request.removeValue(forKey: "token")
+            }
+            if session.meshSessionId == nil, operation == "playback", let pin = session.irohPeerId, let address = session.irohPeerAddress {
                 request["iroh"] = ["peerId": pin, "peerAddress": address]
             }
         }
@@ -49,7 +62,7 @@ enum RustBridge {
                 }
             }
         }.value
-        if Task.isCancelled && !["releasePlayback", "stopPlaybackProxy"].contains(operation) {
+        if Task.isCancelled && !["releasePlayback", "stopPlaybackProxy", "meshCloseResources", "meshLocalSignOut", "meshRevoke"].contains(operation) {
             if operation == "playback" { try await cleanupPlaybackResponse(response, session: session) }
             throw CancellationError()
         }
@@ -124,5 +137,34 @@ enum SessionVault {
     }
     private static var baseQuery: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "current"]
+    }
+}
+
+extension RustBridge {
+    static func decodeMeshImage(_ bytes: Data) async throws -> MeshInvitePreview {
+        guard !bytes.isEmpty, bytes.count <= MeshImageInput.maximumBytes else {
+            throw BluefinError.message("Choose a PNG or JPEG image smaller than 8 MiB.")
+        }
+        let permit = try await CoreAdmission.shared.acquire()
+        defer { Task { await CoreAdmission.shared.release(permit) } }
+        try Task.checkCancellation()
+        let value = try await Task.detached(priority: .userInitiated) {
+            try bytes.withUnsafeBytes { buffer -> MeshInvitePreview in
+                guard let pointer = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                      let output = bluefin_decode_qr_image(pointer, buffer.count) else {
+                    throw BluefinError.message("The connection image could not be read.")
+                }
+                defer { bluefin_free(output) }
+                let response = Data(String(cString: output).utf8)
+                guard let envelope = try JSONSerialization.jsonObject(with: response) as? [String: Any],
+                      envelope["ok"] as? Bool == true, let value = envelope["value"] else {
+                    throw BluefinError.message("Choose an image containing exactly one valid Bluefin invitation.")
+                }
+                return try JSONDecoder().decode(MeshInvitePreview.self,
+                    from: JSONSerialization.data(withJSONObject: value))
+            }
+        }.value
+        try Task.checkCancellation()
+        return value
     }
 }

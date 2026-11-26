@@ -157,7 +157,7 @@ struct Artwork: View {
         let generation = cache.generation()
         for source in sources(for: item, backdrop: backdrop) {
             guard !Task.isCancelled, generation == cache.generation() else { return nil }
-            let key = "\(session.server)/\(session.userId)/\(source.id)/\(source.kind)/\(source.tag ?? "")/\(pixelWidth)"
+            let key = "\(session.server)/\(session.userId)/\(session.meshSessionId ?? "https")/\(source.id)/\(source.kind)/\(source.tag ?? "")/\(pixelWidth)"
             if let cached = cache.cache.object(forKey: key as NSString) { return cached }
             if let pending = inFlight[key] {
                 let image = await pending.value
@@ -203,6 +203,25 @@ struct Artwork: View {
         components.path += "/Items/\(source.id)/Images/\(source.kind)"
         components.queryItems = [URLQueryItem(name: "maxWidth", value: String(width)), URLQueryItem(name: "quality", value: "85")]
         guard let url = components.url else { return nil }
+        if session.meshSessionId != nil {
+            do {
+                let response: MeshArtworkBytes = try await RustBridge.call("meshImage", session: session,
+                    fields: ["resource": url.absoluteString])
+                guard response.mime.hasPrefix("image/"), let data = Data(base64Encoded: response.bytesBase64),
+                      data.count <= 5 * 1024 * 1024,
+                      let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+                      let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceThumbnailMaxPixelSize: width,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                        kCGImageSourceShouldCacheImmediately: true,
+                      ] as CFDictionary) else { return nil }
+                try Task.checkCancellation()
+                let decoded = UIImage(cgImage: cg)
+                guard cache.cacheImage(decoded, key: cacheKey, generation: generation) else { return nil }
+                return decoded
+            } catch { return nil }
+        }
         var request = URLRequest(url: url)
         guard !session.token.isEmpty, !session.token.contains(where: { $0 == "\"" || $0 == "\\" || $0.asciiValue.map { $0 < 32 || $0 == 127 } == true }) else { return nil }
         request.setValue("MediaBrowser Client=\"Bluefin Apple\", Token=\"\(session.token)\"", forHTTPHeaderField: "Authorization")
@@ -226,3 +245,5 @@ struct Artwork: View {
         SameOriginImages.shared.clear()
     }
 }
+
+private struct MeshArtworkBytes: Decodable, Sendable { let bytesBase64: String; let mime: String }

@@ -29,6 +29,8 @@ import CoreSpotlight
 
 struct RootView: View {
     @EnvironmentObject private var store: LibraryStore
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var nearby = MeshNearbyBrowser()
     var body: some View {
         Group {
             if store.signedIn { LibraryTabs() }
@@ -48,11 +50,34 @@ struct RootView: View {
         .sheet(isPresented: $store.musicExpanded) {
             if let playback = store.playback, playback.item.Type == "Audio" { MusicPlayer(playback: playback).environmentObject(store).id(playback.id) }
         }
+        .environmentObject(nearby)
         .task {
+            nearby.start()
+            Task { await MeshRevocationQueue.shared.retry() }
             NativeIntegrations.attach(to: store)
             #if os(iOS)
             if #available(iOS 16.0, *) { BluefinAppShortcuts.updateAppShortcutParameters() }
             #endif
+        }
+        .sheet(isPresented: Binding(get: { store.meshInvitationCode != nil }, set: { if !$0 { store.meshInvitationCode = nil } })) {
+            MeshPairingView(initialCode: store.meshInvitationCode).environmentObject(store).environmentObject(nearby)
+        }
+        .onOpenURL { url in
+            guard url.scheme == "bluefin", url.host == "connect" else { return }
+            guard !store.signedIn else {
+                store.error = "Sign out before connecting another account."
+                return
+            }
+            // The shared Rust parser validates the complete URL before any effect.
+            store.meshInvitationCode = url.absoluteString
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { nearby.start(); Task { await MeshRevocationQueue.shared.retry() } }
+            else if phase == .background { nearby.stop() }
+            Task { await store.handleMeshScene(phase) }
+        }
+        .task(id: nearby.revision.uuidString + (store.session?.meshSessionId ?? "")) {
+            await nearby.refresh(store.session)
         }
         .task(id: store.session.map(OfflineLibrary.identity)) { await store.offline.connect(store.session) }
         .task(id: store.session.map(OfflineLibrary.identity)) { await store.sports.connect(store.session) }
@@ -641,6 +666,7 @@ struct SettingsView: View {
             Section("Your library") {
                 LabeledContentCompat("Account", value: store.preview ? "Preview" : store.session?.username ?? "")
                 if let session = store.session { Text(session.server).font(.footnote).foregroundStyle(.secondary) }
+                if !store.preview { NavigationLink(destination: MeshConnectionsView()) { Label("Connections and invitations", systemImage: "qrcode") } }
                 Button(store.preview ? "Leave preview" : "Sign out", role: .destructive) { Task { Artwork.clearCache(); await store.signOut() } }
             }
             Section("Appearance") {

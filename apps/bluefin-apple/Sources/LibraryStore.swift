@@ -5,6 +5,8 @@ import CryptoKit
 @MainActor final class LibraryStore: ObservableObject {
     @Published var session = SessionVault.load()
     @Published var preview = false
+    @Published var meshInvitationCode: String?
+    @Published private(set) var signingOut = false
     @Published var home = HomePage(resume: [], latest: [], nextUp: [])
     @Published private(set) var homeFromCatalog = false
     @Published var libraries: [MediaItem] = []
@@ -28,6 +30,19 @@ import CryptoKit
     private var pendingPreparation: PendingPlayback?
     private let playbackTeardowns = PlaybackTeardowns()
     init() {
+        if let reference = session?.meshSessionId {
+            do {
+                if try MeshPendingVault.load()?.completion?.id == reference { try MeshPendingVault.clear() }
+                if try MeshRevocationVault.contains(reference) {
+                    try SessionVault.clear()
+                    try MeshSessionVault.clear(reference: reference)
+                    session = nil
+                }
+            } catch {
+                session = nil
+                self.error = "Unlock this device to finish its saved sign-out request."
+            }
+        }
         if var restored = session, restored.companionGeneration == nil {
             restored.companionGeneration = UUID()
             do { try SessionVault.save(restored); session = restored }
@@ -77,6 +92,51 @@ import CryptoKit
         preview = false
         restoreMusicQueue()
         await refresh()
+    }
+
+    func acceptMeshSession(_ mesh: MeshSavedSession, username: String) async throws {
+        guard session == nil, !preview, !signingOut else {
+            throw BluefinError.message("Sign out before connecting another account.")
+        }
+        let generation = accountGeneration
+        guard try !MeshRevocationVault.contains(mesh.sessionId) else {
+            throw BluefinError.message("This device connection is being signed out. Use a new invitation.")
+        }
+        try MeshSessionVault.save(mesh)
+        var candidate = AccountSession(server: mesh.apiOrigin, token: "", userId: mesh.userId,
+            username: username, deviceId: mesh.deviceId, allowHttp: false)
+        candidate.meshSessionId = mesh.sessionId
+        // Exercise the ordinary library entry point before making this sign-in active.
+        let page: ItemPage = try await RustBridge.call("libraries", session: candidate)
+        try Task.checkCancellation()
+        guard session == nil, accountGeneration == generation, !signingOut else { throw CancellationError() }
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        try await WatchCompanion.shared.beginAccountChange()
+        defer { WatchCompanion.shared.endAccountChange() }
+        #endif
+        try SessionVault.save(candidate)
+        Artwork.clearCache()
+        #if os(tvOS)
+        TopShelfSnapshot.clear()
+        #endif
+        accountGeneration = UUID()
+        session = candidate
+        preview = false
+        libraries = page.Items
+        home = .init(resume: [], latest: [], nextUp: [])
+        meshInvitationCode = nil
+        restoreMusicQueue()
+        await refresh()
+    }
+
+    func handleMeshScene(_ phase: ScenePhase) async {
+        guard session?.meshSessionId != nil else { return }
+        if phase == .active {
+            if !loading { await refresh() }
+        } else if phase == .background, playback == nil, !startingPlayback {
+            // Background audio retains its media route. Idle routes close.
+            let _: EmptyValue? = try? await RustBridge.call("meshCloseResources")
+        }
     }
 
     func explore() {
@@ -558,22 +618,28 @@ import CryptoKit
     }
 
     func signOut() async {
+        guard !signingOut else { return }
+        signingOut = true
+        defer { signingOut = false }
         #if os(iOS) && !targetEnvironment(macCatalyst)
         do { try await WatchCompanion.shared.beginAccountChange() }
         catch { self.error = "Watch cleanup is unresolved. Retry sign-out when the server is reachable."; return }
         defer { WatchCompanion.shared.endAccountChange() }
         #endif
-        do { try SessionVault.clear() }
-        catch {
+        let previousSession = session
+        do {
+            if let previousSession { try await MeshRevocationQueue.shared.prepare(previousSession) }
+            try SessionVault.clear()
+        } catch {
             self.error = error.localizedDescription
             return
         }
+        Artwork.clearCache()
         #if os(tvOS)
         TopShelfSnapshot.clear()
         #endif
         accountGeneration = UUID()
         let generation = accountGeneration
-        let previousSession = session
         let pending = pendingPreparation
         pending?.cancel()
         dismissPlayback()
@@ -595,9 +661,22 @@ import CryptoKit
         do { try await pending?.dispose() } catch { cleanupFailed = true }
         do { try await teardown.value } catch { cleanupFailed = true }
         if let previousSession {
-            do { try await RustBridge.notify("logout", session: previousSession) }
-            catch { cleanupFailed = true }
+            if let reference = previousSession.meshSessionId {
+                do { let _: EmptyValue = try await RustBridge.call("meshLocalSignOut", session: previousSession) }
+                catch { cleanupFailed = true }
+                do {
+                    if try MeshPendingVault.load()?.completion?.id == reference { try MeshPendingVault.clear() }
+                    try MeshSessionVault.clear(reference: reference)
+                } catch { cleanupFailed = true }
+                await MeshRevocationQueue.shared.retry()
+                if MeshRevocationQueue.shared.count > 0 { cleanupFailed = true }
+            } else {
+                do { try await RustBridge.notify("logout", session: previousSession) }
+                catch { cleanupFailed = true }
+            }
         }
-        if cleanupFailed && accountGeneration == generation { error = "Signed out on this device. The server could not confirm every playback cleanup operation." }
+        if cleanupFailed && accountGeneration == generation {
+            error = "Signed out on this device. Some remote cleanup is unconfirmed and will retry when Bluefin reconnects."
+        }
     }
 }

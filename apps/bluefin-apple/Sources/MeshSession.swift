@@ -93,6 +93,8 @@ struct MeshSavedSession: Codable, Sendable {
     let sessionId: String
     let deviceSeed: String
     let apiOrigin: String
+    let deviceId: String
+    let userId: String
     var fields: [String: Any] {
         ["serverAddress": serverAddress.foundation, "sessionId": sessionId,
          "deviceSeed": deviceSeed, "apiOrigin": apiOrigin]
@@ -105,6 +107,7 @@ struct MeshPending: Codable {
     var begin: MeshBeginResponse?
     var prepared: MeshPreparedFinish?
     var signupHandle: String?
+    var completion: MeshCompletion?
 }
 enum MeshPendingVault {
     private static var query: [String: Any] {
@@ -140,6 +143,54 @@ enum MeshPendingVault {
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw BluefinError.message("Your pending connection could not be removed.")
+        }
+    }
+}
+
+enum MeshSessionVault {
+    private static func query(_ reference: String) throws -> [String: Any] {
+        guard reference.utf8.count == 64,
+              reference.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            throw BluefinError.message("The saved device connection is invalid.")
+        }
+        return [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "org.glopyglerky.bluefin.mesh.device",
+            kSecAttrAccount as String: reference,
+            kSecAttrSynchronizable as String: false]
+    }
+    static func load(reference: String) throws -> MeshSavedSession {
+        var request = try query(reference)
+        request[kSecReturnData as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data, data.count <= 65536 else {
+            throw BluefinError.message("Unlock this device to use its saved Bluefin connection. If it was removed, connect again.")
+        }
+        let saved = try JSONDecoder().decode(MeshSavedSession.self, from: data)
+        guard saved.sessionId == reference else { throw BluefinError.message("The saved device connection is invalid.") }
+        return saved
+    }
+    static func save(_ saved: MeshSavedSession) throws {
+        let data = try JSONEncoder().encode(saved)
+        guard data.count <= 65536 else { throw BluefinError.message("The saved device connection is too large.") }
+        let key = try query(saved.sessionId)
+        let status = SecItemUpdate(key as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var request = key
+            request[kSecValueData as String] = data
+            request[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            guard SecItemAdd(request as CFDictionary, nil) == errSecSuccess else {
+                throw BluefinError.message("This device's connection could not be saved securely.")
+            }
+        } else if status != errSecSuccess {
+            throw BluefinError.message("This device's connection could not be updated.")
+        }
+    }
+    static func clear(reference: String) throws {
+        let status = SecItemDelete(try query(reference) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw BluefinError.message("This device's connection could not be removed.")
         }
     }
 }

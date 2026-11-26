@@ -28,6 +28,14 @@
 				<string>bluefin-shelf</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Bluefin secure connection</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>bluefin</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
@@ -45,6 +53,10 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+	</array>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_bluefin-mesh._udp.</string>
 	</array>
 </dict>
 </plist>

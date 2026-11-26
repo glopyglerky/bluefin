@@ -64,6 +64,8 @@ targets:
       path: iOS-Info.plist
       properties:
         CFBundleURLTypes:
+          - CFBundleURLName: Bluefin secure connection
+            CFBundleURLSchemes: [bluefin]
           - CFBundleURLName: Bluefin widget navigation
             CFBundleURLSchemes: [bluefin-widget]
         CFBundleDisplayName: Bluefin
@@ -75,6 +77,8 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSLocalNetworkUsageDescription: Connect to the media server you choose on your home network.
+        NSBonjourServices: ["_bluefin-mesh._udp."]
+        NSCameraUsageDescription: Scan Bluefin invitation QR codes. Camera images stay on this device.
         NSMicrophoneUsageDescription: Monitor your voice through wired headphones while singing with authorized music. Bluefin does not record or transmit your microphone audio.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
@@ -140,9 +144,12 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UIBackgroundModes: [audio]
         CFBundleURLTypes:
+          - CFBundleURLName: Bluefin secure connection
+            CFBundleURLSchemes: [bluefin]
           - CFBundleURLName: Bluefin Top Shelf
             CFBundleURLSchemes: [bluefin-shelf]
         NSLocalNetworkUsageDescription: Connect to the media server you choose on your home network.
+        NSBonjourServices: ["_bluefin-mesh._udp."]
         NSMicrophoneUsageDescription: Use your selected iPhone microphone for local karaoke voice monitoring.
         NSCameraUsageDescription: Connect your iPhone using Apple's Continuity device picker. Bluefin does not capture camera video.
         NSAppTransportSecurity:
@@ -215,11 +222,15 @@ targets:
     info:
       path: Mac/Info.plist
       properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: Bluefin secure connection
+            CFBundleURLSchemes: [bluefin]
         CFBundleDisplayName: Bluefin
         CFBundleName: Bluefin
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSLocalNetworkUsageDescription: Connect to your chosen media server.
+        NSBonjourServices: ["_bluefin-mesh._udp."]
         NSMicrophoneUsageDescription: Monitor your voice locally while singing.
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
@@ -258,11 +269,15 @@ targets:
     info:
       path: Vision/Info.plist
       properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: Bluefin secure connection
+            CFBundleURLSchemes: [bluefin]
         CFBundleDisplayName: Bluefin
         CFBundleName: Bluefin
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSLocalNetworkUsageDescription: Connect to your chosen media server.
+        NSBonjourServices: ["_bluefin-mesh._udp."]
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
           UIApplicationPreferredDefaultSceneSessionRole: UIWindowSceneSessionRoleApplication

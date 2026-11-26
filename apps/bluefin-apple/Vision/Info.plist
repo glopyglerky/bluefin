@@ -29,5 +29,20 @@
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<true/>
 	</dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Bluefin secure connection</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>bluefin</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_bluefin-mesh._udp.</string>
+	</array>
 </dict>
 </plist>

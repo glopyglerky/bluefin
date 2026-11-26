@@ -43,6 +43,9 @@ struct WatchCompanionPermit {
                   store.session?.server == saved?.server, store.session?.userId == saved?.userId,
                   store.companionContext == saved?.companionGeneration else { throw CancellationError() }
         }
+        // A mesh device key is never exported to the Watch or replaced by a bearer.
+        // The Watch requires its own separately admitted device connection.
+        if saved?.meshSessionId != nil { return nil }
         return saved
     }
     private func retryOwners() async {

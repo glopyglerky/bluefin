@@ -209,6 +209,8 @@ struct AccountSession: Codable {
     var allowHttp: Bool
     var irohPeerId: String?
     var irohPeerAddress: String?
+    /// A reference only. The mesh device key is stored in a separate device-only vault.
+    var meshSessionId: String? = nil
     var companionGeneration: UUID? = UUID()
 }
 

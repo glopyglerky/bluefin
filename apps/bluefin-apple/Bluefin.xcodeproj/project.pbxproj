@@ -347,6 +347,38 @@
 		FB06B81496BE628C42868C34 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF0280F112CF1BBC0F287DCD /* Assets.xcassets */; };
 		FE4BEE1598281EBB49C93B10 /* MacCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2655BAD9B7451AA3EF4F4873 /* MacCommands.swift */; };
 		FFD2738E1795E33B6C0E49AE /* KaraokeContinuityControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA9373F7B92D2D2534278D6 /* KaraokeContinuityControls.swift */; };
+		4DEFABD30BC84C94395C9AED /* LocalAssistance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52209149624D169FDCB90D14 /* LocalAssistance.swift */; };
+		75B218E6A11906DE4336D64E /* LocalAssistanceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 330183C555ABCED786A2E5E0 /* LocalAssistanceViews.swift */; };
+		EE1912B022A7A5C253C1AA2D /* MeshConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 795D8A324EFB5DDA5D76D631 /* MeshConnectionsView.swift */; };
+		7CAB4CDE4513C868BFC0F17C /* MeshImageControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9241E69040B836FE95F02521 /* MeshImageControls.swift */; };
+		F0574AD4C61E65998FC6970F /* MeshNearby.swift in Sources */ = {isa = PBXBuildFile; fileRef = B76A2BDC3F9502E917A42236 /* MeshNearby.swift */; };
+		8E655258DEE2CAD36C047395 /* MeshPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40D111E18248BE9FDBF8C9E /* MeshPairing.swift */; };
+		DE5E02650DD5560888BB5230 /* MeshRevocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E022ECBF60F7C4586BCDDD5 /* MeshRevocation.swift */; };
+		7BD7DB3BDC2D2EDE639375FA /* MeshSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F3C188B7D9D0525B815F2B9 /* MeshSession.swift */; };
+		356301CDCAA42D36A2A9A516 /* LocalAssistance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52209149624D169FDCB90D14 /* LocalAssistance.swift */; };
+		DCF276AC075C659A02760432 /* LocalAssistanceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 330183C555ABCED786A2E5E0 /* LocalAssistanceViews.swift */; };
+		C69C30768DEA1935342B20C5 /* MeshConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 795D8A324EFB5DDA5D76D631 /* MeshConnectionsView.swift */; };
+		A0FC244193E26FB767C3EECB /* MeshImageControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9241E69040B836FE95F02521 /* MeshImageControls.swift */; };
+		C0B9BC3076EDE61FD9989704 /* MeshNearby.swift in Sources */ = {isa = PBXBuildFile; fileRef = B76A2BDC3F9502E917A42236 /* MeshNearby.swift */; };
+		21A6E42268326D8148F85F62 /* MeshPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40D111E18248BE9FDBF8C9E /* MeshPairing.swift */; };
+		A025B7433A7BB3E5D40AA137 /* MeshRevocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E022ECBF60F7C4586BCDDD5 /* MeshRevocation.swift */; };
+		9C8FD39B9AA90A8C8277519D /* MeshSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F3C188B7D9D0525B815F2B9 /* MeshSession.swift */; };
+		EE53361575E7698815AA15CD /* LocalAssistance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52209149624D169FDCB90D14 /* LocalAssistance.swift */; };
+		E799C184486D16A64DF4F031 /* LocalAssistanceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 330183C555ABCED786A2E5E0 /* LocalAssistanceViews.swift */; };
+		871766F61745132AF0976D5C /* MeshConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 795D8A324EFB5DDA5D76D631 /* MeshConnectionsView.swift */; };
+		B4DD2B13E5AD6E8D893D4369 /* MeshImageControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9241E69040B836FE95F02521 /* MeshImageControls.swift */; };
+		00688DF405CA4B32AE6054C3 /* MeshNearby.swift in Sources */ = {isa = PBXBuildFile; fileRef = B76A2BDC3F9502E917A42236 /* MeshNearby.swift */; };
+		16E9223FD884C2F02E1C663E /* MeshPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40D111E18248BE9FDBF8C9E /* MeshPairing.swift */; };
+		F46C56159C4FBF41BA64AC20 /* MeshRevocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E022ECBF60F7C4586BCDDD5 /* MeshRevocation.swift */; };
+		C9F7D51A9EFD6C10E33F936E /* MeshSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F3C188B7D9D0525B815F2B9 /* MeshSession.swift */; };
+		FCDB17A68189E35B1C947B64 /* LocalAssistance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52209149624D169FDCB90D14 /* LocalAssistance.swift */; };
+		97D16E64D3AAF41F0E95FA9A /* LocalAssistanceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 330183C555ABCED786A2E5E0 /* LocalAssistanceViews.swift */; };
+		36ACB07D9255AE17E9950454 /* MeshConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 795D8A324EFB5DDA5D76D631 /* MeshConnectionsView.swift */; };
+		26DE30B45A876548283A0886 /* MeshImageControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9241E69040B836FE95F02521 /* MeshImageControls.swift */; };
+		E2F4F672F31502116D65901B /* MeshNearby.swift in Sources */ = {isa = PBXBuildFile; fileRef = B76A2BDC3F9502E917A42236 /* MeshNearby.swift */; };
+		2DD55757524D265282F92C81 /* MeshPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40D111E18248BE9FDBF8C9E /* MeshPairing.swift */; };
+		252A6698E19D348A52FB4D9C /* MeshRevocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E022ECBF60F7C4586BCDDD5 /* MeshRevocation.swift */; };
+		C4FD4B382EE24E352C83D95E /* MeshSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F3C188B7D9D0525B815F2B9 /* MeshSession.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -537,6 +569,14 @@
 		FA08FC051213BA0AAC530C4F /* SportsPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SportsPresentationTests.swift; sourceTree = "<group>"; };
 		FA837F728DAB98C7BEE124A0 /* SoftwareLicensesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoftwareLicensesView.swift; sourceTree = "<group>"; };
 		FE2460776A20B4FB7A2F4B5B /* NativeServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeServer.swift; sourceTree = "<group>"; };
+		52209149624D169FDCB90D14 /* LocalAssistance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAssistance.swift; sourceTree = "<group>"; };
+		330183C555ABCED786A2E5E0 /* LocalAssistanceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAssistanceViews.swift; sourceTree = "<group>"; };
+		795D8A324EFB5DDA5D76D631 /* MeshConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshConnectionsView.swift; sourceTree = "<group>"; };
+		9241E69040B836FE95F02521 /* MeshImageControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshImageControls.swift; sourceTree = "<group>"; };
+		B76A2BDC3F9502E917A42236 /* MeshNearby.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshNearby.swift; sourceTree = "<group>"; };
+		E40D111E18248BE9FDBF8C9E /* MeshPairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshPairing.swift; sourceTree = "<group>"; };
+		0E022ECBF60F7C4586BCDDD5 /* MeshRevocation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshRevocation.swift; sourceTree = "<group>"; };
+		1F3C188B7D9D0525B815F2B9 /* MeshSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshSession.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -671,6 +711,14 @@
 		8745C439D6AE038E0C54B999 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				52209149624D169FDCB90D14 /* LocalAssistance.swift */,
+				330183C555ABCED786A2E5E0 /* LocalAssistanceViews.swift */,
+				795D8A324EFB5DDA5D76D631 /* MeshConnectionsView.swift */,
+				9241E69040B836FE95F02521 /* MeshImageControls.swift */,
+				B76A2BDC3F9502E917A42236 /* MeshNearby.swift */,
+				E40D111E18248BE9FDBF8C9E /* MeshPairing.swift */,
+				0E022ECBF60F7C4586BCDDD5 /* MeshRevocation.swift */,
+				1F3C188B7D9D0525B815F2B9 /* MeshSession.swift */,
 				8F1E05FA54088CF8DE6C3607 /* AdaptiveNavigation.swift */,
 				2FF25D78AA631E5A41B8B313 /* Artwork.swift */,
 				B28593266A15D0DCF100B3A1 /* AudioQuality.swift */,
@@ -1207,6 +1255,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EE53361575E7698815AA15CD /* LocalAssistance.swift in Sources */,
+				E799C184486D16A64DF4F031 /* LocalAssistanceViews.swift in Sources */,
+				871766F61745132AF0976D5C /* MeshConnectionsView.swift in Sources */,
+				B4DD2B13E5AD6E8D893D4369 /* MeshImageControls.swift in Sources */,
+				00688DF405CA4B32AE6054C3 /* MeshNearby.swift in Sources */,
+				16E9223FD884C2F02E1C663E /* MeshPairing.swift in Sources */,
+				F46C56159C4FBF41BA64AC20 /* MeshRevocation.swift in Sources */,
+				C9F7D51A9EFD6C10E33F936E /* MeshSession.swift in Sources */,
 				392D13ADCFB1B9B0CFE0D649 /* AdaptiveNavigation.swift in Sources */,
 				353646068C9C94417E5AA59D /* Artwork.swift in Sources */,
 				7FAE2FCB3478F8FAD198D2E4 /* AudioQuality.swift in Sources */,
@@ -1279,6 +1335,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				356301CDCAA42D36A2A9A516 /* LocalAssistance.swift in Sources */,
+				DCF276AC075C659A02760432 /* LocalAssistanceViews.swift in Sources */,
+				C69C30768DEA1935342B20C5 /* MeshConnectionsView.swift in Sources */,
+				A0FC244193E26FB767C3EECB /* MeshImageControls.swift in Sources */,
+				C0B9BC3076EDE61FD9989704 /* MeshNearby.swift in Sources */,
+				21A6E42268326D8148F85F62 /* MeshPairing.swift in Sources */,
+				A025B7433A7BB3E5D40AA137 /* MeshRevocation.swift in Sources */,
+				9C8FD39B9AA90A8C8277519D /* MeshSession.swift in Sources */,
 				CB4D45D4FFFBEACA0DE6EEAF /* AdaptiveNavigation.swift in Sources */,
 				ABECCCD47CAB64F4CCDFC553 /* Artwork.swift in Sources */,
 				7674B02A06F3145B0418C4DA /* AudioQuality.swift in Sources */,
@@ -1351,6 +1415,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FCDB17A68189E35B1C947B64 /* LocalAssistance.swift in Sources */,
+				97D16E64D3AAF41F0E95FA9A /* LocalAssistanceViews.swift in Sources */,
+				36ACB07D9255AE17E9950454 /* MeshConnectionsView.swift in Sources */,
+				26DE30B45A876548283A0886 /* MeshImageControls.swift in Sources */,
+				E2F4F672F31502116D65901B /* MeshNearby.swift in Sources */,
+				2DD55757524D265282F92C81 /* MeshPairing.swift in Sources */,
+				252A6698E19D348A52FB4D9C /* MeshRevocation.swift in Sources */,
+				C4FD4B382EE24E352C83D95E /* MeshSession.swift in Sources */,
 				D5C157A98A2EFA87CDCA3F3B /* AdaptiveNavigation.swift in Sources */,
 				5B435D9FEDC73BCBFF67136E /* Artwork.swift in Sources */,
 				264FFAC5C0D3A9711018DCB0 /* AudioQuality.swift in Sources */,
@@ -1450,6 +1522,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4DEFABD30BC84C94395C9AED /* LocalAssistance.swift in Sources */,
+				75B218E6A11906DE4336D64E /* LocalAssistanceViews.swift in Sources */,
+				EE1912B022A7A5C253C1AA2D /* MeshConnectionsView.swift in Sources */,
+				7CAB4CDE4513C868BFC0F17C /* MeshImageControls.swift in Sources */,
+				F0574AD4C61E65998FC6970F /* MeshNearby.swift in Sources */,
+				8E655258DEE2CAD36C047395 /* MeshPairing.swift in Sources */,
+				DE5E02650DD5560888BB5230 /* MeshRevocation.swift in Sources */,
+				7BD7DB3BDC2D2EDE639375FA /* MeshSession.swift in Sources */,
 				E8D400930AAFA800EE5DF18F /* AdaptiveNavigation.swift in Sources */,
 				3C19172E3D40D827C414FF09 /* Artwork.swift in Sources */,
 				2CA8197A6DE60C38AF0AAB36 /* AudioQuality.swift in Sources */,
