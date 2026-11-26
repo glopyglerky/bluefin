@@ -242,7 +242,10 @@ test('capability retry keeps the same invitation and invokes Rust only after exp
  await assert.rejects(t.ui.beginMesh(code,'Viewer',false),/Optional engine blocked/);
  t.ui.render();assert.equal(attempts.length,0);
  const retry=findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent==='Try again');
- await retry.listeners.click();
+ const operation=retry.listeners.click();
+ assert.equal(t.ui.state.capability,null);
+ assert(!t.root.textContent.includes('This attempt has not sent your invitation'));
+ await operation;
  assert.equal(probes,2);assert.deepEqual(attempts,[[code,'Viewer',false]]);
  assert.equal(t.ui.state.capability,null);assert.equal(t.ui.state.pairing.needsBeginRetry,true);
  assert.equal(t.requests.length,0);

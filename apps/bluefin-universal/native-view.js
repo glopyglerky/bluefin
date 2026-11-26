@@ -314,10 +314,12 @@ function validInvitation(code=state.code) {
   return typeof code==='string'&&/^MC1-[A-Z0-9-]+$/i.test(code)&&code.length<=2048;
 }
 function dismissCapability() {
+  if(state.busy)return;
   state.capability=null;state.error='';render();
   document.getElementById(state.sheet==='invite'?'bf-mesh-code':'content')?.focus?.();
 }
 function separateHttpsSignIn() {
+  if(state.busy)return;
   if(!state.session)state.pairingView++;
   state.capability=null;state.error='';state.sheet=null;
   if(!state.session){state.phase='connect';state.base=hostedBase();}
@@ -345,14 +347,15 @@ function capabilitySheet() {
     'If pairing already began, keep this tab open. Reloading a temporary connection can erase its key; the original QR cannot restore that key. Use a new invitation if needed, or restore a device you chose to remember.',
     'secondary'));
   const actions=node('div',undefined,'capability-actions');
-  const retry=action('Try again',async()=>{const retry=state.capability?.retry;state.capability=null;if(retry)await retry();},'primary');
+  const retry=action('Try again',async()=>{const retry=state.capability?.retry;state.capability=null;render();if(retry)await retry();},'primary');
   retry.autofocus=true;actions.append(retry);
   if(validInvitation()) {
     const native=node('a','Open in Bluefin','capability-link');
     native.href='bluefin://connect/'+state.code;actions.append(native);
   }
-  actions.append(button(state.session?'Return to library':'Use HTTPS sign-in',separateHttpsSignIn),
-    button('Not now',dismissCapability,'plain'));
+  const leave=button(state.session?'Return to library':'Use HTTPS sign-in',separateHttpsSignIn),
+    dismiss=button('Not now',dismissCapability,'plain');
+  leave.disabled=dismiss.disabled=state.busy;actions.append(leave,dismiss);
   dialog.append(actions);
   if(!state.session)dialog.append(node('p',
     'HTTPS sign-in is a separate session with this website’s server. It does not redeem this invitation.',
