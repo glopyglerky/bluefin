@@ -38,8 +38,18 @@ impl SignupBudget {
 
 #[derive(Clone, Copy, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Settings {
-    allow_signups: bool,
+pub(crate) struct Settings {
+    pub(crate) allow_signups: bool,
+    #[serde(default)]
+    pub(crate) mesh_signup_approval: SignupApproval,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SignupApproval {
+    #[default]
+    Manual,
+    Automatic,
 }
 
 #[derive(Serialize)]
@@ -67,7 +77,7 @@ fn settings_path(state: &AppState) -> PathBuf {
     .join("bluefin-accounts.json")
 }
 
-async fn read_settings(state: &AppState) -> Result<Settings, ApiError> {
+pub(crate) async fn read_settings(state: &AppState) -> Result<Settings, ApiError> {
     match tokio::fs::read(settings_path(state)).await {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
             ServiceError::backend(format!("Reading Bluefin account settings: {error}")).into()
@@ -176,6 +186,7 @@ async fn settings_script() -> impl IntoResponse {
 
 pub(crate) fn register(router: Router<AppState>) -> Router<AppState> {
     let routes = super::bluefin_passkeys::routes()
+        .merge(super::bluefin_mesh_accounts::routes())
         .route("/Bluefin/Accounts/Options", get(options))
         .route(
             "/Bluefin/Accounts/Settings",

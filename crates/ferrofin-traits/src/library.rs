@@ -1626,6 +1626,12 @@ pub trait UserManager: Send + Sync {
         Err(ServiceError::backend("Client account creation is not available"))
     }
 
+    /// Approves one verified, durable mesh signup through the existing account owner.
+    /// Account, conservative permissions, passkey and request state commit together.
+    async fn approve_mesh_signup(&self, _request_id: &str) -> Result<UserEntity, ServiceError> {
+        Err(ServiceError::backend("Mesh signup approval is unavailable"))
+    }
+
     /// Creates a user `name` whose sign-ins belong to an outside
     /// authentication provider, set up as `setup` says, and returns the new
     /// row. Upstream's LDAP plugin calls `CreateUserAsync`, sets the provider

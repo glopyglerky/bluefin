@@ -161,6 +161,12 @@ impl From<&SessionInfoDto> for SessionSummary {
 /// [`AuthenticationResultData`] (session DTO + minted access token).
 #[async_trait]
 pub trait SessionManager: Send + Sync {
+    /// Internal device-bound mesh grant mint. Never called by password login.
+    async fn authenticate_mesh(
+        &self, _request: &AuthenticationRequest,
+    ) -> Result<AuthenticationResultData, ServiceError> {
+        Err(ServiceError::Unavailable("Mesh sessions are unavailable".into()))
+    }
     /// Reserved managed-device mint. Ordinary auth must not accept this namespace.
     async fn authenticate_managed(
         &self,

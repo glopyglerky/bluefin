@@ -323,12 +323,22 @@ pub struct AppState {
     file_system_calls: Arc<tokio::sync::Semaphore>,
     pub(crate) account_gate: Arc<tokio::sync::Mutex<crate::handlers::bluefin_accounts::SignupBudget>>,
     pub(crate) passkeys: Option<Arc<crate::handlers::bluefin_passkeys::Service>>,
+    pub(crate) mesh_accounts: Option<Arc<crate::handlers::bluefin_mesh_accounts::Service>>,
     scoped_media: bool,
     karaoke: Option<crate::karaoke::Service>,
     iroh_media: Arc<std::sync::RwLock<Option<bluefin_contract::transport::IrohMediaTransport>>>,
 }
 
 impl AppState {
+    /// Installs the live mesh account authority after its PQ transport is bound.
+    #[must_use]
+    pub fn with_mesh_accounts(mut self, service: Arc<crate::handlers::bluefin_mesh_accounts::Service>) -> Self {
+        self.mesh_accounts = Some(service);
+        self
+    }
+    pub fn mesh_accounts(&self) -> Option<&Arc<crate::handlers::bluefin_mesh_accounts::Service>> {
+        self.mesh_accounts.as_ref()
+    }
     /// Enables passkeys only for an explicitly configured HTTPS public URL.
     #[must_use]
     pub fn with_bluefin_passkeys(mut self, db: ferrofin_db::Database, published_url: Option<&str>) -> Self {
@@ -372,6 +382,7 @@ impl AppState {
             )),
             account_gate: Arc::new(tokio::sync::Mutex::new(Default::default())),
             passkeys: None,
+            mesh_accounts: None,
             scoped_media: false,
             karaoke: None,
             iroh_media: Arc::new(std::sync::RwLock::new(None)),

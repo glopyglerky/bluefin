@@ -2471,21 +2471,27 @@ impl SessionManager for FerrofinSessionManager {
         &self,
         request: &AuthenticationRequest,
     ) -> Result<AuthenticationResultData, ServiceError> {
-        self.authenticate_internal(request, true, false).await
+        self.authenticate_internal(request, true, false, false).await
     }
 
     async fn authenticate_direct(
         &self,
         request: &AuthenticationRequest,
     ) -> Result<AuthenticationResultData, ServiceError> {
-        self.authenticate_internal(request, false, false).await
+        self.authenticate_internal(request, false, false, false).await
+    }
+
+    async fn authenticate_mesh(
+        &self, request: &AuthenticationRequest,
+    ) -> Result<AuthenticationResultData, ServiceError> {
+        self.authenticate_internal(request, false, false, true).await
     }
 
     async fn authenticate_managed(
         &self,
         request: &AuthenticationRequest,
     ) -> Result<AuthenticationResultData, ServiceError> {
-        self.authenticate_internal(request, false, true).await
+        self.authenticate_internal(request, false, true, false).await
     }
 
     async fn report_capabilities(
@@ -2929,8 +2935,8 @@ impl FerrofinSessionManager {
     }
 
     /// Shared authenticate path (C# `AuthenticateNewSessionInternal`).
-    async fn policy_device(&self, device_id: &str, managed: bool) -> Result<String, ServiceError> {
-        if device_id.starts_with("bluefin-managed:") != managed {
+    async fn policy_device(&self, device_id: &str, managed: bool, mesh: bool) -> Result<String, ServiceError> {
+        if device_id.starts_with("bluefin-managed:") != managed || device_id.starts_with("bluefin-mesh:") != mesh {
             return Err(ServiceError::InvalidInput(
                 "reserved device identity".into(),
             ));
@@ -2943,6 +2949,11 @@ impl FerrofinSessionManager {
             .fetch_one(self.db.pool())
             .await
             .map_err(|_| ServiceError::unauthorized("managed challenge unavailable"))
+        } else if mesh {
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM BluefinMeshSessions WHERE DeviceId=? AND Revoked=0 AND Expires>unixepoch()*1000")
+                .bind(device_id).fetch_one(self.db.pool()).await.map_err(db_err)?;
+            if count != 1 { return Err(ServiceError::unauthorized("mesh grant unavailable")); }
+            Ok(device_id.to_owned())
         } else {
             Ok(device_id.to_owned())
         }
@@ -2954,10 +2965,11 @@ impl FerrofinSessionManager {
         request: &AuthenticationRequest,
         enforce_password: bool,
         managed: bool,
+        mesh: bool,
     ) -> Result<AuthenticationResultData, ServiceError> {
         let app = require(request.app.as_deref(), "app")?;
         let device_id = require(request.device_id.as_deref(), "deviceId")?;
-        let policy_device_id = self.policy_device(device_id, managed).await?;
+        let policy_device_id = self.policy_device(device_id, managed, mesh).await?;
         let device_name = require(request.device_name.as_deref(), "deviceName")?;
         let app_version = require(request.app_version.as_deref(), "appVersion")?;
         let remote_endpoint = request.remote_endpoint.as_deref().unwrap_or("");

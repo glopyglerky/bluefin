@@ -47,7 +47,7 @@ use ferrofin_model::users::{
     ForgotPasswordResult, PinRedeemResult, SyncPlayUserAccessType, UserPolicy,
 };
 use ferrofin_util::string_extensions::upper_invariant;
-use sqlx::{Sqlite, SqliteExecutor};
+use sqlx::{Row, Sqlite, SqliteExecutor};
 use uuid::Uuid;
 
 use ferrofin_traits::error::ServiceError;
@@ -1364,6 +1364,52 @@ impl UserManager for FerrofinUserManager {
             })
         })
         .await
+    }
+
+    async fn approve_mesh_signup(&self, request_id: &str) -> Result<UserEntity, ServiceError> {
+        if request_id.len()!=64 || !request_id.bytes().all(|b|b.is_ascii_hexdigit()) {
+            return Err(ServiceError::invalid_input("Invalid signup request"));
+        }
+        let row=sqlx::query("SELECT Username,CredentialId,Credential,State,UserId FROM BluefinMeshSignups WHERE Id=?")
+            .bind(request_id).fetch_optional(self.db.pool()).await.map_err(db_err)?
+            .ok_or_else(||ServiceError::not_found("Signup request"))?;
+        let state:String=row.get("State");
+        if state=="approved" {
+            let user:Option<String>=row.get("UserId");
+            let id=Uuid::parse_str(&user.ok_or_else(||ServiceError::not_found("Approved account"))?)
+                .map_err(|_|ServiceError::backend("Invalid approved account"))?;
+            return self.require_user(id).await;
+        }
+        if state!="pending" {return Err(ServiceError::Conflict("This signup request has already been decided".into()));}
+        let name:String=row.get("Username");
+        require_valid_username(&name)?;
+        if name.len()>64 {return Err(ServiceError::invalid_input("Account name is too long"));}
+        let credential_id:Vec<u8>=row.get("CredentialId");
+        let credential:String=row.get("Credential");
+        let request_id=request_id.to_owned();
+        // The password is never disclosed. A pending account is never created
+        // with an empty password while its passkey is being attached.
+        let password=format!("{}{}",Uuid::new_v4().simple(),Uuid::new_v4().simple());
+        let hash=self.default_provider.format_password_hash(&password).await?
+            .ok_or_else(||ServiceError::backend("Password protection unavailable"))?;
+        self.insert_user(&name,move |tx,id|Box::pin(async move {
+            let changed=sqlx::query("UPDATE BluefinMeshSignups SET State='approved',UserId=? WHERE Id=? AND State='pending' AND UserId IS NULL")
+                .bind(id).bind(&request_id).execute(&mut **tx).await.map_err(db_err)?.rows_affected();
+            if changed!=1 {return Err(ServiceError::Conflict("This signup request has already been decided".into()));}
+            user_repository::set_password(&mut **tx,id,Some(&hash)).await.map_err(db_err)?;
+            for permission in [
+                PermissionKind::IsAdministrator,
+                PermissionKind::EnableAllFolders,
+                PermissionKind::EnableLiveTvAccess,
+                PermissionKind::EnableAllChannels,
+                PermissionKind::EnableSharedDeviceControl,
+                PermissionKind::EnablePublicSharing,
+                PermissionKind::EnableContentDeletion,
+            ] {set_permission_tx(tx,id,permission,false).await?;}
+            sqlx::query("INSERT INTO BluefinPasskeys(CredentialId,UserId,Credential) VALUES(?,?,?)")
+                .bind(credential_id).bind(id).bind(credential).execute(&mut **tx).await.map_err(db_err)?;
+            Ok(())
+        })).await
     }
 
     async fn create_external_user(

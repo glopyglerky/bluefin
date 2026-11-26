@@ -15,9 +15,27 @@
     <form id="settings" hidden>
         <label class="switch"><input type="checkbox" name="allowSignups"> Allow clients to create accounts</label>
         <p>Give each new account access to the libraries you want it to see.</p>
+        <label>Mesh signup approval <select name="meshSignupApproval"><option value="manual">Review each request</option><option value="automatic">Automatically approve verified requests</option></select></label>
+        <p>New accounts start without library access or administrator permissions.</p>
         <button>Save settings</button>
         <button id="logout" type="button">Sign out</button>
     </form>
+    <section id="mesh" hidden>
+        <h2>Connect a Bluefin app</h2>
+        <p>Codes work once. A copied code, saved image, and screenshot all represent the same invitation.</p>
+        <button id="login-code" type="button">Create a code for my account</button>
+        <button id="signup-code" type="button">Invite a new account</button>
+        <div id="connection" hidden>
+            <img id="connection-image" alt="One-time Bluefin connection QR code" width="320" height="360">
+            <p id="connection-status"></p>
+            <label>Connection code <textarea id="connection-code" readonly rows="5"></textarea></label>
+            <button id="copy-code" type="button">Copy code</button>
+            <a id="save-image" download="bluefin-connection.png">Save QR image</a>
+        </div>
+        <h2>Signup requests</h2>
+        <button id="refresh-requests" type="button">Refresh requests</button>
+        <div id="signup-requests"></div>
+    </section>
     <p id="status" role="status"></p>
 </main>
 </html>
