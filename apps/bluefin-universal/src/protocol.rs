@@ -122,6 +122,7 @@ pub fn api_url(base: &Url, path: &str, query: &[(&str, String)]) -> Result<Url> 
     Ok(url)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn client() -> reqwest::Client {
     let builder = reqwest::Client::builder();
     #[cfg(not(target_arch = "wasm32"))]
