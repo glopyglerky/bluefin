@@ -120,7 +120,7 @@ struct MusicAssistantQueue: Decodable, Sendable {
         detach()
         self.store = store
         accountGeneration = store.accountContext
-        guard let session = store.session, !store.preview else { return }
+        guard !store.signingOut, let session = store.session, !store.preview else { return }
         let owner = NativeIntegrations.identity(session)
         self.owner = owner
         accountAvailable = true
@@ -166,7 +166,7 @@ struct MusicAssistantQueue: Decodable, Sendable {
     private func check(_ request: Request) throws {
         guard !Task.isCancelled, requestID == request.id, owner == request.owner,
               accountGeneration == request.generation, let store,
-              store.accountContext == request.generation, !store.preview,
+              !store.signingOut, store.accountContext == request.generation, !store.preview,
               store.session.map(NativeIntegrations.identity) == request.owner else {
             throw CancellationError()
         }
@@ -174,7 +174,7 @@ struct MusicAssistantQueue: Decodable, Sendable {
 
     private func run(_ body: @escaping @MainActor (Request) async throws -> Void) {
         guard !busy, pending == nil, let owner, let generation = accountGeneration,
-              let store, !store.preview, store.accountContext == generation,
+              let store, !store.signingOut, !store.preview, store.accountContext == generation,
               store.session.map(NativeIntegrations.identity) == owner else { return }
         let request = Request(id: UUID(), owner: owner, generation: generation)
         requestID = request.id
