@@ -69,6 +69,7 @@ use ferrofin_traits::persistence::{ItemRepository, MediaStreamQuery, MediaStream
 use ferrofin_traits::stubs::{LyricManager, LyricProvider};
 
 use crate::item_type_lookup::kind_from_type_name;
+use crate::virtual_paths::VirtualPathExpander;
 
 /// The number of ffmpeg ticks (100 ns) per millisecond.
 const TICKS_PER_MS: i64 = 10_000;
@@ -90,6 +91,8 @@ pub struct FerrofinLyricManager {
     /// which is what makes an upload work over a read-only media mount. Absent
     /// → only the media folder can be written (unit-test default).
     metadata_path: Option<DirectoryPath>,
+    /// Expands adopted stream paths against the current server directories.
+    virtual_paths: VirtualPathExpander,
     /// The virtual-folder seam used to resolve the item's library options, i.e.
     /// `LibraryOptions.SaveLyricsWithMedia`. Absent → treated as `false`, the
     /// upstream default: never write into the media folder unasked.
@@ -123,6 +126,7 @@ impl FerrofinLyricManager {
             items: None,
             providers: Vec::new(),
             metadata_path: None,
+            virtual_paths: VirtualPathExpander::identity(),
             virtual_folders: None,
             media_streams: None,
             self_writes: None,
@@ -160,6 +164,14 @@ impl FerrofinLyricManager {
     #[must_use]
     pub fn with_metadata_path(mut self, metadata_path: impl Into<DirectoryPath>) -> Self {
         self.metadata_path = Some(metadata_path.into());
+        self
+    }
+
+    /// Expands stored `%MetadataPath%` and `%AppDataPath%` lyric stream paths
+    /// before reading or deleting their files. Follows live directory changes.
+    #[must_use]
+    pub fn with_virtual_paths(mut self, paths: VirtualPathExpander) -> Self {
+        self.virtual_paths = paths;
         self
     }
 
@@ -255,7 +267,7 @@ impl FerrofinLyricManager {
             .await?
             .into_iter()
             .filter_map(|stream| stream.path.filter(|p| !p.is_empty()))
-            .map(PathBuf::from)
+            .map(|path| PathBuf::from(self.virtual_paths.expand(&path)))
             .collect())
     }
 
@@ -757,11 +769,16 @@ fn parse_time_tag(inner: &str) -> Option<i64> {
     } else {
         parsed
     };
-    minutes
+    let millis = minutes
         .checked_mul(60)?
         .checked_add(seconds)?
         .checked_mul(1000)?
-        .checked_add(millis)
+        .checked_add(millis)?;
+    // Every accepted line/word tag is later published as 100 ns ticks. A
+    // value can fit in milliseconds but overflow that conversion, corrupting
+    // synchronization in release builds (and panicking in debug builds).
+    millis.checked_mul(TICKS_PER_MS)?;
+    Some(millis)
 }
 
 /// One time tag matched inside a source line: its byte range and its value in
@@ -1927,6 +1944,83 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn adopted_lyric_paths_follow_live_server_directories() {
+        use crate::app_paths::FerrofinServerApplicationPaths;
+        use crate::virtual_paths::VirtualPathExpander;
+
+        let db = test_support::test_db().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let paths = Arc::new(FerrofinServerApplicationPaths::new(
+            root,
+            root.join("log"),
+            root.join("config"),
+            root.join("cache"),
+            root.join("web"),
+        ));
+        let manager = manager_over(&db, Vec::new())
+            .with_virtual_paths(VirtualPathExpander::from_paths(Arc::clone(&paths)));
+        let metadata = root.join("metadata");
+        let data = root.join("data");
+        std::fs::create_dir_all(&metadata).unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+        let original = metadata.join("song.elrc");
+        std::fs::write(&original, "[00:01.00]First <00:02.00>second").unwrap();
+        let metadata_item = seed_audio(&db, "/media/metadata-song.flac").await;
+        record_lyric_streams(
+            &db,
+            metadata_item,
+            &[std::path::Path::new("%mEtAdAtApAtH%/song.elrc")],
+        )
+        .await;
+        let dto = manager
+            .get_lyrics(metadata_item)
+            .await
+            .unwrap()
+            .expect("adopted metadata lyric is readable");
+        assert_eq!(dto.lyrics[0].text, "First second");
+        assert_eq!(dto.lyrics[0].start, Some(10_000_000));
+        assert_eq!(dto.lyrics[0].cues.as_ref().unwrap()[1].start, 20_000_000);
+
+        let app_data_lyric = data.join("song.txt");
+        std::fs::write(&app_data_lyric, "Plain text").unwrap();
+        let data_item = seed_audio(&db, "/media/data-song.flac").await;
+        record_lyric_streams(
+            &db,
+            data_item,
+            &[std::path::Path::new("%AppDataPath%/song.txt")],
+        )
+        .await;
+        assert_eq!(
+            manager.get_lyrics(data_item).await.unwrap().unwrap().lyrics[0].text,
+            "Plain text"
+        );
+
+        // The same manager follows a changed metadata root. Deleting the
+        // item's lyric then removes only its current resolved file.
+        let moved = root.join("moved-metadata");
+        std::fs::create_dir_all(&moved).unwrap();
+        let replacement = moved.join("song.elrc");
+        std::fs::write(&replacement, "[00:03.00]Moved").unwrap();
+        paths.set_internal_metadata_path(moved.to_str());
+        assert_eq!(
+            manager
+                .get_lyrics(metadata_item)
+                .await
+                .unwrap()
+                .unwrap()
+                .lyrics[0]
+                .text,
+            "Moved"
+        );
+        manager.delete_lyrics(metadata_item).await.unwrap();
+        assert!(!replacement.exists());
+        assert!(original.is_file());
+        assert!(app_data_lyric.is_file());
+        assert!(manager.get_lyrics(metadata_item).await.unwrap().is_none());
+    }
+
     /// `File.ReadAllTextAsync(path, Encoding.UTF8)` honours a UTF-16 BOM and
     /// turns a stray Latin-1 byte into U+FFFD; neither drops the lyric.
     #[rstest::rstest]
@@ -2416,6 +2510,34 @@ mod tests {
                 .collect::<Vec<_>>(),
             [("sixty", Some(600_000_000)), ("big", Some(60_050_000_000))]
         );
+    }
+
+    #[test]
+    fn lrc_out_of_range_timestamps_do_not_corrupt_playback_timing() {
+        // This is one millisecond past the largest timestamp representable
+        // in the wire format. Reject it both as a line and as a word tag.
+        let overflow = "15372286728:05.478";
+        assert!(parse_lrc(&format!("[{overflow}]out of range")).is_none());
+        let source = format!("[00:01.00]before <{overflow}>after");
+        let dto = parse_lrc(&source).expect("valid line remains readable");
+        assert_eq!(dto.lyrics.len(), 1);
+        assert_eq!(dto.lyrics[0].start, Some(10_000_000));
+        assert_eq!(dto.lyrics[0].text, format!("before <{overflow}>after"));
+        assert_eq!(dto.lyrics[0].cues.as_deref(), Some(&[][..]));
+
+        // The largest whole-millisecond value still fits. Exercise line and
+        // cue conversion as well as the parser boundary, without saturation.
+        let dto = parse_lrc(
+            "[00:01.00]first <15372286728:05.477>last\n\
+             [15372286728:05.477]final",
+        )
+        .expect("representable timestamps");
+        let maximum = (i64::MAX / super::TICKS_PER_MS) * super::TICKS_PER_MS;
+        assert_eq!(dto.lyrics[1].start, Some(maximum));
+        let cues = dto.lyrics[0].cues.as_ref().expect("word cues");
+        assert_eq!(cues[0].end, Some(maximum));
+        assert_eq!(cues[1].start, maximum);
+        assert_eq!(cues[1].end, Some(maximum));
     }
 
     #[test]

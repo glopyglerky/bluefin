@@ -1260,6 +1260,7 @@ pub async fn build_app_state(
         vec![Arc::new(lrclib)];
     let lyrics: Arc<dyn ferrofin_traits::stubs::LyricManager> = Arc::new(
         FerrofinLyricManager::new()
+            .with_virtual_paths(virtual_paths.clone())
             .with_self_writes(Arc::clone(&self_writes_guard))
             .with_items(Arc::clone(&item_repository))
             .with_providers(lyric_providers)
