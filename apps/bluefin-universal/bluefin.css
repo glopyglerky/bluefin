@@ -8,3 +8,14 @@
 .now-art img{width:100%;height:100%;object-fit:cover;border-radius:18px}
 
 .source-links{display:flex;justify-content:center;gap:1.25rem;font-size:.85rem;color:var(--secondary);padding:1rem}.source-links a{color:inherit}
+
+/* A capability failure is an optional system-style dialog, never a settings toggle. */
+.capability-dialog{color:var(--text);background:var(--sheet);border:1px solid var(--line);border-radius:24px;padding:24px;width:calc(100% - 32px);max-width:560px;max-height:calc(100svh - 32px);overflow:auto;margin:auto;box-shadow:0 24px 80px #0004}
+.capability-dialog[open]{position:fixed;inset:16px;height:fit-content;z-index:50}
+.capability-dialog::backdrop{background:#0006}
+.capability-mark{color:var(--accent);margin-bottom:16px}.capability-mark svg{width:36px;height:36px}
+.capability-dialog h2{font-size:24px;margin-bottom:12px}.capability-dialog h3{margin-top:18px}
+.capability-actions{display:flex;flex-direction:column;gap:10px;margin:20px 0}
+.capability-link{display:block;text-align:center;border:1px solid var(--line);border-radius:12px;padding:10px 16px;min-height:44px}
+.capability-guide{margin-top:16px;border-top:1px solid var(--line);padding-top:12px;font-size:15px}
+.capability-guide summary{cursor:pointer;min-height:44px;padding:10px 0;color:var(--accent)}

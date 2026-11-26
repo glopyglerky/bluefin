@@ -48,10 +48,38 @@ a service worker or a system VPN. These are explicit HTTPS account sessions.
 The server continues to make permission and content-access decisions in Rust.
 
 A QR-launched device connection requires the existing Rust PQ adapter and an
-independently configured approved relay. If these are unavailable, the
-invitation is not redeemed over HTTPS. The UI keeps the same connection screen,
-offers the installed application link for a valid-looking code, and explains
-the unsupported capability. A QR code does not replace browser-trusted TLS.
+independently configured approved relay. Opening the link shows the invitation
+without sending its code. The user chooses Connect securely before the client
+can start the existing device claim. If the optional browser engine cannot
+start, a system-styled HTML dialog offers retry, Open in Bluefin for a
+valid-looking code, and the existing separate HTTPS sign-in. The invitation is
+never redeemed over HTTPS and a paired device never changes transport. A QR
+code does not replace browser-trusted TLS.
+
+The dialog reacts to the capability failure, not a user-agent guess or a claim
+that Lockdown Mode was detected. It offers optional site-only Safari guidance:
+Page Menu → Website Settings on iPhone/iPad, or Safari → Settings for this
+website on Mac. Only the user can change that setting. The guide identifies
+the current website, explains the reduced protection for an excluded site,
+and links to [Apple's published instructions](https://support.apple.com/en-us/105120)
+(checked 2026-11-26). It does not link to a fabricated system-settings URL,
+suggest disabling Lockdown Mode globally, or change browser settings.
+
+Safari may reload when a site exception changes. Before Begin, the dialog
+tells the user to keep and reopen the original invitation. The launch fragment
+was already removed from the URL and the default tab keeps no persistent copy.
+For an already-started request or a connected temporary device, the dialog
+instead explains that losing the tab's key cannot be repaired by reopening
+the original one-use QR. A new invitation is required unless the device was
+explicitly remembered. Worker/media failure shows that latter explanation and
+keeps the paired session and its transport intact.
+
+The dialog has an accessible name and description, uses the native dialog
+focus boundary when available, supports Escape/cancel, and makes the rest of
+the view inert while open. Its fallback traps keyboard focus. All text and
+icons are application-authored; no Apple artwork or system modal is imitated.
+The connection code runs in the browser; account services and media still
+come from the Bluefin peers or servers the account is allowed to use.
 
 ## Native media without a worker
 
@@ -101,8 +129,10 @@ enter localStorage, sessionStorage, cookies or URLs.
 “Remember this device in protected browser storage” is a separate, unchecked
 choice before pairing. It uses the existing AES-GCM encrypted IndexedDB journal
 and nonextractable origin key. Restoring an older remembered device is explicit.
-A blocked storage API prevents that choice; it never silently changes its
-security or durability semantics.
+A missing or blocked storage API prevents that choice with an actionable
+message to leave Remember off for a temporary device. Failed database-open
+attempts can be retried after access changes. Neither failure silently changes
+the selected security or durability semantics.
 
 Page retirement fences local operations, closes media and starts best-effort
 remote revocation for temporary connected devices. JavaScript engines may stop
@@ -119,7 +149,8 @@ device identity remains bound to its original saved key.
 ## Account and content boundaries
 
 A “Connect another device to your account” QR is still the existing globally
-one-use login invitation and requires the account's passkey. It is not a
+one-use login invitation and requires the account's passkey. The web action explicitly issues the Login intent for the
+current account. It is not a
 different-person library grant, storage donation, or permission to reshare
 content. Shared storage, content access and account membership need separate
 authority. Neither physical deduplication nor possession of storage bytes may
@@ -134,6 +165,10 @@ All product builds and tests run through the admitted Forge owner. The new
 tests/progressive-web.test.cjs runs the actual renderer with Wasm, storage and
 workers absent, verifies ordinary HTTPS browsing, rejects cross-origin/lease
 escapes, checks no QR-to-HTTPS downgrade and checks temporary journal CAS.
+It also exercises capability failure before Begin, explicit retry, optional
+site guidance, cancellation, separate HTTPS sign-in, unchanged mesh sessions
+when media workers fail, the Login invitation request body, and absent or
+blocked protected storage with a successful retry.
 These are controlled boundary tests. They do not certify Safari Lockdown,
 physical playback, passkey enrollment, a live approved relay, or visual parity.
 

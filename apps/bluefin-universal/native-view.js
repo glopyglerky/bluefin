@@ -9,12 +9,12 @@ const launched=globalThis.takeBluefinLaunch?.()||'';
 const state={phase:'connect',base:hostedBase(),server:null,options:{},session:null,mode:'https',
   tab:'Home',route:{kind:'home'},rows:[],shelves:[],back:[],sheet:launched?'invite':null,
   code:launched,meshName:'',remember:false,pairing:null,pairingView:0,device:null,invitation:null,inviteTimer:null,
-  busy:false,error:'',notice:'',epoch:0,capabilities:null,player:null,expanded:false,
+  busy:false,error:'',notice:'',epoch:0,capabilities:null,capability:null,player:null,expanded:false,
   queue:[],queueIndex:0,shuffle:false,repeat:'off',query:'',images:new Map(),imageEpoch:0};
 let modalWasOpen=false,focusReturn=null,pageRetired=false,authTask=false,playbackGeneration=0,leaseRenew=null,progressTimer=null,meshPoll=null,hlsPromise;
 const artworkPending=new Set(),artworkMissing=new Set(),requestControllers=new Set();let artworkActive=0;
 function assertLive(epoch=state.epoch,session){if(pageRetired||epoch!==state.epoch||(session!==undefined&&session!==state.session))throw Error('This page or account changed. Resume the current connection.');}
-function clearPrivateView(){state.rows=[];state.shelves=[];state.back=[];state.query='';state.route={kind:'home'};state.queue=[];state.queueIndex=0;state.shuffle=false;state.repeat='off';state.capabilities=null;state.code='';state.meshName='';state.pairing=null;state.device=null;state.invitation=null;}
+function clearPrivateView(){state.rows=[];state.shelves=[];state.back=[];state.query='';state.route={kind:'home'};state.queue=[];state.queueIndex=0;state.shuffle=false;state.repeat='off';state.capabilities=null;state.capability=null;state.code='';state.meshName='';state.pairing=null;state.device=null;state.invitation=null;}
 const paths={
  waves:'M3 6c3-3 6 3 9 0s6 3 9 0M3 12c3-3 6 3 9 0s6 3 9 0M3 18c3-3 6 3 9 0s6 3 9 0',
  home:'M3 10 12 3l9 7M5 9v12h5v-7h4v7h5V9',
@@ -78,7 +78,7 @@ function items(value){const list=Array.isArray(value)?value:value?.Items;if(!Arr
 function subtitle(item){return [item.AlbumArtist||item.Artists?.join(', ')||item.ProductionYear,item.Album].filter(Boolean).join(' · ');}
 async function perform(task){
  if(pageRetired||state.busy)return;state.busy=true;state.error='';state.notice='';render();
- try{await task();}catch(e){if(!pageRetired)state.error=String(e.message||e);}
+ try{await task();}catch(e){if(!pageRetired&&!state.capability)state.error=String(e.message||e);}
  finally{if(!pageRetired){state.busy=false;render();}}
 }
 async function connect(raw){
@@ -93,7 +93,7 @@ async function connect(raw){
 function account(value){const token=value?.AccessToken,user=value?.User?.Id;if(!uuid(user)||!token)throw Error('The server returned an invalid account.');authorization(token);return {token,user:id(user),name:String(value.User.Name||'Your account')};}
 async function accept(value,mode='https',epoch=state.epoch){
  assertLive(epoch);state.epoch++;const accepted=state.epoch;
- state.session=value;state.mode=mode;state.phase='library';state.sheet=null;state.device=null;
+ state.session=value;state.mode=mode;state.phase='library';state.sheet=null;state.capability=null;state.meshName='';state.device=null;
  state.pairing=null;state.invitation=null;state.code='';state.tab='Home';state.back=[];state.route={kind:'home'};
  const capabilities=await api('Bluefin/Capabilities').catch(()=>null);assertLive(accepted,value);
  state.capabilities=capabilities;await loadRoute();assertLive(accepted,value);
@@ -153,22 +153,123 @@ async function meshProgress(serialized,epoch,view,engine){
 }
 async function beginMesh(code,name,remember){
  const epoch=state.epoch,view=state.pairingView;assertLive(epoch);
- const engine=await runtime().engine();assertLive(epoch);if(view!==state.pairingView)throw Error('The connection screen was closed.');
+ state.code=code;state.meshName=name;
+ const engine=await meshEngine(()=>beginMesh(code,name,remember),true,false,view);assertLive(epoch);if(view!==state.pairingView)throw Error('The connection screen was closed.');
  state.remember=remember;const result=await engine.webMeshBegin(code,name,remember);
  await meshProgress(result,epoch,view,engine);
 }
 async function resumeMesh(remembered){
  const epoch=state.epoch,view=state.pairingView;assertLive(epoch);
- const engine=await runtime().engine();assertLive(epoch);if(view!==state.pairingView)throw Error('The connection screen was closed.');
+ const engine=await meshEngine(()=>resumeMesh(remembered),false,false,view);assertLive(epoch);if(view!==state.pairingView)throw Error('The connection screen was closed.');
  if(remembered)state.remember=true;
  await meshProgress(await engine.webMeshResume(remembered),epoch,view,engine);
 }
 async function continueMesh(){
  const epoch=state.epoch,view=state.pairingView;assertLive(epoch);
- const engine=await runtime().engine();assertLive(epoch);if(view!==state.pairingView)throw Error('The connection screen was closed.');
+ const engine=await meshEngine(continueMesh,false,false,view);assertLive(epoch);if(view!==state.pairingView)throw Error('The connection screen was closed.');
  await meshProgress(await engine.webMeshProceed(),epoch,view,engine);
 }
-function closeSheet(){if(state.sheet==='invite')state.pairingView++;state.sheet=null;state.expanded=false;state.invitation=null;clearTimeout(state.inviteTimer);render();}
+function closeSheet(){if(state.sheet==='invite')state.pairingView++;state.capability=null;state.sheet=null;state.expanded=false;state.invitation=null;clearTimeout(state.inviteTimer);render();}
+
+function showCapability(error,retry,beforeBegin=false,mediaOnly=false) {
+  state.capability={reason:String(error.message||error),retry,beforeBegin,mediaOnly};
+  state.error='';
+}
+async function meshEngine(retry,beforeBegin=false,mediaOnly=false,view=state.pairingView) {
+  const epoch=state.epoch;
+  try {return await runtime().engine();}
+  catch(error) {
+    if(!pageRetired&&epoch===state.epoch&&view===state.pairingView&&error.bluefinBrowserCapability)
+      showCapability(error,retry,beforeBegin,mediaOnly);
+    throw error;
+  }
+}
+function validInvitation(code=state.code) {
+  return typeof code==='string'&&/^MC1-[A-Z0-9-]+$/i.test(code)&&code.length<=2048;
+}
+function dismissCapability() {
+  state.capability=null;state.error='';render();
+  document.getElementById(state.sheet==='invite'?'bf-mesh-code':'content')?.focus?.();
+}
+function separateHttpsSignIn() {
+  if(!state.session)state.pairingView++;
+  state.capability=null;state.error='';state.sheet=null;
+  if(!state.session){state.phase='connect';state.base=hostedBase();}
+  render();
+}
+function capabilitySheet() {
+  const help=state.capability,dialog=node('dialog',undefined,'capability-dialog');
+  dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');
+  dialog.setAttribute('aria-labelledby','capability-title');
+  dialog.setAttribute('aria-describedby','capability-description');
+  const mark=node('div',undefined,'capability-mark');mark.append(icon('info'));
+  const title=node('h2',help.mediaOnly?'Encrypted playback is unavailable':'Enable this browser connection');
+  title.id='capability-title';
+  const description=node('p',help.mediaOnly
+    ?'This browser could not start the encrypted media bridge. Your paired connection has not been changed.'
+    :'Bluefin could not start its encrypted connection code in this browser. The rest of the page remains available.');
+  description.id='capability-description';
+  dialog.append(mark,title,description,node('p',
+    'Lockdown Mode can limit required browser features. Bluefin cannot determine whether it is enabled.',
+    'secondary'));
+  if(help.beforeBegin)dialog.append(node('p',
+    'This attempt has not sent your invitation. Keep the original QR code or invitation link so you can reopen it after a reload.',
+    'secondary'));
+  else dialog.append(node('p',
+    'If pairing already began, keep this tab open. Reloading a temporary connection can erase its key; the original QR cannot restore that key. Use a new invitation if needed, or restore a device you chose to remember.',
+    'secondary'));
+  const actions=node('div',undefined,'capability-actions');
+  const retry=action('Try again',async()=>{const retry=state.capability?.retry;state.capability=null;if(retry)await retry();},'primary');
+  retry.autofocus=true;actions.append(retry);
+  if(validInvitation()) {
+    const native=node('a','Open in Bluefin','capability-link');
+    native.href='bluefin://connect/'+state.code;actions.append(native);
+  }
+  actions.append(button(state.session?'Return to library':'Use HTTPS sign-in',separateHttpsSignIn),
+    button('Not now',dismissCapability,'plain'));
+  dialog.append(actions);
+  if(!state.session)dialog.append(node('p',
+    'HTTPS sign-in is a separate session with this website’s server. It does not redeem this invitation.',
+    'secondary'));
+  const guide=node('details',undefined,'capability-guide');
+  guide.append(node('summary','Safari: allow only this website (optional)'),
+    node('p','Only change this setting if you trust '+location.host+'. Excluding a site reduces Lockdown Mode protection for that site.'),
+    node('h3','iPhone or iPad'),
+    node('p','In Safari, open the Page Menu, choose Website Settings, then turn off Lockdown Mode for this website.'),
+    node('h3','Mac'),
+    node('p','In Safari, choose Settings for '+location.host+' from the Safari menu, then deselect Enable Lockdown Mode.'),
+    node('p','These controls appear only when Lockdown Mode is on. Safari may reload the page. Before pairing begins, reopen the original QR code or invitation link after a reload. Bluefin removes invitation codes from the address bar.'),
+    node('p','Return to this page and try again. Bluefin cannot change this Safari setting for you.'));
+  const support=node('a','Apple’s Lockdown Mode instructions');
+  support.href='https://support.apple.com/en-us/105120';support.target='_blank';support.rel='noopener noreferrer';
+  guide.append(support);dialog.append(guide);
+  const detail=node('details',undefined,'capability-guide');
+  detail.append(node('summary','Connection details'),node('p',help.reason,'secondary'),
+    node('p','The browser runs Bluefin’s connection code locally. Media and account services remain on the Bluefin devices or servers you connect to.','secondary'));
+  dialog.append(detail);
+  dialog.addEventListener('cancel',event=>{event.preventDefault();dismissCapability();});
+  dialog.addEventListener('keydown',event=>{
+    if(event.key==='Escape'){event.preventDefault();dismissCapability();return;}
+    if(event.key==='Tab'&&typeof dialog.showModal!=='function') {
+      const controls=Array.from(dialog.querySelectorAll('button:not(:disabled),a[href],summary'))
+        .filter(control=>!control.getClientRects||control.getClientRects().length>0);
+      if(!controls.length){event.preventDefault();return;}
+      const first=controls[0],last=controls[controls.length-1],active=document.activeElement;
+      if(event.shiftKey&&(active===first||!dialog.contains(active))){event.preventDefault();last.focus();}
+      else if(!event.shiftKey&&(active===last||!dialog.contains(active))){event.preventDefault();first.focus();}
+    }
+  });
+  return dialog;
+}
+async function readInvitationImage(file) {
+  if(file.size<=0||file.size>8*1024*1024)throw Error('Choose a PNG or JPEG smaller than 8 MiB.');
+  const epoch=state.epoch,view=state.pairingView;assertLive(epoch);
+  const engine=await meshEngine(()=>readInvitationImage(file),!state.pairing&&!state.session,false,view);
+  const bytes=await file.arrayBuffer();assertLive(epoch);
+  if(view!==state.pairingView)throw Error('The connection screen was closed.');
+  state.code=engine.webMeshImage(new Uint8Array(bytes));
+  state.notice='Invitation read. Continue to connect.';
+}
 
 async function loadRoute(){const epoch=state.epoch,session=state.session,route=state.route,user=session?.user;assertLive(epoch,session);if(!user)return;const current=()=>{assertLive(epoch,session);if(route!==state.route)throw Error('The library view changed.');};state.rows=[];state.shelves=[];state.error='';
  if(route.kind==='home'){const requests=[
@@ -242,7 +343,7 @@ function libraryView(){const main=node('main',undefined,'app-main');main.id='con
 function tabbar(){const nav=node('nav',undefined,'tabbar');nav.setAttribute('aria-label','Library');for(const [title,symbol]of[['Home','home'],['Library','library'],['Music','music'],['Search','search'],['Live TV','live']]){const b=action(title,()=>navigate(title),'',symbol);b.setAttribute('aria-current',state.tab===title?'page':'false');nav.append(b);}return nav;}
 function sheet(){if(state.expanded)return nowPlaying();const outer=node('section',undefined,'sheet');outer.setAttribute('role','dialog');outer.setAttribute('aria-modal','true');outer.id='bluefin-dialog';outer.tabIndex=-1;outer.setAttribute('aria-label',state.sheet==='invite'?'Connect Bluefin':state.sheet==='connections'?'Connections':'Account and settings');const inner=node('div',undefined,'sheet-inner'),bar=node('div',undefined,'toolbar');bar.append(node('h2',state.sheet==='invite'?'Connect Bluefin':state.sheet==='connections'?'Connections':'Account and settings'),button('Done',closeSheet,'plain'));inner.append(bar);
  if(state.sheet==='invite'){const g=group(state.pairing?'Saved connection':'Connect with an invitation');if(state.pairing){g.append(node('p',state.remember?'This request is saved on this device.':'This request stays in this tab. Keep it open until your connection is complete.'));if(state.pairing.awaitingApproval)g.append(node('p','Your request is waiting for administrator approval.'));if(state.pairing.externalUrl){const u=new URL(state.pairing.externalUrl);if(u.protocol==='https:'&&!u.username&&!u.password){const a=node('a','Open passkey page');a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';g.append(a,node('p','After verifying, return here to finish.','secondary'));}}g.append(action(state.pairing.awaitingApproval?'Check approval':state.pairing.needsBeginRetry?'Resume connection':'Verify and finish',continueMesh,'primary'));}
- else{g.append(node('p','Scan a Bluefin QR code, open an invitation image, or paste the full connection code.'));const f=node('form'),[cw,ci]=field('Connection code','password',state.code,'mesh-code'),[nw,ni]=field('Your account name for a signup request','text',state.meshName,'mesh-name');ni.oninput=()=>{state.meshName=ni.value;};ci.autocomplete='off';ci.spellcheck=false;ci.maxLength=3072;ci.oninput=()=>{state.code=ci.value;};f.append(cw,nw);const remember=node('label',undefined,'check'),c=node('input');c.type='checkbox';c.checked=state.remember;c.onchange=()=>{state.remember=c.checked;};remember.append(c,node('span','Remember this device in protected browser storage'));f.append(remember,node('p','Temporary by default. Closing this tab removes its connection key. Use Sign out to request immediate remote revocation.','secondary'));const b=node('button','Connect securely','primary');b.disabled=state.busy;f.append(b);f.onsubmit=e=>{e.preventDefault();const code=ci.value.trim(),name=ni.value.trim(),keep=c.checked;ci.value='';perform(()=>beginMesh(code,name,keep));};g.append(f);for(const [label,capture]of[['Open QR image or screenshot',false],['Take a photo of a QR code',true]]){const l=node('label',label),input=node('input');input.type='file';input.accept='image/png,image/jpeg';if(capture)input.setAttribute('capture','environment');input.onchange=()=>{const file=input.files?.[0];input.value='';if(!file)return;perform(async()=>{if(file.size<=0||file.size>8*1024*1024)throw Error('Choose a PNG or JPEG smaller than 8 MiB.');const engine=await runtime().engine();state.code=engine.webMeshImage(new Uint8Array(await file.arrayBuffer()));state.notice='Invitation read. Continue to connect.';});};l.append(input);g.append(l);}if(/^MC1-[A-Z0-9-]+$/i.test(state.code)&&state.code.length<=2048){const a=node('a','Open in the installed Bluefin app');a.href='bluefin://connect/'+state.code;g.append(a);}}
+ else{g.append(node('p','Scan a Bluefin QR code, open an invitation image, or paste the full connection code.'));const f=node('form'),[cw,ci]=field('Connection code','password',state.code,'mesh-code'),[nw,ni]=field('Your account name for a signup request','text',state.meshName,'mesh-name');ni.oninput=()=>{state.meshName=ni.value;};ci.autocomplete='off';ci.spellcheck=false;ci.maxLength=3072;ci.oninput=()=>{state.code=ci.value;};f.append(cw,nw);const remember=node('label',undefined,'check'),c=node('input');c.type='checkbox';c.checked=state.remember;c.onchange=()=>{state.remember=c.checked;};remember.append(c,node('span','Remember this device in protected browser storage'));f.append(remember,node('p','Temporary by default. Closing this tab removes its connection key. Use Sign out to request immediate remote revocation.','secondary'));const b=node('button','Connect securely','primary');b.disabled=state.busy;f.append(b);f.onsubmit=e=>{e.preventDefault();const code=ci.value.trim(),name=ni.value.trim(),keep=c.checked;ci.value='';perform(()=>beginMesh(code,name,keep));};g.append(f);for(const [label,capture]of[['Open QR image or screenshot',false],['Take a photo of a QR code',true]]){const l=node('label',label),input=node('input');input.type='file';input.accept='image/png,image/jpeg';if(capture)input.setAttribute('capture','environment');input.onchange=()=>{const file=input.files?.[0];input.value='';if(!file)return;perform(()=>readInvitationImage(file));};l.append(input);g.append(l);}if(validInvitation()){const a=node('a','Open in the installed Bluefin app');a.href='bluefin://connect/'+state.code;g.append(a);}}
  g.append(action('Resume request in this tab',()=>resumeMesh(false)),action('Restore a remembered device',()=>resumeMesh(true)));inner.append(g,node('p','The QR verifies a device connection. Your browser still uses its normal trusted HTTPS certificate.','secondary'));
  }else if(state.sheet==='account'){const g=group(state.session?.name||'Your account');g.append(node('p',state.mode==='mesh'?'Connected through the encrypted Bluefin mesh':'Signed in through the server address'));g.append(button('Connections',()=>{state.sheet='connections';render();},'','qr'),action('Sign out',signOut,'danger'));inner.append(g);}
  else if(state.sheet==='connections'){const device=group('This device');device.append(node('p',state.mode==='mesh'?'Connected through the encrypted Bluefin mesh':'Signed in through the server address'));if(state.mode==='mesh')device.append(node('p',state.remember?'Your connection key is saved in protected storage on this browser.':'Your connection key exists only in this tab.','secondary'));inner.append(device);const g=group('Connect another device to your account');g.append(node('p','Use this invitation on a device you own. Your account passkey is still required.'),action('Create one-use invitation',issueInvite));if(state.invitation){const invite=state.invitation,image=node('img',undefined,'qr');image.src=invite.image;image.alt='One-use Bluefin device invitation';g.append(image,node('p','Every copy is the same invitation. Once claimed, no copy can connect another device.','secondary'));g.append(button('Copy invitation',()=>copy(invite.webLink)),button('Copy connection code',()=>copy(invite.code)));const save=node('a','Save QR image');save.href=invite.image;save.download='bluefin-invitation.png';g.append(save);const d=node('details'),summary=node('summary','Manual connection code');d.append(summary,node('p',invite.code,'code'));g.append(d);}g.append(node('p','Sharing a library with another person requires a separate grant to that person’s own account. A device invitation does not authorize shared storage or onward sharing.','secondary'));inner.append(g);}
@@ -341,8 +442,12 @@ async function play(item,queue=[item],index=0){
  state.queue=queue.slice(0,512);state.queueIndex=index;
  if(mode==='mesh'){
   await hlsSupport();current();
-  await runtime().mediaWorker();current();
-  const engine=await runtime().engine();current();
+  try{await runtime().mediaWorker();}catch(error){
+   current();
+   if(error.bluefinBrowserCapability)showCapability(error,()=>play(item,queue,index),false,true);
+   throw error;
+  }current();
+  const engine=await meshEngine(()=>play(item,queue,index),false,true);current();
   engine.webMeshPlay(session.handle,JSON.stringify(item));current();
   state.player={mode:'mesh',handle:session.handle,item,session};
   meshPoll=setInterval(()=>{
@@ -410,14 +515,25 @@ function clearImages(){state.imageEpoch++;artworkMissing.clear();for(const url o
 function render(){
  if(pageRetired)return;
  const active=document.activeElement,activeId=active?.id,activeKey=active?.dataset?.focusKey;
- const videoModal=!!state.player&&state.player.item.Type!=='Audio'&&!state.sheet&&!state.expanded;
- const modal=!!state.sheet||state.expanded||videoModal;
+ const videoModal=!state.capability&&!!state.player&&state.player.item.Type!=='Audio'&&!state.sheet&&!state.expanded;
+ const modal=!!state.capability||!!state.sheet||state.expanded||videoModal;
  if(modal&&!modalWasOpen)focusReturn={id:activeId,key:activeKey};
  document.body.classList.toggle('signed-in',!!state.session);
  const fragment=document.createDocumentFragment(),main=state.session?libraryView():welcome();
  if(modal){main.inert=true;main.setAttribute('aria-hidden','true');}fragment.append(main);
  if(state.session){const nav=tabbar(),mini=miniPlayer();if(modal){nav.inert=true;mini.inert=true;nav.setAttribute('aria-hidden','true');mini.setAttribute('aria-hidden','true');}fragment.append(nav,mini);}
- if(state.sheet||state.expanded)fragment.append(sheet());app.replaceChildren(fragment);
+ if(state.sheet||state.expanded){
+  const sheetRoot=sheet();
+  if(state.capability){sheetRoot.inert=true;sheetRoot.setAttribute('aria-hidden','true');}
+  fragment.append(sheetRoot);
+ }
+ const help=state.capability?capabilitySheet():null;
+ if(help)fragment.append(help);
+ app.replaceChildren(fragment);
+ if(help){
+  if(typeof help.showModal==='function')help.showModal();
+  else{help.setAttribute('open','');help.querySelector?.('button')?.focus?.();}
+ }
  const host=document.getElementById('media-host');host.inert=!videoModal;host.setAttribute('aria-hidden',String(!videoModal));
  if(videoModal){host.setAttribute('role','dialog');host.setAttribute('aria-modal','true');host.setAttribute('aria-label',state.player.item.Name);host.tabIndex=-1;}
  else{host.removeAttribute('role');host.removeAttribute('aria-modal');}
@@ -428,10 +544,11 @@ function render(){
  else if(!modal&&modalWasOpen){focus=findFocus(focusReturn);focusReturn=null;}
  else focus=findFocus({id:activeId,key:activeKey});
  modalWasOpen=modal;
- if(focus&&!focus.inert)focus.focus?.({preventScroll:true});
+ if(!help&&focus&&!focus.inert)focus.focus?.({preventScroll:true});
  pumpArtwork();
 }
 document.addEventListener('keydown',event=>{
+ if(state.capability)return;
  const dialog=document.querySelector?.('#bluefin-dialog')||
   (state.player?.item.Type!=='Audio'&&state.player?document.getElementById('media-host'):null);
  if(!dialog)return;

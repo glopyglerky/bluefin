@@ -44,18 +44,23 @@ const request = value => new Promise((resolve,reject) => {
 });
 function database() {
   if (!globalThis.isSecureContext || location.protocol !== 'https:') throw Error('Use a trusted HTTPS address');
-  let storage;
-  try {storage=globalThis.indexedDB;} catch (_) {throw Error('Protected connection storage unavailable');}
-  if (!storage || typeof storage.open !== 'function') throw Error('Protected connection storage unavailable');
   return databasePromise ||= new Promise((resolve,reject) => {
-    const open = storage.open('bluefin-mesh-v1', 1);
+    let open;
+    try {
+      const storage=globalThis.indexedDB;
+      if (!storage || typeof storage.open !== 'function') throw Error('Unavailable');
+      open=storage.open('bluefin-mesh-v1',1);
+    } catch (_) {
+      reject(Error('Protected connection storage unavailable. Leave Remember this device off to use a temporary connection.'));
+      return;
+    }
     let expired=false;
     const timer=setTimeout(()=>{expired=true;reject(Error('Protected connection storage did not respond'));},5000);
     open.onupgradeneeded = () => open.result.createObjectStore('vault');
     open.onsuccess = () => {clearTimeout(timer);if(expired)open.result.close();else resolve(open.result);};
     open.onerror = () => {clearTimeout(timer);reject(Error('Protected connection storage unavailable'));};
     open.onblocked = () => {clearTimeout(timer);expired=true;reject(Error('Close older Bluefin tabs and retry'));};
-  });
+  }).catch(error=>{databasePromise=undefined;throw error;});
 }
 async function key(db) {
   const found = await request(db.transaction('vault').objectStore('vault').get('key'));

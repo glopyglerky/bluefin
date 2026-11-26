@@ -8,16 +8,23 @@
     return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(message)),milliseconds);})])
       .finally(()=>clearTimeout(timer));
   }
+  function browserCapability(message) {
+    return Object.assign(Error(message), {bluefinBrowserCapability:true});
+  }
   async function engine() {
     if (loaded) return loaded;
     if (pending) return pending;
     pending = (async()=>{
       if (!globalThis.isSecureContext || location.protocol !== 'https:') throw Error('Open Bluefin at its trusted HTTPS address.');
       if (typeof WebAssembly !== 'object' || typeof WebAssembly.compile !== 'function')
-        throw Error('Encrypted device connections are unavailable in this browser. The HTTPS library remains available.');
+        throw browserCapability('Encrypted device connections are unavailable in this browser. The HTTPS library remains available.');
       // Do not infer Lockdown Mode from a device name or user-agent.
-      await bounded(WebAssembly.compile(new Uint8Array([0,97,115,109,1,0,0,0])),1500,
-        'This browser did not enable encrypted device connections. The HTTPS library remains available.');
+      try {
+        await bounded(WebAssembly.compile(new Uint8Array([0,97,115,109,1,0,0,0])),1500,
+          'The browser capability check did not respond.');
+      } catch (_) {
+        throw browserCapability('This browser did not enable encrypted device connections. The HTTPS library remains available.');
+      }
       const module = await bounded(import('./bluefin_universal.js'),8000,
         'The encrypted connection module took too long to load. Your current library view is still available.');
       await bounded(module.default(),12000,
@@ -35,7 +42,7 @@
     unavailable:()=>unavailable,
     bounded,
     async mediaWorker() {
-      if (!navigator.serviceWorker) throw Error('This browser cannot play through the encrypted mesh media bridge.');
+      if (!navigator.serviceWorker) throw browserCapability('This browser cannot play through the encrypted mesh media bridge.');
       const expected=new URL('./media-worker.js',document.baseURI).href;
       if (navigator.serviceWorker.controller?.scriptURL===expected) return;
       await bounded(navigator.serviceWorker.register(expected),5000,'The encrypted media bridge could not start.');

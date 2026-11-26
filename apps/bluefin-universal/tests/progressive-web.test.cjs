@@ -18,7 +18,8 @@ class Element{
  set textContent(v){this.text=String(v);this.children=[];}
  get textContent(){return this.text+this.children.map(c=>c.textContent||'').join(' ');}
 }
-function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false,cookieStatus=200,cookieMalformed=false,cookieCreateStatus=200,tvAdvertisement=true}={}){
+function browserFailure(message){return Object.assign(Error(message),{bluefinBrowserCapability:true});}
+function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false,cookieStatus=200,cookieMalformed=false,cookieCreateStatus=200,tvAdvertisement=true,launchCode='',engine}={}){
  const root=new Element('div'),video=new Element('video'),labels=new Map(),events={},requests=[],pending={};
  Object.assign(video,{paused:true,duration:60,currentTime:0,src:'',
   pause(){this.paused=true;},load(){},play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},canPlayType(){return 'probably';}});
@@ -39,6 +40,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
   else if(u.pathname==='/Bluefin/Accounts/Options')body={passkeys:true,quickConnect:true};
   else if(u.pathname==='/Users/AuthenticateByName')body={AccessToken:'synthetic-private-bearer',User:{Id:user,Name:'Listener'}};
   else if(u.pathname==='/Bluefin/Capabilities')body={protocolVersion:1,viewer:{userId:user}};
+  else if(u.pathname==='/Bluefin/Accounts/Mesh/Invite')body={singleUse:true,intent:'login',code:'MC1-INVITATION',webLink:'https://bluefin.test/web/bluefin/#bluefin-connect=MC1-INVITATION',pngBase64:'iVBORw0KGgo=',handle:'a'.repeat(64)};
   else if(u.pathname==='/Bluefin/Web/v1')body={version:cookieMalformed?99:1,cookieMediaLease:true,expiresInSeconds:300,maxSessionSeconds:7200,idleSeconds:90};
   else if(u.pathname==='/Bluefin/Web/v1/leases')body={version:1,mediaUrl:leaseOrigin+'/Bluefin/Web/v1/media/'+'a'.repeat(64)+'/0',
    releaseUrl:'/Bluefin/Web/v1/leases/'+'a'.repeat(64),renewUrl:'/Bluefin/Web/v1/leases/'+'a'.repeat(64),
@@ -58,12 +60,13 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
   setTimeout,clearTimeout,setInterval:()=>1,clearInterval(){},addEventListener:(name,fn)=>events[name]=fn,
   isSecureContext:true,WebAssembly:undefined});
  context.window=context;
- context.BluefinRuntime={engine:async()=>{throw Error(meshFailure?'Blocked optional engine':'Wasm unavailable');},ready:()=>null,
+ context.takeBluefinLaunch=()=>{const code=launchCode;launchCode='';return code;};
+ context.BluefinRuntime={engine:engine||(async()=>{throw browserFailure(meshFailure?'Blocked optional engine':'Wasm unavailable');}),ready:()=>null,
   bounded:promise=>promise};
  Object.defineProperty(context,'indexedDB',{get(){throw Error('Default view touched IndexedDB');}});
  Object.defineProperty(context,'localStorage',{get(){throw Error('Default view touched localStorage');}});
  Object.defineProperty(context,'sessionStorage',{get(){throw Error('Default view touched sessionStorage');}});
- const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest};})();');
+ const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={state,connect,signIn,navigate,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite};})();');
  vm.runInContext(script,context);
  return {context,ui:context.contract,root,video,requests,events,item,pending};
 }
@@ -193,4 +196,120 @@ test('legacy compatibility requires its complete version and rejects secret-rout
  for(const raw of ['https://evil.test/Bluefin/TV/v1/media/'+secret+'/0','/Bluefin/TV/v1/media/'+secret+'/0?api_key=x',
  '/Bluefin/TV/v1/media/'+secret+'/%30','/Bluefin/TV/v1/media/'+secret+'/../0','/Bluefin/Web/v1/media/'+secret+'/0'])
   assert.throws(()=>t.ui.tvLeasePath(raw,'media',secret));
+});
+
+function findElement(root,predicate) {
+ if(predicate(root))return root;
+ for(const child of root.children||[]){const found=findElement(child,predicate);if(found)return found;}
+ return null;
+}
+test('QR capability failure offers optional site guidance before sending an invitation',async()=>{
+ const code='MC1-EXAMPLE',t=setup({launchCode:code,meshFailure:true});
+ assert.equal(t.requests.length,0);assert.equal(t.ui.state.sheet,'invite');
+ assert.equal(t.ui.state.capability,null);
+ await assert.rejects(t.ui.beginMesh(code,'',false),/Blocked optional engine/);
+ t.ui.render();
+ const dialog=findElement(t.root,e=>e.tagName==='DIALOG');
+ assert(dialog);assert.equal(dialog.attributes['aria-modal'],'true');
+ assert.equal(dialog.attributes['aria-labelledby'],'capability-title');
+ assert.match(dialog.textContent,/cannot determine whether it is enabled/);
+ assert.match(dialog.textContent,/has not sent your invitation/);
+ assert.match(dialog.textContent,/reopen it after a reload/);
+ assert.match(dialog.textContent,/Page Menu/);assert.match(dialog.textContent,/Website Settings/);
+ assert.match(dialog.textContent,/reduces Lockdown Mode protection for that site/);
+ assert.match(dialog.textContent,/Media and account services remain on/);
+ assert(!dialog.textContent.includes('Lockdown Mode is enabled'));
+ const native=findElement(dialog,e=>e.tagName==='A'&&e.href?.startsWith('bluefin:'));
+ assert.equal(native.href,'bluefin://connect/'+code);
+ const guidance=findElement(dialog,e=>e.tagName==='A'&&e.href?.startsWith('https://support.apple.com/'));
+ assert.equal(guidance.href,'https://support.apple.com/en-us/105120');
+ assert.equal(guidance.rel,'noopener noreferrer');
+ assert.equal(t.requests.length,0);assert.equal(t.ui.state.session,null);
+ let prevented=false;dialog.listeners.cancel({preventDefault(){prevented=true;}});
+ assert(prevented);assert.equal(t.ui.state.capability,null);assert.equal(t.ui.state.code,code);
+ assert.equal(t.ui.state.sheet,'invite');assert.equal(t.requests.length,0);
+});
+test('capability retry keeps the same invitation and invokes Rust only after explicit retry',async()=>{
+ const code='MC1-EXAMPLE',attempts=[];let probes=0;
+ const t=setup({launchCode:code,engine:async()=>{
+  probes++;if(probes===1)throw browserFailure('Optional engine blocked');
+  return {webMeshBegin:async(...args)=>{attempts.push(args);return JSON.stringify({kind:'pairing',needsBeginRetry:true});}};
+ }});
+ assert.equal(probes,0);assert.equal(attempts.length,0);
+ await assert.rejects(t.ui.beginMesh(code,'Viewer',false),/Optional engine blocked/);
+ t.ui.render();assert.equal(attempts.length,0);
+ const retry=findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent==='Try again');
+ await retry.listeners.click();
+ assert.equal(probes,2);assert.deepEqual(attempts,[[code,'Viewer',false]]);
+ assert.equal(t.ui.state.capability,null);assert.equal(t.ui.state.pairing.needsBeginRetry,true);
+ assert.equal(t.requests.length,0);
+});
+test('an invitation or account rejection after Rust starts does not suggest a browser exception',async()=>{
+ const t=setup({engine:async()=>({webMeshBegin:async()=>{throw Error('Invitation was already used');}})});
+ await assert.rejects(t.ui.beginMesh('MC1-EXAMPLE','',false),/Invitation was already used/);
+ assert.equal(t.ui.state.capability,null);assert.equal(t.requests.length,0);
+});
+test('leaving the capability sheet for HTTPS sign-in does not redeem the invitation',async()=>{
+ const t=setup({launchCode:'MC1-EXAMPLE',meshFailure:true});
+ await assert.rejects(t.ui.beginMesh('MC1-EXAMPLE','',false),/Blocked optional engine/);
+ t.ui.render();const choice=findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent==='Use HTTPS sign-in');
+ choice.listeners.click();
+ assert.equal(t.ui.state.capability,null);assert.equal(t.ui.state.sheet,null);
+ assert.equal(t.ui.state.phase,'connect');assert.equal(t.ui.state.session,null);
+ assert.equal(t.requests.length,0);
+});
+test('blocked mesh media preserves its session and warns that claimed temporary keys cannot survive reload',async()=>{
+ const t=setup(),session={handle:'bluefin-mesh-v1:'+'b'.repeat(64),user:'11111111111141118111111111111111',name:'Viewer'};
+ t.ui.state.session=session;t.ui.state.mode='mesh';t.ui.state.phase='library';
+ t.context.BluefinRuntime.mediaWorker=async()=>{throw browserFailure('Media worker unavailable');};
+ await assert.rejects(t.ui.play(t.item),/Media worker unavailable/);
+ t.ui.render();
+ assert.equal(t.ui.state.session,session);assert.equal(t.ui.state.mode,'mesh');
+ assert.equal(t.ui.state.capability.beforeBegin,false);
+ const dialog=findElement(t.root,e=>e.tagName==='DIALOG');
+ assert.match(dialog.textContent,/Encrypted playback is unavailable/);
+ assert.match(dialog.textContent,/original QR cannot restore that key/);
+ assert(!dialog.textContent.includes('has not sent your invitation'));
+ assert.equal(t.requests.length,0);
+});
+test('account invitation creation supplies its explicit Login intent and renders the returned QR',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ try {
+  t.ui.state.sheet='connections';await t.ui.issueInvite();t.ui.render();
+  const request=t.requests.find(r=>new URL(r.url).pathname==='/Bluefin/Accounts/Mesh/Invite');
+  assert(request);assert.equal(request.options.method,'POST');
+  assert.deepEqual(JSON.parse(request.options.body),{intent:'login',lifetimeSeconds:600});
+  assert.equal(t.ui.state.invitation.code,'MC1-INVITATION');
+  assert(findElement(t.root,e=>e.tagName==='IMG'&&e.alt==='One-use Bluefin device invitation'));
+  assert(!t.root.textContent.includes('synthetic-private-bearer'));
+ } finally {await t.ui.signOut();}
+});
+function journalContext() {
+ const context=vm.createContext({crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,ArrayBuffer,URL,
+  location:new URL('https://bluefin.test/web/bluefin/'),isSecureContext:true,navigator:{},
+  document:{addEventListener(){}},addEventListener(){},dispatchEvent(){},CustomEvent:class{},
+  setTimeout,clearTimeout});
+ vm.runInContext(source('mesh-platform.js').replace(/\bexport /g,'')+
+  '\nglobalThis.journal={loadMeshVault,selectMeshStorage,meshRemembered};',context);
+ return context;
+}
+test('missing and denied protected storage stay optional and report the same actionable error',async()=>{
+ for(const kind of ['missing','getter','open']){
+  const context=journalContext();
+  if(kind==='getter')Object.defineProperty(context,'indexedDB',{get(){throw Error('SecurityError');}});
+  if(kind==='open')context.indexedDB={open(){throw Error('SecurityError');}};
+  const j=context.journal;
+  assert.deepEqual(JSON.parse(await j.loadMeshVault()),{revision:0,value:null});
+  await assert.rejects(j.selectMeshStorage(true),/Protected connection storage unavailable.*temporary connection/);
+  assert.equal(j.meshRemembered(),false);
+  assert.deepEqual(JSON.parse(await j.loadMeshVault()),{revision:0,value:null});
+ }
+});
+test('a failed protected storage open can be retried after the user permits access',async()=>{
+ const context=journalContext(),j=context.journal;let opens=0;
+ context.indexedDB={open(){opens++;throw Error('SecurityError');}};
+ await assert.rejects(j.selectMeshStorage(true),/Protected connection storage unavailable/);
+ context.indexedDB={open(){opens++;const request={result:{close(){}}};setTimeout(()=>request.onsuccess(),0);return request;}};
+ await j.selectMeshStorage(true);
+ assert.equal(opens,2);assert.equal(j.meshRemembered(),true);
 });
