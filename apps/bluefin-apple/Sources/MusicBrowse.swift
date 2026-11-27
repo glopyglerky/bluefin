@@ -23,8 +23,10 @@ struct MusicHubView: View {
             }
             .pickerStyle(.segmented).frame(maxWidth: 520)
             .padding(.horizontal, 20).padding(.vertical, 10)
-            .frame(maxWidth: .infinity).background(BluefinStyle.background)
+            .frame(maxWidth: .infinity).background(BluefinStyle.background, ignoresSafeAreaEdges: [])
         }
+        .navigationTitle(destination == .home ? "Music" : destination.rawValue)
+        .modifier(MusicNavigationTitle(large: true))
         .onChange(of: store.accountContext) { _ in destination = .home }
     }
 }

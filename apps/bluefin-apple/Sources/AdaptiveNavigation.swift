@@ -240,7 +240,10 @@ private struct BluefinHomeControl: ViewModifier {
 extension View {
     @ViewBuilder func bluefinNavigationChrome() -> some View {
         #if os(iOS)
-        if #available(iOS 16, *) {
+        if #available(iOS 26, *) {
+            // Let native scroll-edge chrome place the large title and glass controls.
+            self
+        } else if #available(iOS 16, *) {
             self.toolbarBackground(BluefinStyle.background, for: .navigationBar)
                 .toolbarBackground(.visible, for: .navigationBar)
         } else { self }

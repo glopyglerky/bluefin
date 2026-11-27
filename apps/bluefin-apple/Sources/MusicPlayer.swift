@@ -430,8 +430,12 @@ struct MusicPlayer: View {
                 #else
                 ProgressView(value: min(duration, playback.positionSeconds), total: duration).tint(BluefinStyle.accent)
                 HStack {
-                    Button("Back 15 seconds") { playback.seek(seconds: max(0, playback.positionSeconds - 15)) }
-                    Button("Forward 15 seconds") { playback.seek(seconds: min(duration, playback.positionSeconds + 15)) }
+                    Button { playback.seek(seconds: max(0, playback.positionSeconds - 15)) } label: {
+                        Image(systemName: "gobackward.15").frame(minWidth: 44, minHeight: 44)
+                    }.accessibilityLabel("Back 15 seconds")
+                    Button { playback.seek(seconds: min(duration, playback.positionSeconds + 15)) } label: {
+                        Image(systemName: "goforward.15").frame(minWidth: 44, minHeight: 44)
+                    }.accessibilityLabel("Forward 15 seconds")
                 }
                 #endif
                 HStack { Text(time(playback.positionSeconds)); Spacer(); Text("−" + time(max(0, duration - playback.positionSeconds))) }.font(.caption.monospacedDigit()).foregroundStyle(.secondary)
