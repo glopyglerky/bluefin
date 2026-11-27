@@ -1178,3 +1178,15 @@ test('collections expose a bounded scroll region without page buttons',async()=>
  const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);await t.ui.navigate('Movies');t.ui.render();
  assert(findElement(t.root,e=>e.className.includes('virtual-list')));assert(!t.root.textContent.includes('Next page'));assert(!t.root.textContent.includes('Previous page'));
 });
+
+test('mesh browsing serializes each sort/filter/range value for the Rust String-pair contract',async()=>{
+ const requests=[],movie={Id:'66666666666646668666666666666666',Type:'Movie',Name:'Mesh movie'};
+ const engine=async()=>({webMeshRequest:async(handle,method,path,serialized)=>{
+  const query=JSON.parse(serialized);assert(query.every(pair=>pair.length===2&&pair.every(value=>typeof value==='string')));requests.push(new Map(query));
+  return JSON.stringify({Items:[movie],TotalRecordCount:120});
+ }});
+ const t=setup({engine});t.ui.state.mode='mesh';t.ui.state.phase='library';t.ui.state.session={user:'11111111111141118111111111111111',handle:'bluefin-mesh-v1:synthetic'};
+ await t.ui.startSearch('ocean',{scope:'library',sort:'titleDesc',favorite:true,played:'false',year:'2026'});await t.ui.loadMoreSearch('library');
+ assert.equal(requests.length,2);for(const q of requests){assert.equal(q.get('SearchOrder'),'SortBy');assert.equal(q.get('SortBy'),'SortName');assert.equal(q.get('SortOrder'),'Descending');assert.equal(q.get('IsFavorite'),'true');assert.equal(q.get('IsPlayed'),'false');assert.equal(q.get('Years'),'2026');}
+ assert.equal(requests[0].get('StartIndex'),'0');assert.equal(requests[1].get('StartIndex'),'1');
+});

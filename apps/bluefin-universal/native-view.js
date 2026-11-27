@@ -217,7 +217,7 @@ async function api(path,method='GET',body,query=[],signal){
  if(mode==='mesh'){
   if(!session?.handle)throw Error('Resume the encrypted device connection.');
   const engine=await runtime().engine();assertLive(epoch,session);
-  value=JSON.parse(await engine.webMeshRequest(session.handle,method,path,JSON.stringify(query),body===undefined?undefined:JSON.stringify(body)));
+  value=JSON.parse(await engine.webMeshRequest(session.handle,method,path,JSON.stringify(query.map(([key,value])=>[key,String(value)])),body===undefined?undefined:JSON.stringify(body)));
  }else value=await http(path,method,body,query,session,false,false,base,signal);
  assertLive(epoch,session);if(signal?.aborted)throw aborted();return value;
 }
@@ -530,7 +530,7 @@ function virtualList(model,{row=poster,kind='posters',local=false,wide=0,label='
 }
 function safeBrowsePage(value){
  const source=Array.isArray(value)?value:value.Items||[];
- return {...(Array.isArray(value)?{}:value),Items:source.map(item=>uuid(item?.Id)?item:null)};
+ return {...(Array.isArray(value)?{}:value),Items:source.map(item=>uuid(item?.Id)?{...item,Name:String(item.Name||'Untitled').slice(0,4096),SeriesName:typeof item.SeriesName==='string'?item.SeriesName.slice(0,4096):undefined,Overview:String(item.Overview||'').slice(0,65536)}:null)};
 }
 function rememberBrowsePosition(){
  const route=state.route;route.savedScrollY=globalThis.scrollY||0;
@@ -1026,7 +1026,7 @@ async function loadLiveGuide(route,get,current,signal,user){
   const programs=[],ids=channels.map(channel=>id(channel.Id)).join(',');
   let offset=0,total=1;
   while(offset<total&&offset<2048){
-   const result=await get('LiveTv/Programs',[['UserId',user],['ChannelIds',ids],['MinEndDate',new Date(beginning).toISOString()],['MaxStartDate',new Date(end).toISOString()],['StartIndex',offset],['Limit',512]]);
+   const result=await get('LiveTv/Programs',[['UserId',user],['ChannelIds',ids],['MinEndDate',new Date(beginning).toISOString()],['MaxStartDate',new Date(end).toISOString()],['StartIndex',offset],['Limit',200]]);
    current();const batch=items(result);programs.push(...batch);offset+=(result.Items||[]).length;
    total=Number(result.TotalRecordCount)||offset;if(!batch.length)break;
   }
