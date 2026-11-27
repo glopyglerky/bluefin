@@ -229,6 +229,7 @@ async fn boot() -> Harness {
     library.is_folder = true;
     let mut movie = movie_item(movie_id, "Big Buck Bunny", &media_path);
     movie.top_parent_id = Some(ferrofin_db::store::guid_to_db(library_id));
+    movie.run_time_ticks = Some(600_000_000);
     // The second item has no on-disk path; it still shows up in `/Items`.
     let mut second = movie_item(second_id, "Sintel", &media_path);
     second.top_parent_id = Some(ferrofin_db::store::guid_to_db(library_id));
@@ -940,4 +941,305 @@ async fn the_session_socket_honours_legacy_authorization() {
         Some(403),
         "a socket without credentials is refused whatever the flag says"
     );
+}
+
+/// BDP-064 / SYSPLAN-027: production-router admission and independent media
+/// authority for two accounts. The synthetic bytes exercise direct HTTP ranges,
+/// not a browser decoder; this is not browser playback acceptance.
+#[tokio::test]
+async fn two_accounts_syncplay_requires_admission_and_current_media_visibility() {
+    use ferrofin_model::sync_play::{CurrentRoomPlayback, GroupInfoDto, GroupStateType};
+    use ferrofin_model::users::{SyncPlayUserAccessType, UserPolicy};
+
+    async fn request(
+        router: &axum::Router,
+        method: &str,
+        uri: &str,
+        auth: Option<&str>,
+        body: Option<serde_json::Value>,
+    ) -> axum::response::Response {
+        let mut builder = Request::builder().method(method).uri(uri);
+        if let Some(auth) = auth {
+            builder = builder.header(header::AUTHORIZATION, auth);
+        }
+        let body = match body {
+            Some(value) => {
+                builder = builder.header(header::CONTENT_TYPE, "application/json");
+                Body::from(value.to_string())
+            }
+            None => Body::empty(),
+        };
+        router
+            .clone()
+            .oneshot(builder.body(body).unwrap())
+            .await
+            .unwrap()
+    }
+    async fn current(router: &axum::Router, auth: &str) -> Option<CurrentRoomPlayback> {
+        let response = request(router, "GET", "/Bluefin/SyncPlay/Current", Some(auth), None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+        serde_json::from_slice(&body_bytes(response).await).expect("typed current room")
+    }
+    async fn command(
+        router: &axum::Router,
+        auth: &str,
+        verb: &str,
+        body: Option<serde_json::Value>,
+    ) {
+        let response = request(
+            router,
+            "POST",
+            &format!("/SyncPlay/{verb}"),
+            Some(auth),
+            body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT, "{verb}");
+    }
+    async fn range(router: &axum::Router, auth: &str, item: Uuid) -> axum::response::Response {
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/Videos/{item}/stream?Static=true"))
+                    .header(header::AUTHORIZATION, auth)
+                    .header(header::RANGE, "bytes=0-3")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+    fn policy(visible: bool) -> UserPolicy {
+        UserPolicy {
+            is_administrator: false,
+            enable_all_folders: visible,
+            enable_all_devices: true,
+            enable_media_playback: true,
+            enable_remote_access: true,
+            sync_play_access: SyncPlayUserAccessType::CreateAndJoinGroups,
+            ..UserPolicy::default()
+        }
+    }
+
+    let harness = boot().await;
+    let router = ferrofin_api::create_router(harness.wired.state.clone());
+    let mut accounts = Vec::new();
+    let mut sessions = Vec::new();
+    let mut tokens = Vec::new();
+    for (name, device) in [
+        ("room-alice", "room-device-a"),
+        ("room-bob", "room-device-b"),
+    ] {
+        let user = harness
+            .wired
+            .state
+            .users
+            .create_user(name)
+            .await
+            .expect("create independent user");
+        let id = Uuid::parse_str(&user.id).expect("user UUID");
+        harness
+            .wired
+            .state
+            .users
+            .change_password(id, "synthetic-room-password")
+            .await
+            .unwrap();
+        harness
+            .wired
+            .state
+            .users
+            .update_policy(id, &policy(true))
+            .await
+            .unwrap();
+        let identification = format!(
+            r#"MediaBrowser Client="First Light", Device="Synthetic Rig", DeviceId="{device}", Version="1.0.0""#
+        );
+        let response = request(
+            &router,
+            "POST",
+            "/Users/AuthenticateByName",
+            Some(&identification),
+            Some(serde_json::json!({"Username": name, "Pw": "synthetic-room-password"})),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let login = body_json(response).await;
+        assert_eq!(
+            Uuid::parse_str(login["User"]["Id"].as_str().unwrap()).unwrap(),
+            id
+        );
+        assert_eq!(login["SessionInfo"]["DeviceId"], device);
+        let session = login["SessionInfo"]["Id"]
+            .as_str()
+            .expect("session id")
+            .to_owned();
+        assert!(!session.is_empty());
+        sessions.push(session);
+        let token = login["AccessToken"]
+            .as_str()
+            .expect("client token")
+            .to_owned();
+        assert!(!token.is_empty());
+        let auth = format!("{identification}, Token=\"{token}\"");
+        step_users_me(&router, &auth, login["User"]["Id"].as_str().unwrap()).await;
+        tokens.push(token);
+        accounts.push((id, auth));
+    }
+    assert_ne!(accounts[0].0, accounts[1].0);
+    assert_ne!(sessions[0], sessions[1]);
+    assert_ne!(tokens[0], tokens[1]);
+    let alice = &accounts[0].1;
+    let bob = &accounts[1].1;
+    for auth in [None, Some("MediaBrowser Token=\"invalid-room-token\"")] {
+        assert_eq!(
+            request(&router, "GET", "/Bluefin/SyncPlay/Current", auth, None)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    assert!(current(&router, alice).await.is_none());
+    assert!(current(&router, bob).await.is_none());
+    let response = request(
+        &router,
+        "POST",
+        "/SyncPlay/New",
+        Some(alice),
+        Some(serde_json::json!({"GroupName": "Synthetic room"})),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let group: GroupInfoDto = serde_json::from_slice(&body_bytes(response).await).unwrap();
+    // Duplicate media IDs intentionally distinguish the occurrence from the item.
+    command(
+        &router,
+        alice,
+        "SetNewQueue",
+        Some(serde_json::json!({
+            "PlayingQueue": [harness.movie_id, harness.movie_id],
+            "PlayingItemPosition": 1, "StartPositionTicks": 0
+        })),
+    )
+    .await;
+    assert!(
+        current(&router, bob).await.is_none(),
+        "room existence does not admit Bob"
+    );
+    let expected = current(&router, alice).await.unwrap().item.unwrap();
+    assert_eq!(expected.item_id, harness.movie_id);
+    assert!(!expected.playlist_item_id.is_nil());
+    command(
+        &router,
+        bob,
+        "Join",
+        Some(serde_json::json!({"GroupId": group.group_id})),
+    )
+    .await;
+    for auth in [alice, bob] {
+        let room = current(&router, auth).await.expect("actually admitted");
+        assert_eq!(room.group_id, group.group_id);
+        assert_eq!(room.item, Some(expected), "same exact occurrence");
+        let info = request(
+            &router,
+            "GET",
+            &format!("/Items/{}/PlaybackInfo", expected.item_id),
+            Some(auth),
+            None,
+        )
+        .await;
+        assert_eq!(info.status(), StatusCode::OK);
+        assert!(
+            !body_json(info).await["MediaSources"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let bytes = range(&router, auth, expected.item_id).await;
+        assert_eq!(bytes.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(bytes.headers()[header::CONTENT_RANGE], "bytes 0-3/4096");
+        assert_eq!(body_bytes(bytes).await, vec![0xAB; 4]);
+        command(
+            &router,
+            auth,
+            "Ready",
+            Some(serde_json::json!({
+                "When": "2026-11-27T00:00:00Z", "PositionTicks": 0,
+                "IsPlaying": false, "PlaylistItemId": expected.playlist_item_id
+            })),
+        )
+        .await;
+    }
+    for auth in [alice, bob] {
+        assert_eq!(
+            current(&router, auth).await.unwrap().state,
+            GroupStateType::Playing
+        );
+    }
+    command(&router, bob, "Pause", None).await;
+    for auth in [alice, bob] {
+        assert_eq!(
+            current(&router, auth).await.unwrap().state,
+            GroupStateType::Paused
+        );
+    }
+    command(&router, alice, "Unpause", None).await;
+    for auth in [alice, bob] {
+        assert_eq!(
+            current(&router, auth).await.unwrap().state,
+            GroupStateType::Playing
+        );
+    }
+    command(&router, bob, "Pause", None).await;
+    command(
+        &router,
+        alice,
+        "Seek",
+        Some(serde_json::json!({"PositionTicks": 1_000_000})),
+    )
+    .await;
+    for auth in [alice, bob] {
+        let room = current(&router, auth).await.unwrap();
+        assert_eq!(room.item, Some(expected));
+        assert_eq!(room.position_ticks, 1_000_000);
+    }
+    harness
+        .wired
+        .state
+        .users
+        .update_policy(accounts[1].0, &policy(false))
+        .await
+        .unwrap();
+    // Credentials remain valid: denial must be visibility, not broken auth.
+    assert_eq!(
+        users_me_status(&router, &[("authorization", bob.as_str())], None).await,
+        StatusCode::OK
+    );
+    assert!(current(&router, bob).await.is_none());
+    let hidden = request(
+        &router,
+        "GET",
+        &format!("/Items/{}/PlaybackInfo", expected.item_id),
+        Some(bob),
+        None,
+    )
+    .await;
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+    let hidden = range(&router, bob, expected.item_id).await;
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+    assert_ne!(body_bytes(hidden).await, vec![0xAB; 4]);
+    assert_eq!(current(&router, alice).await.unwrap().item, Some(expected));
+    assert_eq!(
+        range(&router, alice, expected.item_id).await.status(),
+        StatusCode::PARTIAL_CONTENT
+    );
+    command(&router, bob, "Leave", None).await;
+    assert!(current(&router, bob).await.is_none());
+    command(&router, alice, "Leave", None).await;
+    assert!(current(&router, alice).await.is_none());
 }
