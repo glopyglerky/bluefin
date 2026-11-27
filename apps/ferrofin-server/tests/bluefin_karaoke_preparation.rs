@@ -300,7 +300,10 @@ impl Fixture {
         assert_eq!(status, StatusCode::OK, "{value}");
         value
     }
-    async fn wait(&self, id: Uuid, token: &str) -> Value {
+    async fn wait(&self, id: Uuid, token: &str, phase: &str) -> Value {
+        let started = std::time::Instant::now();
+        let mut last_status = Value::Null;
+        eprintln!("Sing qualification: waiting for {phase}");
         for _ in 0..600 {
             let (status, value) = call(
                 &self.app,
@@ -315,11 +318,19 @@ impl Fixture {
                 value["state"].as_str(),
                 Some("queued" | "preparing" | "cancelling")
             ) {
+                eprintln!(
+                    "Sing qualification: {phase} finished after {:?}: {value}",
+                    started.elapsed()
+                );
                 return value;
             }
+            last_status = value;
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        panic!("bounded fixture preparation did not join");
+        panic!(
+            "bounded fixture preparation did not join during {phase} after {:?}; last status: {last_status}",
+            started.elapsed()
+        );
     }
     async fn policy(&self, policy: UserPolicy) {
         // An independent writer bypasses normal manager cache invalidation and
@@ -526,7 +537,9 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
     );
     let stem_only = Uuid::new_v4();
     f.post(stem_only, &f.token).await;
-    let status = f.wait(stem_only, &f.token).await;
+    let status = f
+        .wait(stem_only, &f.token, "ordinary lyrics with stems")
+        .await;
     assert_eq!(status["state"], "ready", "{status}");
     let manifest_path = format!("/Bluefin/Karaoke/{}?MediaSourceId={}", f.item, f.source);
     let (status, untimed) = call(&f.app, "GET", &manifest_path, &f.token, Value::Null).await;
@@ -589,7 +602,11 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
     std::fs::write(&timing_path, serde_json::to_vec(&wrong).unwrap()).unwrap();
     let mismatch = Uuid::new_v4();
     f.post(mismatch, &f.token).await;
-    assert_eq!(f.wait(mismatch, &f.token).await["reason"], "timingRequired");
+    assert_eq!(
+        f.wait(mismatch, &f.token, "mismatched trusted timing")
+            .await["reason"],
+        "timingRequired"
+    );
     std::fs::write(&timing_path, &timing_before).unwrap();
     sqlx::query(r#"UPDATE "BaseItems" SET "RunTimeTicks"=3010000000 WHERE "Id"=?1"#)
         .bind(guid_to_db(f.item))
@@ -599,7 +616,7 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
     let long = Uuid::new_v4();
     f.post(long, &f.token).await;
     assert_eq!(
-        f.wait(long, &f.token).await["reason"],
+        f.wait(long, &f.token, "unsupported duration").await["reason"],
         "durationUnsupported"
     );
     // Rounded catalogue duration differs from the actual two-second decoded PCM.
@@ -635,7 +652,7 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
         .0,
         StatusCode::NOT_FOUND
     );
-    let result = f.wait(ready, &f.token).await;
+    let result = f.wait(ready, &f.token, "trusted word timing").await;
     assert_eq!(result["state"], "ready", "{result}");
     assert_eq!(result["mediaSourceId"], f.source);
     assert_eq!(service.testing_resource_counts(), (3, 1));
@@ -759,7 +776,10 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
     assert_eq!(other_before["processing"], "suppliedStems");
     assert_ne!(other_before["revision"], manifest["revision"]);
     f.post(ready, &f.other).await;
-    assert_eq!(f.wait(ready, &f.other).await["state"], "ready");
+    assert_eq!(
+        f.wait(ready, &f.other, "second account preparation").await["state"],
+        "ready"
+    );
     let (status, other_after) = call(&f.app, "GET", &manifest_path, &f.other, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{other_after}");
     assert_eq!(other_after["processing"], "modelSeparatedStems");
@@ -891,7 +911,10 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
         )
         .await;
         assert_eq!(stopping["state"], "cancelling");
-        assert_eq!(f.wait(id, &f.token).await["state"], "cancelled");
+        assert_eq!(
+            f.wait(id, &f.token, "queued cancellation").await["state"],
+            "cancelled"
+        );
         assert_eq!(f.post(id, &f.token).await["state"], "cancelled");
     }
     let (_, stopping) = call(
@@ -903,7 +926,10 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
     )
     .await;
     assert_eq!(stopping["state"], "cancelling");
-    assert_eq!(f.wait(cancelled, &f.token).await["state"], "cancelled");
+    assert_eq!(
+        f.wait(cancelled, &f.token, "active cancellation").await["state"],
+        "cancelled"
+    );
     assert_eq!(service.testing_resource_counts(), (3, 1));
     assert_eq!(f.post(cancelled, &f.token).await["state"], "cancelled");
     assert_eq!(
@@ -924,7 +950,10 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
     .await;
     f.joined(&service).await;
     f.policy(permitted()).await;
-    assert_ne!(f.wait(revoked, &f.token).await["state"], "ready");
+    assert_ne!(
+        f.wait(revoked, &f.token, "policy revocation").await["state"],
+        "ready"
+    );
     assert_eq!(
         std::fs::read_dir(settings.cache_root.join("cache"))
             .unwrap()
@@ -994,7 +1023,7 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
     );
     let quota = Uuid::new_v4();
     f.post(quota, &f.other).await;
-    let result = f.wait(quota, &f.other).await;
+    let result = f.wait(quota, &f.other, "restart quota rejection").await;
     assert_eq!(result["reason"], "busy", "{result}");
     assert_eq!(restarted.testing_resource_counts(), (3, 1));
     f.close().await;
