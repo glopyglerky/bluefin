@@ -244,6 +244,8 @@ button.lyric-line{cursor:pointer}
 .public-title .artwork { margin-bottom: 5px; border-radius: 9px; }
 .public-title:hover strong { text-decoration: underline; }
 .public-title small { color: var(--muted); }
+.provider-actions { display: grid; gap: 6px; }
+.provider-link { display: block; color: var(--accent); }
 @media (min-width: 760px) {
   .rail-search { display: contents; }
   .tabbar .rail-search button { width: 100%; }
