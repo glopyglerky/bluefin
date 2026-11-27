@@ -53,12 +53,63 @@ fn read_catalog_response(url: &str, params: &[(&str, &str)], limit: u64, seconds
     serde_json::from_slice(&bytes).map_err(|_| err("Invalid public catalog response"))
 }
 
-/// Paired accounts use their instance's authenticated transport, including mesh.
-/// Unpaired browsing may use an independently configured public HTTP origin.
-pub(super) fn regional_access(input: &Value, offers: bool) -> Result<Value> {
+/// Malformed account metadata must not silently become anonymous catalog access.
+pub(super) fn paired_account(input: &Value) -> Result<bool> {
     if input.get("mesh").is_some_and(|mesh| !mesh.is_null() && !mesh.is_object()) {
         return Err(err("Invalid mesh account transport"));
     }
+    Ok(input["mesh"].is_object() || input.get("token").is_some())
+}
+
+/// Structured access preserves every asserted identity through the paired instance.
+pub(super) fn regional_lookup(input: &Value, offers: bool) -> Result<Value> {
+    if !paired_account(input)? {
+        return Err(err("Paired catalog session required"));
+    }
+    let request = super::public_access::request(input)?;
+    let api = super::Api::new(input)?;
+    if offers {
+        let body = serde_json::to_value(&request).map_err(|_| err("Invalid catalog request"))?;
+        let response = api.post(&["Bluefin", "Catalog", "Offers"], body)?;
+        let decoded: bluefin_catalog::OfferResponse = serde_json::from_value(response.clone())
+            .map_err(|_| err("Invalid regional catalog response"))?;
+        if decoded.schema_version != 1 || decoded.identity != request.identity
+            || decoded.country != request.country
+            || decoded.offers.iter().any(|offer| offer.identity != request.identity)
+        {
+            return Err(err("Unexpected regional catalog identity"));
+        }
+        Ok(response)
+    } else {
+        let mut params = Vec::new();
+        if let Some(country) = &request.country {
+            params.push(("country", country.as_str().to_owned()));
+        }
+        // Providers accepts one optional exact context. Multiple assertions stay
+        // intact in Offers; the picker uses a generic registry in that case.
+        if request.identity.ids.len() == 1 {
+            let kind = serde_json::to_value(request.identity.kind)
+                .map_err(|_| err("Invalid catalog identity"))?;
+            params.extend([
+                ("kind", kind.as_str().ok_or_else(|| err("Invalid catalog identity"))?.to_owned()),
+                ("source", request.identity.ids[0].source.clone()),
+                ("id", request.identity.ids[0].id.clone()),
+            ]);
+        }
+        let response = api.get(&["Bluefin", "Catalog", "Providers"], params)?;
+        let decoded: bluefin_catalog::RegistryResponse = serde_json::from_value(response.clone())
+            .map_err(|_| err("Invalid regional catalog registry"))?;
+        if decoded.schema_version != 1 {
+            return Err(err("Unsupported regional catalog response"));
+        }
+        Ok(response)
+    }
+}
+
+/// Paired accounts use their instance's authenticated transport, including mesh.
+/// Unpaired browsing may use an independently configured public HTTP origin.
+pub(super) fn regional_access(input: &Value, offers: bool) -> Result<Value> {
+    let paired = paired_account(input)?;
     let mut params = Vec::new();
     let region;
     if let Some(country) = input["country"].as_str() {
@@ -83,7 +134,7 @@ pub(super) fn regional_access(input: &Value, offers: bool) -> Result<Value> {
         Some((kind, source, id))
     } else { None };
     let resource = if offers { "Offers" } else { "Providers" };
-    let response = if input["mesh"].is_object() || input.get("token").is_some() {
+    let response = if paired {
         // A malformed or retired session fails through the existing account
         // transport. It must never fall back to an anonymous HTTP request.
         super::Api::new(input)?.get(
@@ -242,6 +293,7 @@ fn public_film_title(id: &str, entity: &Value, language: &str) -> Option<Value> 
         "description": description,
         "artworkFile": artwork_file,
         "links": direct_provider_links(claims, true),
+        "catalogIdentity": catalog_identity(claims,true,id),
         "imdbId": claim_values(claims, "P345", imdb_id).into_iter().next(),
         "sourceUrl": format!("https://www.wikidata.org/wiki/{id}")
     }))
@@ -353,6 +405,7 @@ pub(super) fn public_title_sources(input: &Value) -> Result<Value> {
     let mut links = Vec::new();
     let mut description = None;
     let mut credits = Vec::new();
+    let mut series_imdb = None;
     let entity = match kind {
         "movie" if wikidata_id(id) => Some(id.to_owned()),
         "series" if decimal(id, 1, 12) => {
@@ -367,13 +420,14 @@ pub(super) fn public_title_sources(input: &Value) -> Result<Value> {
                     .is_some_and(|value| value.to_string() == id)
             }) {
                 links.extend(tv["officialSite"].as_str().and_then(official_provider_site));
+                series_imdb = tv["externals"]["imdb"].as_str().filter(|id|imdb_id(id)).map(str::to_owned);
                 description = tv["summary"].as_str().map(strip_markup);
                 credits.extend(tv["_embedded"]["cast"].as_array().into_iter().flatten().take(20).filter_map(|credit| {
                     Some(json!({"name": credit["person"]["name"].as_str()?, "role": credit["character"]["name"].as_str().unwrap_or("Cast")}))
                 }));
             }
             find_wikidata_id("P8600", id).ok().flatten().or_else(|| {
-                let imdb = input["imdbId"].as_str().filter(|value| imdb_id(value))?;
+                let imdb = series_imdb.as_deref()?;
                 find_wikidata_id("P345", imdb).ok().flatten()
             })
         }
@@ -402,6 +456,10 @@ pub(super) fn public_title_sources(input: &Value) -> Result<Value> {
     if !claims.is_object() {
         return Err(err("Provider identities unavailable"));
     }
+    if kind == "series" && !claim_values(claims,"P8600",|id|decimal(id,1,12)).contains(&id)
+        && !series_imdb.as_deref().is_some_and(|imdb|claim_values(claims,"P345",imdb_id).contains(&imdb)) {
+        return Err(err("Catalog identity did not match the requested series"));
+    }
     links.extend(direct_provider_links(claims, kind == "movie"));
     let mut seen = HashSet::new();
     links.retain(|link| seen.insert(link["url"].as_str().unwrap_or_default().to_owned()));
@@ -410,11 +468,40 @@ pub(super) fn public_title_sources(input: &Value) -> Result<Value> {
             .as_str()
             .map(strip_markup)
     });
-    let tmdb = claim_values(claims, if kind == "movie" { "P4947" } else { "P4983" },
-        |id| decimal(id, 1, 12) && !id.starts_with('0')).into_iter().next();
     Ok(
-        json!({"links": links, "imdbIds": claim_values(claims, "P345", imdb_id), "tmdbId":tmdb, "description": description, "credits": credits}),
+        json!({"links": links, "imdbIds": claim_values(claims, "P345", imdb_id), "description": description, "credits": credits, "catalogIdentity": catalog_identity(claims,kind == "movie",&entity)}),
     )
+}
+
+
+fn catalog_identity(claims:&Value, movie:bool, wikidata:&str) -> Option<Value> {
+    let property=if movie {"P4947"} else {"P4983"};
+    let ids=claim_values(claims,property,|id|!id.starts_with('0') && decimal(id,1,12));
+    if ids.len()!=1 {return None}
+    Some(json!({"kind":if movie {"movie"} else {"series"},"ids":[
+        {"source":"tmdb","id":ids[0]},{"source":"wikidata","id":wikidata}]}))
+}
+
+/// Artist photography is admitted only with a matching MusicBrainz identity and Commons credit.
+pub(super) fn artist_artwork(mbid:&str, artist:&Value) -> Option<Value> {
+    if !uuid_id(mbid){return None}
+    let linked=artist["relations"].as_array().into_iter().flatten().find_map(|relation|{
+        if relation["type"]!="wikidata" || relation["direction"]!="forward"
+            || relation["ended"].as_bool()==Some(true){return None}
+        let value=relation["url"]["resource"].as_str()?;
+        let id=value.strip_prefix("https://www.wikidata.org/wiki/")?;
+        wikidata_id(id).then(||id.to_owned())
+    });
+    let id=linked.or_else(||find_wikidata_id("P434",mbid).ok().flatten())?;
+    let response=wikidata(&[("action","wbgetentities"),("ids",&id),
+        ("props","claims|descriptions"),("languages","en")]).ok()?;
+    let entity=&response["entities"][&id];
+    if !claim_values(&entity["claims"],"P434",uuid_id).iter()
+        .any(|value|value.eq_ignore_ascii_case(mbid)){return None}
+    let file=claim_values(&entity["claims"],"P18",commons_filename).into_iter().next();
+    let mut value=json!({"artworkFile":file,"description":entity["descriptions"]["en"]["value"]});
+    add_commons_artwork(std::slice::from_mut(&mut value));
+    Some(value)
 }
 
 fn find_wikidata_id(property: &str, value: &str) -> Result<Option<String>> {
@@ -734,6 +821,17 @@ fn public_tv_title(row: &Value) -> Option<Value> {
 mod public_catalog_tests {
     use super::*;
 
+
+    #[test]
+    fn typed_tmdb_identity_uses_one_exact_claim_and_never_guesses_between_candidates() {
+        let row=|value:&str|json!({"rank":"normal","mainsnak":{"snaktype":"value","datavalue":{"value":value}}});
+        let claims=json!({"P4947":[row("278")],"P4983":[row("1396")]});
+        assert_eq!(catalog_identity(&claims,true,"Q1").unwrap()["ids"][0]["id"],"278");
+        assert_eq!(catalog_identity(&claims,false,"Q1").unwrap()["kind"],"series");
+        let ambiguous=json!({"P4947":[row("278"),row("603")]});
+        assert!(catalog_identity(&ambiguous,true,"Q1").is_none());
+    }
+
     #[test]
     fn public_title_uses_the_provider_identity_and_rejects_unknown_artwork_origins() {
         let result = public_tv_title(&json!({"show": {"id": 47, "name": "A Stage",
@@ -832,6 +930,18 @@ mod public_catalog_tests {
                 assert!(count > 0 && request.len() + count <= 16_384);
                 request.extend_from_slice(&chunk[..count]);
             }
+            let header_end = request.windows(4).position(|window| window == b"\r\n\r\n").unwrap() + 4;
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let length = headers.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().unwrap())
+            }).unwrap_or(0);
+            assert!(header_end + length <= 16_384);
+            while request.len() < header_end + length {
+                let count = stream.read(&mut chunk).unwrap();
+                assert!(count > 0 && request.len() + count <= 16_384);
+                request.extend_from_slice(&chunk[..count]);
+            }
             let body = serde_json::to_vec(&response).unwrap();
             write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
             stream.write_all(&body).unwrap();
@@ -896,6 +1006,81 @@ mod public_catalog_tests {
                 "server":"not an HTTP origin", "token":"catalog-fixture-token", "mesh":mesh
             }), false);
             assert_eq!(result.unwrap_err(), "Invalid mesh account transport");
+        }
+    }
+
+    #[test]
+    fn paired_structured_offers_preserve_all_identity_assertions_and_unknown_country() {
+        let identity = json!({"kind":"movie","ids":[
+            {"source":"tmdb","id":"603"},{"source":"imdb","id":"tt0133093"}]});
+        let expected = json!({"schemaVersion":1,"identity":identity,
+            "country":null,"offers":[],"sources":[]});
+        let (server, request) = catalog_http_fixture(expected.clone());
+        let actual = super::super::public_access::offers(&json!({
+            "server":server,"allowLocalHttp":true,"token":"catalog-fixture-token",
+            "deviceId":"catalog-fixture","identity":identity
+        })).unwrap();
+        assert_eq!(actual, expected);
+        let request = request.join().unwrap();
+        let (headers, body) = request.split_once("\r\n\r\n").unwrap();
+        assert!(headers.starts_with("POST /Bluefin/Catalog/Offers HTTP/1.1"));
+        assert!(headers.to_ascii_lowercase().contains("token=\"catalog-fixture-token\""));
+        let body: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(body, json!({"identity":identity,"country":null}));
+    }
+
+    #[test]
+    fn paired_registry_uses_exact_single_context_or_an_explicit_generic_registry() {
+        for multiple in [false, true] {
+            let mut ids = vec![json!({"source":"tmdb","id":"603"})];
+            if multiple { ids.push(json!({"source":"imdb","id":"tt0133093"})); }
+            let (server, request) = catalog_http_fixture(json!({
+                "schemaVersion":1,"countries":[],"sources":[]}));
+            let result = super::super::public_access::countries(&json!({
+                "server":server,"allowLocalHttp":true,"token":"catalog-fixture-token",
+                "identity":{"kind":"movie","ids":ids},"country":"us"
+            })).unwrap();
+            assert_eq!(result["countries"], json!([]));
+            let request = request.join().unwrap();
+            let route = request.lines().next().unwrap();
+            assert!(route.starts_with("GET /Bluefin/Catalog/Providers?"));
+            assert!(route.contains("country=US"));
+            if multiple {
+                assert!(!route.contains("kind=") && !route.contains("source=") && !route.contains("id="));
+            } else {
+                for part in ["kind=movie", "source=tmdb", "id=603"] {
+                    assert!(route.contains(part), "{route}");
+                }
+            }
+            assert!(request.to_ascii_lowercase().contains("token=\"catalog-fixture-token\""));
+        }
+    }
+
+    #[test]
+    fn paired_structured_offers_reject_a_changed_identity_or_country() {
+        let identity = json!({"kind":"movie","ids":[{"source":"tmdb","id":"603"}]});
+        for wrong_country in [false, true] {
+            let returned = if wrong_country { identity.clone() }
+                else { json!({"kind":"movie","ids":[{"source":"tmdb","id":"278"}]}) };
+            let (server, request) = catalog_http_fixture(json!({
+                "schemaVersion":1,"identity":returned,
+                "country":if wrong_country {"GB"} else {"US"},"offers":[],"sources":[]}));
+            let result = super::super::public_access::offers(&json!({
+                "server":server,"allowLocalHttp":true,"token":"catalog-fixture-token",
+                "identity":identity,"country":"US"
+            }));
+            assert_eq!(result.unwrap_err(), "Unexpected regional catalog identity");
+            request.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn public_access_does_not_fall_back_from_malformed_account_metadata() {
+        for mesh in [json!("invalid"), json!([]), json!(0), json!(true)] {
+            let input = json!({"server":"not an HTTP origin","token":"catalog-fixture-token",
+                "mesh":mesh,"identity":{"kind":"movie","ids":[{"source":"tmdb","id":"603"}]}});
+            assert_eq!(super::super::public_access::offers(&input).unwrap_err(), "Invalid mesh account transport");
+            assert_eq!(super::super::public_access::countries(&input).unwrap_err(), "Invalid mesh account transport");
         }
     }
 

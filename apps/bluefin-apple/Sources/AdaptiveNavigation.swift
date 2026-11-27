@@ -315,7 +315,7 @@ struct TVWelcomeView: View {
                             if let connectedServer { signInOptions(connectedServer) }
                             else {
                                 Button { publicSearch = true } label: {
-                                    AccountActionLabel(title: "Search movies and shows")
+                                    AccountActionLabel(title: "Search media")
                                 }.accountButtonStyle().accessibilityIdentifier("publicTVSearch")
                                 Button { meshPairing = true } label: {
                                     AccountActionLabel(title: "Connect with QR or invitation")

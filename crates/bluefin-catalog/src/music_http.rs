@@ -50,6 +50,67 @@ impl MusicBrainzClient {
         Ok(Self { client })
     }
 
+
+    /// Searches one typed public music catalog page using MusicBrainz's shared IP budget.
+    /// The returned count and offset belong to the source; a page is not a complete catalog.
+    pub async fn search(
+        &self, kind: MediaKind, term: &str, offset: u64,
+    ) -> MusicBrainzDocument {
+        let (entity, field) = match kind {
+            MediaKind::Artist => ("artist", "artists"),
+            MediaKind::ReleaseGroup => ("release-group", "release-groups"),
+            MediaKind::Recording => ("recording", "recordings"),
+            _ => return MusicBrainzDocument::failure(SourceStatus::UnsupportedIdentity),
+        };
+        let term = term.trim();
+        if !(2..=160).contains(&term.chars().count()) || term.chars().any(char::is_control)
+            || offset > 100_000 {
+            return MusicBrainzDocument::failure(SourceStatus::InvalidResponse);
+        }
+        let Ok(mut url) = reqwest::Url::parse(&format!("https://musicbrainz.org/ws/2/{entity}")) else {
+            return MusicBrainzDocument::failure(SourceStatus::InvalidResponse);
+        };
+        url.query_pairs_mut().append_pair("query", &search_query(term)).append_pair("fmt","json")
+            .append_pair("limit","20").append_pair("offset",&offset.to_string());
+        let acquired = acquire(&self.client, provider_state(Provider::MusicBrainz),
+            url.as_str(), Provider::MusicBrainz, |body| {
+                if body[field].as_array().is_none() || body["count"].as_u64().is_none()
+                    || body["offset"].as_u64() != Some(offset) {
+                    Some(SourceStatus::InvalidResponse)
+                } else { None }
+            }).await;
+        MusicBrainzDocument::from(acquired)
+    }
+
+    /// Loads descriptive metadata and related entities for one exact MusicBrainz identity.
+    pub async fn metadata(&self, identity: &crate::CatalogIdentity) -> MusicBrainzDocument {
+        let Some((entity,id)) = musicbrainz_entity(identity) else {
+            return MusicBrainzDocument::failure(SourceStatus::UnsupportedIdentity);
+        };
+        let include = match identity.kind {
+            MediaKind::Artist => "url-rels+release-groups+genres",
+            MediaKind::ReleaseGroup => "artists+releases+url-rels+genres",
+            MediaKind::Release => "artists+recordings+release-groups+url-rels+genres",
+            MediaKind::Recording | MediaKind::MusicVideo => "artists+releases+isrcs+url-rels+genres",
+            _ => "url-rels+genres",
+        };
+        let Ok(mut url) = reqwest::Url::parse(&format!("https://musicbrainz.org/ws/2/{entity}/{id}")) else {
+            return MusicBrainzDocument::failure(SourceStatus::InvalidResponse);
+        };
+        url.query_pairs_mut().append_pair("inc",include).append_pair("fmt","json");
+        let acquired = acquire(&self.client, provider_state(Provider::MusicBrainz),
+            url.as_str(), Provider::MusicBrainz, |body| {
+                if !body["id"].as_str().is_some_and(|actual| actual.eq_ignore_ascii_case(&id)) {
+                    Some(SourceStatus::IdentityMismatch)
+                } else if identity.kind == MediaKind::MusicVideo && body["video"].as_bool()!=Some(true) {
+                    Some(SourceStatus::IdentityMismatch)
+                } else if body["name"].as_str().or_else(||body["title"].as_str()).is_none() {
+                    Some(SourceStatus::InvalidResponse)
+                } else { None }
+            }).await;
+        MusicBrainzDocument::from(acquired)
+    }
+
     /// Looks up real music access links and, when requested, exact regional purchase listings.
     ///
     /// MusicBrainz relationships stay region-unknown. The iTunes supplement requires an
@@ -219,6 +280,40 @@ impl MusicBrainzClient {
         }
         (response, apple_ids.into_iter().take(20).collect())
     }
+}
+
+
+/// A public upstream document with its real observation time and acquisition state.
+/// Stale cached metadata can be retained during an outage without relabelling it as current.
+#[derive(Clone, Debug)]
+pub struct MusicBrainzDocument {
+    pub body: Option<Value>,
+    pub observed_at: u64,
+    pub status: SourceStatus,
+}
+impl MusicBrainzDocument {
+    fn failure(status: SourceStatus) -> Self {
+        Self { body: None, observed_at: 0, status }
+    }
+}
+impl From<Acquisition> for MusicBrainzDocument {
+    fn from(value: Acquisition) -> Self {
+        Self { body: value.body, observed_at: value.observed_at, status: value.status }
+    }
+}
+
+
+fn search_query(term: &str) -> String {
+    // Treat a person's title/artist phrase as text, not MusicBrainz's Lucene operators.
+    let mut escaped = String::new();
+    for character in term.chars() {
+        if matches!(character, '+' | '-' | '&' | '|' | '!' | '(' | ')' | '{' | '}' |
+            '[' | ']' | '^' | '"' | '~' | '*' | '?' | ':' | '\\' | '/') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 #[derive(Clone, Copy)]
@@ -545,6 +640,14 @@ mod tests {
         assert!(second.body.is_none());
         assert_eq!(hits.load(Ordering::SeqCst),1);
         worker.join().expect("server");
+    }
+
+
+    #[test]
+    fn public_search_escapes_query_operators_but_keeps_artist_spelling() {
+        assert_eq!(search_query("AC/DC"), r"AC\/DC");
+        assert_eq!(search_query("Beyoncé"), "Beyoncé");
+        assert_eq!(search_query("Artist: title?"), r"Artist\: title\?");
     }
 
     #[test]

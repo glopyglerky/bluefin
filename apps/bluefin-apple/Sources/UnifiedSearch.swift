@@ -283,6 +283,11 @@ struct UnifiedSearchResults: View {
                         PublicTitleSearchSection(query: query, catalog: .film, library: current ? model.items : [])
                     }
                 }
+                if !store.preview && !filters.hasFacets && filters.scope.includesArtists {
+                    PublicMusicSearchSection(query: query, kind: "artist", library: current ? model.items : [])
+                    PublicMusicSearchSection(query: query, kind: "releaseGroup", library: current ? model.items : [])
+                    PublicMusicSearchSection(query: query, kind: "recording", library: current ? model.items : [])
+                }
                 if !query.isEmpty && !filters.hasFacets {
                     if filters.scope.includesCatalog { ServerDiscoverySection(query: query, scope: filters.scope) }
                     if filters.scope == .all || filters.scope == .music { ServerDiscoverySection(query: query, scope: .music) }
@@ -411,12 +416,15 @@ struct PublicTitleSearchView: View {
     var body: some View {
         BluefinNavigation {
             List {
-                TextField("Movie or TV show title", text: $query)
+                TextField("Movie, show, artist, album or song", text: $query)
                     .accessibilityIdentifier("publicCatalogQuery")
                 PublicTitleSearchSection(query: query, catalog: .television)
                 PublicTitleSearchSection(query: query, catalog: .film)
+                PublicMusicSearchSection(query: query, kind: "artist")
+                PublicMusicSearchSection(query: query, kind: "releaseGroup")
+                PublicMusicSearchSection(query: query, kind: "recording")
             }
-            .navigationTitle("Search movies and shows")
+            .navigationTitle("Search media")
             .toolbar { Button("Done") { dismiss() } }
         }
     }
@@ -522,9 +530,9 @@ private struct PublicTitleProviderChoices: View {
     struct Result: Decodable, Sendable {
         let links: [Destination]
         let imdbIds: [String]
-        let tmdbId: String?
         let description: String?
         let credits: [Credit]?
+        let catalogIdentity: PublicCatalogIdentity?
     }
     struct Credit: Decodable, Sendable, Hashable { let name: String; let role: String }
     struct ArtworkCredit: Decodable, Sendable { let author: String; let url: URL; let license: String; let licenseUrl: URL? }
@@ -596,10 +604,7 @@ private struct PublicTitleProviderChoices: View {
                     }
                 }
             }
-            if let reference = CatalogOfferReference.video(kind: kind, tmdb: result?.tmdbId,
-                                                            imdb: imdbId ?? result?.imdbIds.first) {
-                Section("Availability") { CatalogOfferPanel(reference: reference) }
-            }
+            if let identity = result?.catalogIdentity { PublicCatalogAccessSection(identity: identity) }
             Section("Catalog links") {
                 ForEach(destinations) { destination in
                     Link(destination.action, destination: destination.url)
@@ -636,298 +641,6 @@ private struct PublicTitleProviderChoices: View {
                 completed = request
             }
         }
-    }
-}
-
-struct CatalogOfferReference: Hashable, Sendable {
-    let kind: String
-    let source: String
-    let id: String
-
-    static func video(kind: String, tmdb: String?, imdb: String?) -> Self? {
-        guard kind == "movie" || kind == "series" else { return nil }
-        if let tmdb, tmdb.range(of: #"^[1-9][0-9]{0,11}$"#, options: .regularExpression) != nil {
-            return Self(kind: kind, source: "tmdb", id: tmdb)
-        }
-        if let imdb, imdb.range(of: #"^tt[0-9]{7,12}$"#, options: .regularExpression) != nil {
-            return Self(kind: kind, source: "imdb", id: imdb)
-        }
-        return nil
-    }
-
-    init?(item: MediaItem) {
-        let ids = item.ProviderIds ?? [:]
-        func provider(_ key: String) -> String? {
-            ids.first { $0.key.caseInsensitiveCompare(key) == .orderedSame }?.value
-        }
-        switch item.Type {
-        case "Movie", "Series":
-            guard let video = Self.video(kind: item.Type == "Movie" ? "movie" : "series",
-                                         tmdb: provider("Tmdb"), imdb: provider("Imdb")) else { return nil }
-            self = video
-        case "MusicArtist", "MusicAlbum", "Audio":
-            let mapping: (String, String)
-            if item.Type == "MusicArtist" { mapping = ("artist", "MusicBrainzArtist") }
-            else if item.Type == "Audio" { mapping = ("recording", "MusicBrainzRecording") }
-            else if let group = provider("MusicBrainzReleaseGroup"), UUID(uuidString: group) != nil { mapping = ("releaseGroup", "MusicBrainzReleaseGroup") }
-            else { mapping = ("release", "MusicBrainzAlbum") }
-            guard let raw = provider(mapping.1), let uuid = UUID(uuidString: raw), uuid.uuidString != "00000000-0000-0000-0000-000000000000" else { return nil }
-            self = Self(kind: mapping.0, source: "musicbrainz", id: uuid.uuidString.lowercased())
-        default: return nil
-        }
-    }
-
-    private init(kind: String, source: String, id: String) {
-        self.kind = kind
-        self.source = source
-        self.id = id
-    }
-}
-
-struct CatalogOfferPanel: View {
-    private struct Country: Decodable, Sendable { let code: String; let name: String }
-    private struct Registry: Decodable, Sendable { let countries: [Country] }
-    private struct Response: Decodable, Sendable {
-        let offers: [Offer]
-        let sources: [Source]
-    }
-    private struct Source: Decodable, Sendable {
-        struct Attribution: Decodable, Sendable { let name: String; let url: URL }
-        let source: String
-        let attributions: [Attribution]
-        let scope: String
-        let status: String
-        var label: String {
-            switch status {
-            case "complete": return "Reported coverage"
-            case "partial": return "Partial coverage"
-            case "noOffers": return "No offers reported"
-            case "missingCredentials": return "Source not configured"
-            case "notFound": return "Title not found"
-            case "identityMismatch": return "Title could not be confirmed"
-            case "denied": return "Access denied"
-            case "invalidResponse": return "Invalid response"
-            case "rateLimited": return "Rate limited"
-            case "unsupportedCountry": return "Country unsupported"
-            case "unsupportedIdentity": return "Title type unsupported"
-            default: return "Unavailable"
-            }
-        }
-    }
-    private struct Offer: Decodable, Sendable, Identifiable {
-        struct Service: Decodable, Sendable { let name: String }
-        struct Destination: Decodable, Sendable { let kind: String; let url: URL }
-        struct Price: Decodable, Sendable { let amount: String?; let currency: String?; let formatted: String? }
-        struct Evidence: Decodable, Sendable {
-            let source: String
-            let observedAt: UInt64
-            let expiresAt: UInt64?
-            let regionVerified: Bool
-        }
-        let id: String
-        let country: String?
-        let service: Service
-        let accessType: String
-        let rawAccessType: String?
-        let addon: Service?
-        let destinations: [Destination]
-        let price: Price?
-        let quality: String?
-        let evidence: Evidence
-        var market: String {
-            guard evidence.regionVerified, let country,
-                  country.range(of: #"^[A-Z]{2}$"#, options: .regularExpression) != nil else { return "" }
-            return country
-        }
-        var expired: Bool {
-            guard let expiry = evidence.expiresAt else { return false }
-            return Date(timeIntervalSince1970: TimeInterval(expiry)) <= Date()
-        }
-        var destination: Destination? {
-            guard !expired else { return nil }
-            let order = accessType == "download" ? ["download", "title"] : ["player", "title", "download"]
-            for kind in order {
-                if let option = destinations.first(where: {
-                    $0.kind == kind && $0.url.scheme?.lowercased() == "https" &&
-                        $0.url.host != nil && $0.url.user == nil && $0.url.password == nil
-                }) { return option }
-            }
-            return nil
-        }
-        var accessLabel: String {
-            ["ads": "With ads", "free": "Free", "subscription": "Subscription", "rent": "Rent",
-             "buy": "Buy", "download": "Download", "addon": "Add-on"][accessType] ?? rawAccessType ?? "Other access"
-        }
-        func action(_ destination: Destination) -> String {
-            if ["rent", "buy", "download"].contains(accessType) { return "\(accessLabel) on \(service.name)" }
-            let verb = destination.kind == "player" ? "Play" : destination.kind == "download" ? "Download" : "Open"
-            return "\(verb) on \(service.name)"
-        }
-        var facts: String {
-            let priceLabel = price?.formatted ?? [price?.amount, price?.currency].compactMap { $0 }.joined(separator: " ")
-            let checked = evidence.observedAt > 0 ?
-                Date(timeIntervalSince1970: TimeInterval(evidence.observedAt)).formatted(date: .abbreviated, time: .shortened) : nil
-            return [accessLabel, addon?.name, quality, priceLabel, expired ? "Expired" : nil,
-                    !evidence.regionVerified ? "Region unverified" : nil, evidence.source, checked]
-                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-        }
-    }
-
-    private struct LookupContext: Hashable {
-        let account: UUID
-        let paired: Bool
-        let publicOrigin: String?
-        var available: Bool { paired || publicOrigin != nil }
-    }
-    private struct LookupRequest: Hashable {
-        let context: LookupContext
-        let reference: CatalogOfferReference
-        let country: String
-        let retry: Int
-    }
-
-    let reference: CatalogOfferReference
-    @EnvironmentObject private var store: LibraryStore
-    @State private var country = ""
-    @State private var registry: [Country] = []
-    @State private var response: Response?
-    @State private var unavailable = false
-    @State private var retry = 0
-    @State private var openMarkets: Set<String> = []
-    @State private var registryFor: LookupContext?
-    @State private var responseFor: LookupRequest?
-
-    private var publicOrigin: String? {
-        guard let configured = Bundle.main.object(forInfoDictionaryKey: "BluefinPublicCatalogOrigin") as? String,
-              let url = URL(string: configured), url.scheme == "https", url.host != nil,
-              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { return nil }
-        return configured
-    }
-    private var lookupContext: LookupContext {
-        .init(account: store.accountContext, paired: store.session != nil && !store.preview,
-              publicOrigin: publicOrigin)
-    }
-    private var lookupRequest: LookupRequest {
-        .init(context: lookupContext, reference: reference, country: country, retry: retry)
-    }
-    private var activeRegistry: [Country] { registryFor == lookupContext ? registry : [] }
-
-    private func lookup<T: Decodable & Sendable>(_ operation: String, context: LookupContext,
-                                                 fields: [String: Any] = [:]) async throws -> T {
-        guard context == lookupContext else { throw CancellationError() }
-        let result: T
-        if context.paired {
-            result = try await store.authenticated(operation, fields: fields)
-        } else {
-            guard let server = context.publicOrigin else {
-                throw BluefinError.message("Availability is unavailable.")
-            }
-            var request = fields
-            request["server"] = server
-            result = try await RustBridge.call(operation, fields: request)
-        }
-        try Task.checkCancellation()
-        guard context == lookupContext else { throw CancellationError() }
-        return result
-    }
-    private func name(_ code: String) -> String {
-        if code.isEmpty { return "Region unverified" }
-        return activeRegistry.first { $0.code == code }?.name ?? Locale.current.localizedString(forRegionCode: code) ?? code
-    }
-    private var countries: [String] {
-        let markets = responseFor == lookupRequest ? (response?.offers.map(\.market) ?? []) : []
-        let listed = activeRegistry.map(\.code) + markets + [country]
-        return Array(Set(listed.filter { !$0.isEmpty })).sorted { name($0) < name($1) }
-    }
-
-    var body: some View {
-        Group {
-            Picker("Country", selection: $country) {
-                Text("All regions").tag("")
-                ForEach(countries, id: \.self) { Text(name($0)).tag($0) }
-            }
-            if !lookupContext.available || (unavailable && responseFor == lookupRequest) {
-                Text("Availability is unavailable.").foregroundStyle(.secondary)
-                if lookupContext.available { Button("Retry availability") { retry += 1 } }
-            } else if let response, responseFor == lookupRequest {
-                let groups = Dictionary(grouping: response.offers) { $0.market }
-                    .filter { country.isEmpty || $0.key.isEmpty || $0.key == country }
-                if groups.isEmpty {
-                    let reported = response.sources.contains {
-                        $0.scope == "regionalAvailability" && ["complete", "noOffers"].contains($0.status)
-                    }
-                    Text(reported ? "No offers were reported for this selection." : "Availability is unknown.")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(groups.keys.sorted(), id: \.self) { market in
-                    let expanded = openMarkets.contains(market)
-                    if groups.count == 1 {
-                        Text(name(market)).font(.headline)
-                    } else {
-                        Button {
-                            if expanded { openMarkets.remove(market) }
-                            else { openMarkets.insert(market) }
-                        } label: {
-                            Label(name(market), systemImage: expanded ? "chevron.down" : "chevron.right")
-                        }
-                    }
-                    if groups.count == 1 || expanded {
-                        ForEach(groups[market] ?? []) { offer in
-                            VStack(alignment: .leading, spacing: 4) {
-                                if let destination = offer.destination {
-                                    Link(offer.action(destination), destination: destination.url)
-                                } else { Text(offer.service.name) }
-                                Text(offer.facts).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-                ForEach(response.sources.indices, id: \.self) { index in
-                    let source = response.sources[index]
-                    Text("\(source.source) · \(source.label)").font(.caption).foregroundStyle(.secondary)
-                    ForEach(source.attributions, id: \.name) { attribution in
-                        if attribution.url.scheme == "https", attribution.url.host != nil,
-                           attribution.url.user == nil, attribution.url.password == nil {
-                            Link(attribution.name, destination: attribution.url).font(.caption)
-                        }
-                    }
-                }
-            } else { ProgressView("Checking availability") }
-        }
-            .task(id: lookupContext) {
-                let context = lookupContext
-                registry = []
-                registryFor = nil
-                guard context.available else { return }
-                if let result: Registry = try? await lookup("publicCatalogProviders", context: context) {
-                    registry = result.countries
-                    registryFor = context
-                }
-            }
-            .task(id: lookupRequest) {
-                let requested = lookupRequest
-                response = nil
-                responseFor = nil
-                unavailable = false
-                openMarkets = []
-                guard requested.context.available else { return }
-                var fields: [String: Any] = [
-                    "kind": requested.reference.kind, "source": requested.reference.source,
-                    "id": requested.reference.id
-                ]
-                if !requested.country.isEmpty { fields["country"] = requested.country }
-                do {
-                    let result: Response = try await lookup("publicCatalogOffers", context: requested.context, fields: fields)
-                    guard requested == lookupRequest else { return }
-                    response = result
-                    responseFor = requested
-                } catch {
-                    if !Task.isCancelled && requested == lookupRequest {
-                        unavailable = true
-                        responseFor = requested
-                    }
-                }
-            }
     }
 }
 
@@ -1032,6 +745,530 @@ struct HomeHistorySettings: View {
             }
             if let problem = store.homeHistoryProblem {
                 Text(problem).font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+
+// MARK: - Public catalog contracts
+
+struct PublicCatalogIdentity: Codable, Hashable, Sendable {
+    struct Entry: Codable, Hashable, Sendable { let source: String; let id: String }
+    let kind: String
+    let ids: [Entry]
+    var fields: [String: Any] { ["kind": kind, "ids": ids.map { ["source": $0.source, "id": $0.id] }] }
+    var music: Bool { ["artist", "release", "releaseGroup", "recording", "musicVideo", "work"].contains(kind) }
+    var key: String { kind + ":" + ids.map { $0.source + ":" + $0.id }.sorted().joined(separator: "|") }
+}
+extension PublicCatalogIdentity {
+    static func library(_ item: MediaItem) -> Self? {
+        func provider(_ key: String) -> String? {
+            item.ProviderIds?.first { $0.key.caseInsensitiveCompare(key) == .orderedSame }?.value
+        }
+        func music(_ kind: String, key: String) -> Self? {
+            guard let value = provider(key), let uuid = UUID(uuidString: value),
+                  uuid.uuidString != "00000000-0000-0000-0000-000000000000" else { return nil }
+            return Self(kind: kind, ids: [Entry(source: "musicbrainz", id: uuid.uuidString.lowercased())])
+        }
+        switch item.Type {
+        case "Movie", "Series":
+            var ids: [Entry] = []
+            if let value = provider("Tmdb"),
+               value.range(of: #"^[1-9][0-9]{0,11}$"#, options: .regularExpression) != nil {
+                ids.append(Entry(source: "tmdb", id: value))
+            }
+            if let value = provider("Imdb"),
+               value.range(of: #"^tt[0-9]{7,12}$"#, options: .regularExpression) != nil {
+                ids.append(Entry(source: "imdb", id: value))
+            }
+            guard !ids.isEmpty else { return nil }
+            return Self(kind: item.Type == "Movie" ? "movie" : "series", ids: ids)
+        case "MusicArtist": return music("artist", key: "MusicBrainzArtist")
+        case "MusicAlbum":
+            return music("releaseGroup", key: "MusicBrainzReleaseGroup") ?? music("release", key: "MusicBrainzAlbum")
+        case "Audio": return music("recording", key: "MusicBrainzRecording")
+        default: return nil
+        }
+    }
+}
+struct PublicCatalogAttribution: Decodable, Sendable, Hashable { let name: String; let url: URL }
+struct PublicCatalogSource: Decodable, Sendable {
+    let source: String
+    let status: String
+    let observedAt: UInt64
+    let scope: String
+    let coverage: String
+    let catalogUrl: URL?
+    let attributions: [PublicCatalogAttribution]
+    var interrupted: Bool { ["unavailable", "rateLimited", "denied", "invalidResponse", "identityMismatch"].contains(status) }
+    var description: String {
+        switch status {
+        case "complete": "Source checked"
+        case "partial": "Partial source coverage"
+        case "noOffers": "No offers reported"
+        case "notFound": "Title not found by this source"
+        case "unsupportedIdentity": "This source does not cover this media identity"
+        case "unsupportedCountry": "This source cannot confirm this region"
+        case "missingCredentials": "Source not configured"
+        case "rateLimited": "Source rate limit reached"
+        case "denied": "Source declined the request"
+        case "identityMismatch": "Source identity did not match"
+        case "invalidResponse": "Source returned an unreadable result"
+        default: "Source temporarily unavailable"
+        }
+    }
+}
+struct PublicCatalogService: Decodable, Sendable { let source: String; let id: String; let name: String }
+struct PublicCatalogOffer: Decodable, Identifiable, Sendable {
+    struct Destination: Decodable, Sendable, Identifiable { let kind: String; let url: URL; var id: String { kind + url.absoluteString } }
+    struct Price: Decodable, Sendable { let amount: String?; let currency: String?; let formatted: String? }
+    struct Evidence: Decodable, Sendable {
+        let source: String; let observedAt: UInt64; let availableSince: UInt64?
+        let expiresAt: UInt64?; let expiresSoon: Bool; let regionVerified: Bool
+    }
+    let id: String
+    let identity: PublicCatalogIdentity
+    let country: String?
+    let service: PublicCatalogService
+    let accessType: String
+    let rawAccessType: String?
+    let addon: PublicCatalogService?
+    let destinations: [Destination]
+    let price: Price?
+    let quality: String?
+    let evidence: Evidence
+    var accessLabel: String {
+        switch accessType {
+        case "subscription": "Subscription"
+        case "rent": "Rent"
+        case "buy": "Buy"
+        case "free": "Free"
+        case "ads": "With ads"
+        case "addon": "Add-on"
+        case "download": "Download"
+        default: rawAccessType ?? "Provider listing"
+        }
+    }
+    var expired: Bool {
+        evidence.expiresAt.map { Date(timeIntervalSince1970: TimeInterval($0)) <= Date() } ?? false
+    }
+    var activeDestinations: [Destination] {
+        guard !expired else { return [] }
+        return destinations.filter {
+            $0.url.scheme?.lowercased() == "https" && $0.url.host != nil &&
+                $0.url.user == nil && $0.url.password == nil
+        }
+    }
+    var priceLabel: String? {
+        if let formatted = price?.formatted, !formatted.isEmpty { return formatted }
+        guard let amount = price?.amount else { return nil }
+        return [amount, price?.currency].compactMap { $0 }.joined(separator: " ")
+    }
+}
+struct PublicCatalogOffers: Decodable, Sendable {
+    let schemaVersion: Int
+    let identity: PublicCatalogIdentity
+    let country: String?
+    let offers: [PublicCatalogOffer]
+    let sources: [PublicCatalogSource]
+}
+struct PublicCatalogCountries: Decodable, Sendable {
+    struct Country: Decodable, Sendable { let code: String; let name: String }
+    let countries: [Country]
+    let sources: [PublicCatalogSource]
+}
+struct PublicCatalogAccount: Hashable, Sendable {
+    let generation: UUID
+    let paired: Bool
+}
+struct PublicCatalogAccessRequest: Hashable, Sendable {
+    let identity: PublicCatalogIdentity
+    let account: PublicCatalogAccount
+    let country: String
+    let attempt: Int
+}
+@MainActor enum PublicCatalogAPI {
+    static func account(_ store: LibraryStore) -> PublicCatalogAccount {
+        .init(generation: store.accountContext, paired: store.session != nil && !store.preview)
+    }
+    private static func lookup<T: Decodable & Sendable>(
+        _ operation: String, fields: [String: Any], store: LibraryStore,
+        account: PublicCatalogAccount
+    ) async throws -> T {
+        guard account == Self.account(store) else { throw CancellationError() }
+        let result: T
+        if account.paired {
+            result = try await store.authenticated(operation, fields: fields)
+        } else {
+            result = try await RustBridge.call(operation, fields: fields)
+        }
+        try Task.checkCancellation()
+        guard account == Self.account(store) else { throw CancellationError() }
+        return result
+    }
+    static func offers(_ identity: PublicCatalogIdentity, country: String?,
+                       store: LibraryStore, account: PublicCatalogAccount) async throws -> PublicCatalogOffers {
+        var fields: [String: Any] = ["identity": identity.fields]
+        let selected = country.flatMap { $0.isEmpty ? nil : $0.uppercased() }
+        if let selected { fields["country"] = selected }
+        let result: PublicCatalogOffers = try await lookup(
+            "publicCatalogOffers", fields: fields, store: store, account: account)
+        guard result.schemaVersion == 1, result.identity == identity, result.country == selected,
+              result.offers.allSatisfy({ $0.identity == identity }) else {
+            throw BluefinError.message("Availability returned a different media identity.")
+        }
+        return result
+    }
+    static func countries(_ identity: PublicCatalogIdentity, store: LibraryStore,
+                          account: PublicCatalogAccount) async throws -> PublicCatalogCountries {
+        try await lookup("publicCatalogCountries", fields: ["identity": identity.fields],
+                         store: store, account: account)
+    }
+}
+enum PublicCatalogRegion {
+    static var codes: [String] { Locale.isoRegionCodes.sorted { name($0).localizedCaseInsensitiveCompare(name($1)) == .orderedAscending } }
+    static var initial: String {
+        let code = Locale.current.regionCode?.uppercased() ?? ""
+        return Locale.isoRegionCodes.contains(code) ? code : ""
+    }
+    static func name(_ code: String) -> String { Locale.current.localizedString(forRegionCode: code) ?? code }
+}
+struct PublicCatalogCoverage: View {
+    let sources: [PublicCatalogSource]
+    var body: some View {
+        ForEach(sources.indices, id: \.self) { index in
+            let source = sources[index]
+            VStack(alignment: .leading, spacing: 4) {
+                Text(source.source + " · " + source.description).font(.caption)
+                if source.observedAt > 0 {
+                    Text("Checked " + Date(timeIntervalSince1970: TimeInterval(source.observedAt)).formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                ForEach(source.attributions, id: \.self) { credit in
+                    if credit.url.scheme?.lowercased() == "https", credit.url.host != nil,
+                       credit.url.user == nil, credit.url.password == nil {
+                        Link(credit.name, destination: credit.url).font(.caption)
+                    }
+                }
+            }
+        }
+    }
+}
+struct PublicCatalogAccessSection: View {
+    private struct Observation: Identifiable {
+        let id = UUID()
+        let country: String?
+        let value: PublicCatalogSource
+    }
+    let identity: PublicCatalogIdentity
+    @EnvironmentObject private var store: LibraryStore
+    @AppStorage("publicCatalogCountry") private var country = PublicCatalogRegion.initial
+    @State private var offers: [PublicCatalogOffer] = []
+    @State private var observations: [Observation] = []
+    @State private var attempt = 0
+    @State private var loading = false
+    @State private var total = 0
+    @State private var completed = 0
+    @State private var message: String?
+    @State private var loadedFor: PublicCatalogAccessRequest?
+    private var requestKey: PublicCatalogAccessRequest {
+        .init(identity: identity, account: PublicCatalogAPI.account(store), country: country, attempt: attempt)
+    }
+    private var activeOffers: [PublicCatalogOffer] { loadedFor == requestKey ? offers : [] }
+    private var activeObservations: [Observation] { loadedFor == requestKey ? observations : [] }
+    private var activeLoading: Bool { loadedFor != requestKey || loading }
+    var body: some View {
+        Section(identity.music ? "Listen or buy" : "Where to watch") {
+            Picker("Region", selection: $country) {
+                Text("All reported regions").tag("")
+                ForEach(PublicCatalogRegion.codes, id: \.self) { code in Text(PublicCatalogRegion.name(code)).tag(code) }
+            }
+            if activeLoading {
+                if loadedFor == requestKey && total > 0 { ProgressView("Checking regions \(completed) of \(total)", value: Double(completed), total: Double(total)) }
+                else { ProgressView("Checking provider availability") }
+            }
+            if loadedFor == requestKey, let message { Text(message).font(.caption).foregroundStyle(.secondary) }
+            ForEach(activeOffers) { offer in
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(offer.service.name + (offer.addon.map { " · " + $0.name } ?? "")).font(.headline)
+                    Text([offer.accessLabel, offer.priceLabel, offer.quality].compactMap { $0 }.joined(separator: " · "))
+                    Text(offer.evidence.regionVerified
+                        ? offer.country.map(PublicCatalogRegion.name) ?? "Region not supplied"
+                        : "Region not confirmed").font(.caption).foregroundStyle(.secondary)
+                    if let start = offer.evidence.availableSince {
+                        Text("Available from " + Date(timeIntervalSince1970: TimeInterval(start)).formatted(date: .abbreviated, time: .omitted)).font(.caption)
+                    }
+                    if let end = offer.evidence.expiresAt {
+                        Text("Available until " + Date(timeIntervalSince1970: TimeInterval(end)).formatted(date: .abbreviated, time: .omitted)).font(.caption)
+                    } else if offer.evidence.expiresSoon { Text("Leaving soon").font(.caption) }
+                    ForEach(offer.activeDestinations) { destination in
+                        Link((destination.kind == "player" ? "Open player on " : "Open on ") + offer.service.name, destination: destination.url)
+                    }
+                    if offer.expired { Text("This reported offer has expired.").font(.caption) }
+                    else if offer.activeDestinations.isEmpty {
+                        Text("Source reports availability without a direct destination.").font(.caption)
+                    }
+                    if offer.evidence.observedAt > 0 {
+                        Text("Reported " + Date(timeIntervalSince1970: TimeInterval(offer.evidence.observedAt)).formatted(date: .abbreviated, time: .shortened))
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if !activeLoading && activeOffers.isEmpty {
+                Text(activeObservations.contains { !["complete", "noOffers", "notFound"].contains($0.value.status) }
+                    ? "Availability could not be confirmed for every source. Check coverage or retry."
+                    : "No offers were reported for this selection.").foregroundStyle(.secondary)
+            }
+            if !activeLoading { Button("Refresh availability") { attempt += 1 } }
+            DisclosureGroup("Sources and coverage") {
+                ForEach(activeObservations) { observation in
+                    if let code = observation.country { Text(PublicCatalogRegion.name(code)).font(.caption.bold()) }
+                    PublicCatalogCoverage(sources: [observation.value])
+                }
+                Text("Provider links do not confirm your account's playback rights.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .task(id: requestKey) {
+            let requested = requestKey
+            loadedFor = requested
+            offers = []; observations = []; message = nil; completed = 0; total = 0; loading = true
+            let selected = requested.country
+            let catalogStore = store
+            defer { if !Task.isCancelled && requested == requestKey { loading = false } }
+            do {
+                // The paired instance supplies all reported regions in one
+                // country-less request. A provider registry is not offer evidence.
+                if requested.account.paired || !selected.isEmpty || requested.identity.music {
+                    let result = try await PublicCatalogAPI.offers(
+                        requested.identity, country: selected.isEmpty ? nil : selected,
+                        store: catalogStore, account: requested.account)
+                    try Task.checkCancellation()
+                    guard requested == requestKey else { return }
+                    merge(result, requested: requested)
+                    if requested.identity.music && selected.isEmpty && !requested.account.paired {
+                        message = "MusicBrainz links do not include regional availability. Select a country to check exact store listings."
+                    }
+                    return
+                }
+                let registry = try await PublicCatalogAPI.countries(
+                    requested.identity, store: catalogStore, account: requested.account)
+                try Task.checkCancellation()
+                guard requested == requestKey else { return }
+                observations.append(contentsOf: registry.sources.map { Observation(country: nil, value: $0) })
+                var seen = Set<String>()
+                let regions = registry.countries.map(\.code).filter { seen.insert($0).inserted }
+                total = regions.count
+                guard !regions.isEmpty else {
+                    message = "This source did not supply a country list."
+                    return
+                }
+                try await withThrowingTaskGroup(of: PublicCatalogOffers.self) { group in
+                    var next = 0
+                    for region in regions.prefix(3) {
+                        next += 1
+                        group.addTask {
+                            try await PublicCatalogAPI.offers(requested.identity, country: region,
+                                                              store: catalogStore, account: requested.account)
+                        }
+                    }
+                    while let result = try await group.next() {
+                        try Task.checkCancellation()
+                        guard requested == requestKey else { group.cancelAll(); return }
+                        merge(result, requested: requested)
+                        completed += 1
+                        if result.sources.contains(where: { $0.interrupted }) {
+                            message = "The source paused or failed. Loaded regions remain visible; refresh to continue."
+                            group.cancelAll()
+                            break
+                        }
+                        if next < regions.count && !Task.isCancelled {
+                            let region = regions[next]; next += 1
+                            group.addTask {
+                                try await PublicCatalogAPI.offers(requested.identity, country: region,
+                                                                  store: catalogStore, account: requested.account)
+                            }
+                        }
+                    }
+                }
+            } catch is CancellationError {
+            } catch {
+                guard !Task.isCancelled && requested == requestKey else { return }
+                message = "Provider availability is temporarily unavailable."
+            }
+        }
+    }
+    private func merge(_ response: PublicCatalogOffers, requested: PublicCatalogAccessRequest) {
+        guard requested == requestKey, loadedFor == requested,
+              response.schemaVersion == 1, response.identity == requested.identity else { return }
+        var seen = Set(offers.map(\.id))
+        offers.append(contentsOf: response.offers.filter { seen.insert($0.id).inserted })
+        offers.sort { ($0.service.name, $0.country ?? "", $0.accessLabel, $0.id) < ($1.service.name, $1.country ?? "", $1.accessLabel, $1.id) }
+        observations.append(contentsOf: response.sources.map { Observation(country: response.country, value: $0) })
+    }
+}
+struct PublicMusicItem: Decodable, Identifiable, Sendable {
+    struct ArtworkCredit: Decodable, Sendable { let author: String; let url: URL; let license: String; let licenseUrl: URL? }
+    let identity: PublicCatalogIdentity
+    let title: String
+    let subtitle: String
+    let artwork: URL?
+    let artworkCredit: ArtworkCredit?
+    let sourceUrl: URL
+    let number: String?
+    var id: String { identity.key }
+}
+struct PublicMusicSearchPage: Decodable, Sendable {
+    let results: [PublicMusicItem]
+    let total: Int
+    let offset: Int
+    let sources: [PublicCatalogSource]
+}
+struct PublicMusicDetail: Decodable, Sendable {
+    struct Fact: Decodable, Identifiable, Sendable { let label: String; let value: String; var id: String { label } }
+    let item: PublicMusicItem?
+    let description: String?
+    let facts: [Fact]
+    let related: [PublicMusicItem]
+    let tracks: [PublicMusicItem]?
+    let trackEdition: PublicMusicItem?
+    let sources: [PublicCatalogSource]
+}
+struct PublicMusicSearchSection: View {
+    let query: String
+    let kind: String
+    var library: [MediaItem] = []
+    @State private var items: [PublicMusicItem] = []
+    @State private var total = 0
+    @State private var offset = 0
+    @State private var retry = 0
+    @State private var failed = false
+    @State private var loading = false
+    @State private var completedQuery = ""
+    private var term: String { String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160)) }
+    private var heading: String { kind == "artist" ? "Artists" : kind == "releaseGroup" ? "Albums" : "Songs and recordings" }
+    var body: some View {
+        Group {
+            if term.count >= 2 {
+                Section(heading) {
+                    if completedQuery != term || loading { ProgressView("Searching \(heading.lowercased())") }
+                    if completedQuery == term {
+                        ForEach(items) { item in
+                            NavigationLink { PublicMusicDetailView(initial: item, library: library) } label: {
+                                HStack(spacing: 12) {
+                                    AsyncImage(url: item.artwork) { image in image.resizable().scaledToFill() }
+                                        placeholder: { Image(systemName: kind == "artist" ? "person.crop.square" : "music.note") }
+                                        .frame(width: 56, height: 56).clipped().accessibilityHidden(true)
+                                    VStack(alignment: .leading) { Text(item.title); Text(item.subtitle).font(.caption).foregroundStyle(.secondary) }
+                                }
+                            }
+                        }
+                        if failed {
+                            Text("MusicBrainz is temporarily unavailable.").foregroundStyle(.secondary)
+                            Button("Retry music search") { retry += 1 }
+                        }
+                        else if items.isEmpty { Text("No matches from MusicBrainz.").foregroundStyle(.secondary) }
+                        if items.count < total && !loading { Button("Load more \(heading.lowercased())") { offset += 20 } }
+                        Text("MusicBrainz · \(items.count) of \(total) results").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .task(id: term + ":" + String(offset) + ":" + String(retry)) {
+            let requested = term
+            guard requested.count >= 2 else { items = []; completedQuery = ""; return }
+            let requestedOffset = completedQuery == requested ? offset : 0
+            if completedQuery != requested { items = []; total = 0; offset = 0 }
+            loading = true
+            do {
+                if requestedOffset == 0 { try await Task.sleep(nanoseconds: 650_000_000) }
+                let result: PublicMusicSearchPage = try await RustBridge.call("publicMusicSearch", fields: ["query": requested, "kind": kind, "offset": requestedOffset])
+                try Task.checkCancellation()
+                var seen = Set(items.map(\.id))
+                items.append(contentsOf: result.results.filter { seen.insert($0.id).inserted })
+                total = result.total
+                failed = result.sources.contains(where: { $0.interrupted })
+                completedQuery = requested; loading = false
+            } catch is CancellationError {} catch {
+                guard !Task.isCancelled else { return }
+                failed = true; completedQuery = requested; loading = false
+            }
+        }
+    }
+}
+struct PublicMusicDetailView: View {
+    let initial: PublicMusicItem
+    var library: [MediaItem] = []
+    @EnvironmentObject private var store: LibraryStore
+    @State private var detail: PublicMusicDetail?
+    @State private var failed = false
+    @State private var attempt = 0
+    private var item: PublicMusicItem { detail?.item ?? initial }
+    private var playable: [MediaItem] {
+        guard item.identity.kind == "recording", let id = item.identity.ids.first(where: { $0.source == "musicbrainz" })?.id else { return [] }
+        return library.filter { $0.Type == "Audio" && ($0.ProviderIds?["MusicBrainzTrack"] == id || $0.ProviderIds?["MusicBrainzRecording"] == id) }
+    }
+    var body: some View {
+        List {
+            Section {
+                HStack(alignment: .top, spacing: 16) {
+                    AsyncImage(url: item.artwork) { image in image.resizable().scaledToFit() }
+                        placeholder: { Image(systemName: item.identity.kind == "artist" ? "person.crop.square" : "music.note") }
+                        .frame(width: 120, height: 120).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 6) { Text(item.title).font(.title2); Text(item.subtitle).foregroundStyle(.secondary) }
+                }
+                if let credit = item.artworkCredit {
+                    Link(credit.author, destination: credit.url)
+                    if let license = credit.licenseUrl { Link(credit.license, destination: license) }
+                } else if item.artwork != nil {
+                    Link("Cover Art Archive", destination: URL(string: "https://coverartarchive.org/")!)
+                }
+                if let description = detail?.description, !description.isEmpty { Text(description) }
+                ForEach(detail?.facts ?? []) { fact in LabeledContent(fact.label, value: fact.value) }
+                if detail == nil && !failed { ProgressView("Loading music details") }
+                if failed { Button("Retry music details") { attempt += 1 } }
+            }
+            if !playable.isEmpty {
+                Section {
+                    ForEach(playable) { media in Button(media.resumeTicks > 0 ? "Resume in Bluefin" : "Play in Bluefin") { Task { await store.play(media) } } }
+                }
+            }
+            PublicCatalogAccessSection(identity: item.identity)
+            if let tracks = detail?.tracks, !tracks.isEmpty {
+                Section("Tracks") {
+                    if let edition = detail?.trackEdition { Text("Edition: " + edition.title + " · " + edition.subtitle).font(.caption).foregroundStyle(.secondary) }
+                    ForEach(tracks.indices, id: \.self) { index in
+                        let track = tracks[index]
+                        NavigationLink { PublicMusicDetailView(initial: track, library: library) } label: {
+                            Text([track.number, track.title].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                        }
+                    }
+                }
+            }
+            if let related = detail?.related, !related.isEmpty {
+                Section("Related music") {
+                    ForEach(related) { relatedItem in
+                        NavigationLink { PublicMusicDetailView(initial: relatedItem, library: library) } label: {
+                            VStack(alignment: .leading) { Text(relatedItem.title); Text(relatedItem.subtitle).font(.caption).foregroundStyle(.secondary) }
+                        }
+                    }
+                }
+            }
+            Section("Catalog source") {
+                Link("View on MusicBrainz", destination: item.sourceUrl)
+                if let detail { PublicCatalogCoverage(sources: detail.sources) }
+            }
+        }
+        .navigationTitle(item.title)
+        .task(id: initial.id + ":" + String(attempt)) {
+            do {
+                let result: PublicMusicDetail = try await RustBridge.call("publicMusicDetail", fields: ["identity": initial.identity.fields])
+                try Task.checkCancellation()
+                detail = result
+                failed = result.item == nil
+            } catch is CancellationError {} catch {
+                guard !Task.isCancelled else { return }
+                failed = true
             }
         }
     }
