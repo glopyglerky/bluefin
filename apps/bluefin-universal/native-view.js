@@ -514,7 +514,17 @@ function wikidataRequest(query){
 async function wikidataSearch(term,scope,signal){
  const hits=await publicCatalogJson(wikidataRequest({action:'wbsearchentities',search:term,language:'en',uselang:'en',limit:16,type:'item'}),signal);
  if(!Array.isArray(hits?.search))throw Error('Invalid public index response');
- const ids=[...new Set(hits.search.slice(0,16).map(item=>item?.id).filter(id=>typeof id==='string'&&/^Q[1-9][0-9]{0,15}$/.test(id)))];
+ const entityId=id=>typeof id==='string'&&/^Q[1-9][0-9]{0,15}$/.test(id);
+ let ids=hits.search.slice(0,16).map(item=>item?.id).filter(entityId);
+ if(!ids.length){
+  const words=searchableWords(term).slice(0,8);
+  if(!words.length)return [];
+  const fuzzy=words.map(word=>word.length>=4?word+'~1':word).join(' ');
+  const matches=await publicCatalogJson(wikidataRequest({action:'query',list:'search',srsearch:fuzzy,srnamespace:0,srlimit:16,srprop:''}),signal);
+  if(!Array.isArray(matches?.query?.search))throw Error('Invalid public index response');
+  ids=matches.query.search.slice(0,16).map(match=>match?.title).filter(entityId);
+ }
+ ids=[...new Set(ids)];
  if(!ids.length)return [];
  const details=await publicCatalogJson(wikidataRequest({action:'wbgetentities',ids:ids.join('|'),props:'labels|claims',languages:'en',languagefallback:1}),signal,2*1024*1024);
  if(!details?.entities||typeof details.entities!=='object')throw Error('Invalid public index entry');

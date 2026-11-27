@@ -713,10 +713,33 @@ test('default public search discovers TV, movies, music, credited people, and da
  assert(t.requests.every(r=>r.options.headers===undefined&&r.options.credentials==='omit'&&r.options.referrerPolicy==='no-referrer'));
 });
 
+test('public film search uses a bounded close-match lookup when the exact catalog misses',async()=>{
+ const t=setup({apiResponse:url=>{
+  if(url.hostname==='api.tvmaze.com')return jsonReply([]);
+  if(url.hostname!=='www.wikidata.org')return;
+  const action=url.searchParams.get('action');
+  if(action==='wbsearchentities')return jsonReply({search:[]});
+  if(action==='query'){
+   assert.equal(url.searchParams.get('srsearch'),'spirted~1 away~1');
+   assert.equal(url.searchParams.get('srlimit'),'16');
+   return jsonReply({query:{search:[{title:'Q155653'},{title:'https://unrelated.test/'}]}});
+  }
+  assert.equal(url.searchParams.get('ids'),'Q155653');
+  return jsonReply({entities:{Q155653:{labels:{en:{value:'Spirited Away'}},claims:{P31:[
+   {mainsnak:{datavalue:{value:{id:'Q20650540'}}}}
+  ]}}}});
+ }});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
+ await t.ui.startSearch('Spirted Away',{scope:'movies'});
+ assert.match(t.root.textContent,/Spirited Away.*Anime film/);
+ assert.equal(t.requests.length,3);
+ assert(t.requests.every(r=>r.options.credentials==='omit'));
+});
+
 test('broad account search includes connected catalog and a close upcoming sports match, with a private library scope',async()=>{
  const t=setup({apiResponse:url=>{
   if(url.hostname==='api.tvmaze.com')return jsonReply([]);
-  if(url.hostname==='www.wikidata.org')return jsonReply({search:[]});
+  if(url.hostname==='www.wikidata.org')return jsonReply(url.searchParams.get('action')==='query'?{query:{search:[]}}:{search:[]});
   if(url.pathname==='/Bluefin/Web/Discovery/Search')return jsonReply({results:[url.searchParams.get('scope')==='music'
    ?{title:'Track from connected catalog',kind:'track'}:{title:'Film from connected catalog',kind:'movie'}]});
   if(url.pathname==='/sports/api/v1/home')return jsonReply({schema:1,presentation_only:true,local_broadcasts:[],
