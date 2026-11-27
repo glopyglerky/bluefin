@@ -1251,34 +1251,62 @@ async function loadRegionalOffers(route,country,signal=routeController?.signal){
   const result=await publicCatalogJson(url,signal);
   if(state.route!==route||request!==route.offers||signal.aborted)return;
   if(result.country!==country||!Array.isArray(result.offers))throw Error('Invalid availability response');
-  route.offers={rows:result.offers.slice(0,256)};
+  route.offers={markets:[{country,rows:result.offers}]};
  }catch{
   if(state.route!==route||request!==route.offers||signal.aborted)return;
   route.offers={unavailable:true};
  }
  render();
 }
+const offerAccessLabels={free:'Free',ads:'With ads',subscription:'Subscription',rent:'Rent',buy:'Buy',download:'Download',addon:'Add-on'};
+function offerMarketName(country){
+ const code=String(country||'').toUpperCase();
+ if(!/^[A-Z]{2}$/.test(code))return '';
+ return typeof Intl.DisplayNames==='function'?new Intl.DisplayNames(undefined,{type:'region',fallback:'code'}).of(code):code;
+}
+function offerTarget(value){
+ if(typeof value!=='string'||!/^https:\/\//.test(value))return null;
+ try{
+  const target=new URL(value);
+  return target.username||target.password?null:target.href;
+ }catch{return null;}
+}
+function offerRow(row){
+ const provider=catalogText(row?.provider,120);
+ if(!provider)return null;
+ const entry=node('div',undefined,'offer-row');
+ const facts=[offerAccessLabels[row.access]||catalogText(row.access,60),catalogText(row.platform,60),
+  catalogText(row.quality,60),catalogText(row.price,60),catalogText(row.currency,12)];
+ const date=typeof row.observedAt==='string'?new Date(row.observedAt):null;
+ if(date&&!Number.isNaN(date.valueOf()))facts.push('Checked '+date.toLocaleString());
+ const status=({expired:'Expired',missing:'Offer removed',unavailable:'Unavailable',unknown:'Availability unknown'})[row.status];
+ if(status)facts.push(status);
+ const target=status?null:offerTarget(row.playerUrl)||offerTarget(row.titleUrl);
+ const verb=({buy:'Buy',rent:'Rent',download:'Download'})[row.access]||(row.playerUrl?'Play':'Open');
+ if(target){
+  const link=node('a',verb+' on '+provider);
+  link.href=target;link.rel='noopener noreferrer';entry.append(link);
+ }else entry.append(node('strong',provider));
+ if(facts.some(Boolean))entry.append(node('small',facts.filter(Boolean).join(' · '),'secondary'));
+ return entry;
+}
 function offersView(route){
  const content=node('div',undefined,'provider-actions');
- const labels=new Intl.DisplayNames(undefined,{type:'region',fallback:'none'});
  const countries=Array.from({length:676},(_,i)=>String.fromCharCode(65+Math.floor(i/26),65+i%26))
-  .map(country=>[country.toLowerCase(),labels.of(country)]).filter(([,label])=>label)
+  .map(country=>[country.toLowerCase(),offerMarketName(country)]).filter(([code,label])=>label&&label.toLowerCase()!==code)
   .sort((a,b)=>a[1].localeCompare(b[1]));
  content.append(searchChoice('Country','offer-country',route.offerCountry||defaultCountry(),countries,
   selected=>loadRegionalOffers(route,selected)));
  const result=route.offers;
  if(result?.loading||!result)content.append(node('p','Checking availability…','loading'));
  else if(result.unavailable)content.append(node('p','Regional availability is unavailable.','secondary'));
- else if(!result.rows.length)content.append(node('p','No offers were returned for this country.','secondary'));
- else for(const row of result.rows){
-  if(!row||!['free','subscription','buy','rent','addon'].includes(row.access)||!catalogText(row.provider,120))continue;
-  const href=[row.playerUrl,row.titleUrl].find(value=>typeof value==='string'&&/^https:\/\//.test(value));
-  if(!href)continue;
-  const target=new URL(href);
-  if(target.username||target.password||['tv.apple.com','www.justwatch.com','www.themoviedb.org'].includes(target.hostname))continue;
-  const verb=({free:'Watch',subscription:'Watch',buy:'Buy',rent:'Rent',addon:'Watch'})[row.access];
-  const link=node('a',[verb+' on '+row.provider,catalogText(row.price,48)].filter(Boolean).join(' · '));
-  link.href=target.href;link.rel='noopener noreferrer';content.append(link);
+ else for(const market of result.markets){
+  const group=node('section',undefined,'offer-market');
+  group.append(node('h3',offerMarketName(market.country)||market.country));
+  const rows=market.rows.map(offerRow).filter(Boolean);
+  if(!rows.length)group.append(node('p','No offers were returned for this country.','secondary'));
+  else group.append(...rows);
+  content.append(group);
  }
  return content;
 }
@@ -1288,7 +1316,7 @@ async function openPublicTitle(item){
  const loading=loadRoute();render();await loading;render();
 }
 async function backFromPublicTitle(){state.route=state.back.pop()||{kind:'search'};await loadRoute();render();}
-function publicTitleActions(item,library=[],showStatus=false){
+function publicTitleActions(item,library=[],catalogLinks=true){
  const actions=node('div',undefined,'provider-actions'),status=item.sources;
  const ids=[...(status?.imdbIds||[]),...(item.imdbId?[item.imdbId]:[])];
  const owned=library.filter(value=>value.Type==='Movie'&&item.kind==='movie'&&
@@ -1299,12 +1327,11 @@ function publicTitleActions(item,library=[],showStatus=false){
   start.dataset.focusKey='film-play|'+id(media.Id);
   actions.append(start);
  }
- const links=mergeProviderLinks(status?.links||[],item.firstLinks||[]);
+ const links=catalogLinks?mergeProviderLinks(status?.links||[],item.firstLinks||[]):[];
  for(const source of links){
   const link=node('a',(source.kind==='player'?'Watch on ':source.kind==='audio'?'Listen on ':'Open on ')+source.provider);
   link.href=source.url;link.rel='noopener noreferrer';link.className='provider-link';actions.append(link);
  }
- if(!links.length&&!owned.length&&showStatus)actions.append(node('p','No direct provider destinations found.','secondary'));
  return actions;
 }
 function catalogResults(catalog){
@@ -1359,9 +1386,16 @@ function publicTitleDetail(main,route){
  if(item.kind||item.firstLinks?.length){
   const availability=node('section',undefined,'detail-availability');
   availability.append(node('h2',item.category==='music'?'Where to listen':'Where to watch'),
-   publicTitleActions(item,route.owned,!route.loading&&!item.catalogRef));
+   publicTitleActions(item,route.owned,false));
   if(item.catalogRef&&item.kind)availability.append(offersView(route));
+  else availability.append(node('p','Regional availability is unknown for this title.','secondary'));
   main.append(availability);
+  const links=mergeProviderLinks(item.sources?.links||[],item.firstLinks||[]);
+  if(links.length){
+   const destinations=node('section',undefined,'detail-availability');
+   destinations.append(node('h2','Catalog links'),publicTitleActions({firstLinks:links}));
+   main.append(destinations);
+  }
  }
  if(state.session&&item.requestActions?.length)main.append(discoveryRequests(route));
  if(route.credits?.length){

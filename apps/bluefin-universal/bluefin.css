@@ -252,6 +252,8 @@ button.lyric-line{cursor:pointer}
 .catalog-detail p:first-child { margin-top: 0; }
 .detail-availability { margin-bottom: 28px; }
 .detail-availability .provider-actions { justify-items: start; gap: 12px; }
+.offer-market { display: grid; gap: 10px; width: min(100%, 620px); }
+.offer-row { display: grid; gap: 4px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 @media (min-width: 760px) {
   .rail-search { display: contents; }
   .tabbar .rail-search button { width: 100%; }
