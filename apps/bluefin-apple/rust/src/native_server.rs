@@ -7,6 +7,7 @@ pub(super) fn call(api: &Api<'_>, operation: &str) -> Result<Value> {
         "bluefinCapabilities" => {
             let value = api.get(&["Bluefin", "Capabilities"], vec![])?;
             let transport = project_iroh_transport(value.get("irohMediaTransport"));
+            let search = project_library_search(value.get("librarySearch"));
             let capabilities: Capabilities =
                 serde_json::from_value(value).map_err(|_| err("Invalid Bluefin capabilities"))?;
             if capabilities.protocol_version != PROTOCOL_VERSION
@@ -23,6 +24,7 @@ pub(super) fn call(api: &Api<'_>, operation: &str) -> Result<Value> {
             if let Some(transport) = transport.filter(|_| can_play) {
                 projected["irohMediaTransport"] = transport;
             }
+            if let Some(search) = search { projected["librarySearch"] = search; }
             Ok(projected)
         }
         "bluefinMusicQueue" | "saveBluefinMusicQueue" => {
@@ -60,6 +62,25 @@ pub(super) fn call(api: &Api<'_>, operation: &str) -> Result<Value> {
         "bluefinMusicQueueItems" => queue_items(api),
         _ => Err(err("Unknown Bluefin operation")),
     }
+}
+
+/// Missing or malformed optional search extensions never imply support.
+fn project_library_search(value: Option<&Value>) -> Option<Value> {
+    let value = value?;
+    if value["version"].as_u64() != Some(1) || value["explicitSort"].as_bool() != Some(true) {
+        return None;
+    }
+    let keys = value["sortBy"].as_array()?;
+    let directions = value["sortOrder"].as_array()?;
+    if keys.is_empty() || keys.len() > 5 || directions.len() != 2 {
+        return None;
+    }
+    if !keys.iter().all(|key| key.as_str().is_some_and(|key|
+        ["SortName", "Name", "DateCreated", "PremiereDate", "ProductionYear"].contains(&key)))
+        || !directions.contains(&json!("Ascending")) || !directions.contains(&json!("Descending")) {
+        return None;
+    }
+    Some(json!({"version":1,"explicitSort":true,"sortBy":keys,"sortOrder":directions}))
 }
 
 /// Optional direct-transport metadata is not an account grant or a reachable-path proof.
@@ -167,6 +188,26 @@ fn queue_items(api: &Api<'_>) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn library_search_capability_requires_a_known_complete_advertisement() {
+        assert!(super::project_library_search(None).is_none());
+        for value in [
+            serde_json::json!({"version":2,"explicitSort":true,"sortBy":["SortName"],"sortOrder":["Ascending","Descending"]}),
+            serde_json::json!({"version":1,"explicitSort":true}),
+            serde_json::json!({"version":1,"explicitSort":true,"sortBy":["Unknown"],"sortOrder":["Ascending","Descending"]}),
+            serde_json::json!({"version":1,"explicitSort":false,"sortBy":["SortName"],"sortOrder":["Ascending","Descending"]})
+        ] {
+            assert!(super::project_library_search(Some(&value)).is_none());
+        }
+        let valid = serde_json::json!({"version":1,"explicitSort":true,
+            "sortBy":["SortName","DateCreated","PremiereDate"],
+            "sortOrder":["Ascending","Descending"],"untrustedExtra":"ignored"});
+        let projected = super::project_library_search(Some(&valid)).expect("supported search");
+        assert_eq!(projected["explicitSort"], true);
+        assert!(projected.get("untrustedExtra").is_none());
+    }
+
     use super::*;
     use std::{io::Write, net::TcpListener, thread};
     const A: &str = "00000000-0000-0000-0000-000000000001";

@@ -69,6 +69,12 @@ async fn capabilities(
         },
     })
     .map_err(|_| ApiError::ServiceUnavailable("capabilities unavailable".into()))?;
+    capabilities["librarySearch"] = serde_json::json!({
+        "version": 1,
+        "explicitSort": true,
+        "sortBy": ["SortName", "Name", "DateCreated", "PremiereDate", "ProductionYear"],
+        "sortOrder": ["Ascending", "Descending"],
+    });
     capabilities["karaokePreparation"] = serde_json::json!({
         "enabled": state.karaoke().is_some(), "maxDurationSeconds": 300,
         "requiresSuppliedTiming": true,
