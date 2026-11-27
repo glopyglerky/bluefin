@@ -67,7 +67,11 @@ fn candidate() -> PathBuf {
         }
         hash.update(&buffer[..count]);
     }
-    let actual = format!("{:x}", hash.finalize());
+    let actual = hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     assert_eq!(
         actual, expected,
         "the selected executable must match the qualified artifact"
