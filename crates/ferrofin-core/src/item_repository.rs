@@ -590,6 +590,11 @@ impl FerrofinItemRepository {
         if rows.is_empty() || filter.order_by.is_empty() {
             return Ok(rows);
         }
+        if filter.search_order_by_requested {
+            // Bluefin's explicit ordering includes the same identity tie-break
+            // for materialized folder children as for a direct Items query.
+            return self.sql_ordered_folder_children(rows, filter).await;
+        }
         if filter.order_by.iter().all(|(by, _)| {
             matches!(
                 by,
@@ -2731,6 +2736,7 @@ fn folder_sql_order_query(
             .filter_map(|row| Uuid::parse_str(&row.id).ok())
             .collect(),
         order_by: filter.order_by.clone(),
+        search_order_by_requested: filter.search_order_by_requested,
         group_by_presentation_unique_key: false,
         include_owned_items: true,
         ..Default::default()
