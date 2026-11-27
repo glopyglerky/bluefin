@@ -325,6 +325,21 @@ async fn list_groups(
     Ok(Json(mgr.list_groups(&session).await?))
 }
 
+/// Read this session's authoritative room timeline after joining or reconnecting.
+async fn current_playback(
+    SyncPlayAuth(auth, _): SyncPlayAuth<JoinGroup>,
+    State(state): State<AppState>,
+) -> Result<Response, ApiError> {
+    let manager = manager(&state)?;
+    let session = sync_play_session(&state, &auth).await?;
+    let mut response = Json(manager.current_playback(&session).await?).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
+    Ok(response)
+}
+
 /// `GET /SyncPlay/{id}` — info for a single group.
 ///
 /// The one route whose policy runs after its parameter binds: upstream's
@@ -603,6 +618,7 @@ pub fn register(router: Router<AppState>) -> Router<AppState> {
         .route("/SyncPlay/Join", post(join_group))
         .route("/SyncPlay/Leave", post(leave_group))
         .route("/SyncPlay/List", get(list_groups))
+        .route("/Bluefin/SyncPlay/Current", get(current_playback))
         .route("/SyncPlay/{id}", get(get_group))
         .route("/SyncPlay/SetNewQueue", post(set_new_queue))
         .route("/SyncPlay/SetPlaylistItem", post(set_playlist_item))

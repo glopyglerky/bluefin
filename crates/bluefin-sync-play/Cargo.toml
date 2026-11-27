@@ -1,0 +1,9 @@
+[package]
+name = "bluefin-sync-play"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+description = "Portable client scheduling for Bluefin synchronized playback"
+
+[dependencies]

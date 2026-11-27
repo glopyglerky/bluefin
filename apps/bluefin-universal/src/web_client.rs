@@ -47,6 +47,17 @@ pub async fn request(handle: String, method: String, path: String, query: String
         .transpose().map_err(|_| JsValue::from_str("Invalid request."))?;
     mesh::request(&session.base,&handle,&method,&path,&refs,body).await.map(serialize).map_err(error)
 }
+/// Room controls use the same device-bound account and protocol as playback.
+#[wasm_bindgen(js_name = webMeshRoom)]
+pub async fn room(handle: String, request: String) -> Result<String, JsValue> {
+    if request.len() > 4096 {
+        return Err(JsValue::from_str("Room request limit."));
+    }
+    let session = mesh::restored_session(&handle).map_err(error)?;
+    let operation = serde_json::from_str(&request)
+        .map_err(|_| JsValue::from_str("Invalid room request."))?;
+    crate::sync_play::request(&session, operation).await.map(serialize).map_err(error)
+}
 #[wasm_bindgen(js_name = webMeshArtwork)]
 pub async fn artwork(handle: String, item: String, backdrop: bool) -> Result<Vec<u8>, JsValue> {
     mesh::artwork(&handle,&item,backdrop).await.map_err(error)

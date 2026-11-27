@@ -353,6 +353,20 @@ pub struct GroupInfoDto {
     pub last_updated_at: DateTime<Utc>,
 }
 
+/// This session's current room, with a timeline tied to the server clock.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct CurrentRoomPlayback {
+    #[serde(with = "crate::json::guid")]
+    pub group_id: Uuid,
+    pub state: GroupStateType,
+    pub item: Option<SyncPlayQueueItem>,
+    /// Media position as of the anchor. It advances only while Playing.
+    pub position_ticks: i64,
+    #[serde(with = "crate::json::datetime")]
+    pub anchor_time: DateTime<Utc>,
+}
+
 /// A response carrying the server's UTC time (for clock synchronization).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
