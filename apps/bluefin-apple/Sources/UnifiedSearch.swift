@@ -268,7 +268,10 @@ struct UnifiedSearchResults: View {
             }
             if active {
                 if !store.preview && !filters.hasFacets && (filters.scope == .all || filters.scope == .tvShows) {
-                    PublicTVSearchSection(query: query)
+                    PublicTitleSearchSection(query: query, catalog: .television)
+                }
+                if !store.preview && !filters.hasFacets && (filters.scope == .all || filters.scope == .movies) {
+                    PublicTitleSearchSection(query: query, catalog: .film)
                 }
                 if !query.isEmpty && !filters.hasFacets {
                     if filters.scope.includesCatalog { ServerDiscoverySection(query: query, scope: filters.scope) }
@@ -391,34 +394,46 @@ struct UnifiedSearchResults: View {
     }
 }
 
-struct PublicTVSearchView: View {
+struct PublicTitleSearchView: View {
     @State private var query = ""
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         BluefinNavigation {
             List {
-                TextField("TV show title", text: $query)
-                    .accessibilityIdentifier("publicTVQuery")
-                PublicTVSearchSection(query: query)
+                TextField("Movie or TV show title", text: $query)
+                    .accessibilityIdentifier("publicCatalogQuery")
+                PublicTitleSearchSection(query: query, catalog: .television)
+                PublicTitleSearchSection(query: query, catalog: .film)
             }
-            .navigationTitle("Search TV shows")
+            .navigationTitle("Search movies and shows")
             .toolbar { Button("Done") { dismiss() } }
         }
     }
 }
 
-private struct PublicTVSearchSection: View {
+private enum PublicTitleCatalog {
+    case television, film
+
+    var operation: String { self == .television ? "publicTvSearch" : "publicFilmSearch" }
+    var heading: String { self == .television ? "TV catalog" : "Film catalog" }
+    var provider: String { self == .television ? "TVmaze" : "Wikidata" }
+    var icon: String { self == .television ? "tv" : "film" }
+}
+
+private struct PublicTitleSearchSection: View {
     struct Page: Decodable, Sendable { let results: [Title] }
     struct Title: Decodable, Identifiable, Sendable {
-        let id: UInt64
+        var id: URL { sourceUrl }
         let title: String
         let year: String?
+        let description: String?
         let artwork: URL?
         let sourceUrl: URL
     }
 
     let query: String
+    let catalog: PublicTitleCatalog
     @State private var page: Page?
     @State private var failed = false
     @State private var completedQuery = ""
@@ -427,13 +442,13 @@ private struct PublicTVSearchSection: View {
     var body: some View {
         Group {
             if term.count >= 2 {
-                Section("TV catalog") {
+                Section(catalog.heading) {
                     if completedQuery != term {
-                        ProgressView("Searching TV catalog")
+                        ProgressView("Searching \(catalog.heading.lowercased())")
                     } else if failed {
-                        Text("The TV catalog is temporarily unavailable.").foregroundStyle(.secondary)
+                        Text("Could not load \(catalog.provider) results.").foregroundStyle(.secondary)
                     } else if let page, page.results.isEmpty {
-                        Text("No titles found in the TV catalog.").foregroundStyle(.secondary)
+                        Text("No matches from \(catalog.provider).").foregroundStyle(.secondary)
                     } else if let page {
                         ForEach(page.results) { item in
                             Link(destination: item.sourceUrl) {
@@ -441,18 +456,18 @@ private struct PublicTVSearchSection: View {
                                     AsyncImage(url: item.artwork) { image in
                                         image.resizable().scaledToFill()
                                     } placeholder: {
-                                        Image(systemName: "tv").foregroundStyle(.secondary)
+                                        Image(systemName: catalog.icon).foregroundStyle(.secondary)
                                     }
                                     .frame(width: 46, height: 64).clipped().accessibilityHidden(true)
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(item.title).font(.headline)
-                                        Text(item.year.map { "\($0) · TVmaze" } ?? "TVmaze")
+                                        Text([item.description ?? item.year, catalog.provider].compactMap { $0 }.joined(separator: " · "))
                                             .font(.caption).foregroundStyle(.secondary)
                                     }
                                 }
-                            }.accessibilityHint("Open title information on TVmaze")
+                            }.accessibilityHint("Open title information on \(catalog.provider)")
                         }
-                        Text("TVmaze lists titles. Streaming availability for these results is unverified.")
+                        Text("Streaming availability for these results is unverified.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -463,7 +478,9 @@ private struct PublicTVSearchSection: View {
             guard requested.count >= 2 else { page = nil; failed = false; completedQuery = ""; return }
             do {
                 try await Task.sleep(nanoseconds: 650_000_000)
-                let response: Page = try await RustBridge.call("publicTvSearch", fields: ["query": requested])
+                let response: Page = try await RustBridge.call(catalog.operation, fields: [
+                    "query": requested, "language": Locale.current.identifier.lowercased().replacingOccurrences(of: "_", with: "-")
+                ])
                 try Task.checkCancellation()
                 page = response
                 failed = false
