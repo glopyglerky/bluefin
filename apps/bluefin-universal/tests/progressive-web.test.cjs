@@ -704,7 +704,8 @@ test('default public search discovers TV, movies, music, credited people, and da
  }});
  await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
  await t.ui.startSearch('fixture');
- assert.equal(t.requests.length,4);
+ assert.equal(t.requests.filter(request=>new URL(request.url).hostname!=='bluefin.test').length,4);
+ assert.equal(t.requests.filter(request=>new URL(request.url).pathname==='/Bluefin/Catalog/Search').length,6);
  assert.equal(t.ui.state.session,null);
  assert.match(t.root.textContent,/Film Fixture.*Album Fixture.*Person Fixture.*Actor, Film director, Screenwriter.*Upcoming Cup Fixture.*2030-04-02/);
  assert.match(t.root.textContent,/TV Crew Fixture/);
@@ -737,7 +738,7 @@ test('public film search uses a bounded close-match lookup when the exact catalo
  await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
  await t.ui.startSearch('Spirted Away',{scope:'movies'});
  assert.match(t.root.textContent,/Spirited Away.*Anime film/);
- assert.equal(t.requests.length,4);
+ assert.equal(t.requests.filter(request=>new URL(request.url).hostname==='www.wikidata.org').length,4);
  assert(t.requests.every(r=>r.options.credentials==='omit'));
 });
 
@@ -763,6 +764,56 @@ test('broad account search includes connected catalog and a close upcoming sport
 });
 
 const claim=(value,rank='normal')=>({rank,mainsnak:{snaktype:'value',datavalue:{value}}});
+test('public music uses the specialist catalog without a library and opens credit details from a stable identity',async()=>{
+ const artist='a74b1b7f-71a5-4011-9441-d0b5e4122711',album='b168aa16-81a2-43cb-99de-54d940ab4541';
+ const record=(kind,value,title,fields={})=>({id:{kind,value},title,...fields});
+ const artistRecord=record('musicBrainzArtist',artist,'Radiohead');
+ const albumRecord=record('musicBrainzReleaseGroup',album,'OK Computer',{
+  artwork:{url:'https://coverartarchive.org/release-group/'+album+'/front-250',credit:'Cover Art Archive',
+   sourceUrl:'https://musicbrainz.org/release-group/'+album+'/cover-art'},
+  credits:[{id:artistRecord.id,name:'Radiohead',role:'Performer'}],
+ });
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search'&&url.searchParams.get('kind')==='album'){
+   const page=Number(url.searchParams.get('page'));
+   return jsonReply(page===1?{results:[albumRecord],nextPage:2}:{results:[albumRecord],nextPage:null});
+  }
+  if(url.pathname==='/Bluefin/Catalog/Details/album/'+album)return jsonReply(albumRecord);
+  if(url.pathname==='/Bluefin/Catalog/Details/artist/'+artist)return jsonReply(artistRecord);
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('OK Computer',{scope:'music'});
+ const more=findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('More MusicBrainz albums'));
+ await more.listeners.click();
+ const card=findElement(t.root,e=>String(e.dataset.focusKey).includes('musicBrainzReleaseGroup:'+album));
+ await card.listeners.click();
+ assert.equal(t.ui.state.route.title,'OK Computer');
+ assert(findElement(t.root,e=>String(e.src).endsWith('/front-250')));
+ const credit=findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Radiohead'));
+ await credit.listeners.click();
+ assert.equal(t.ui.state.route.title,'Radiohead');
+ assert.equal(t.ui.state.session,null);
+ assert(t.requests.filter(request=>new URL(request.url).pathname.startsWith('/Bluefin/Catalog')).every(request=>request.options.credentials==='omit'));
+});
+test('a specialist title requests independent country offers and uses the direct provider player',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Film Fixture',summary:'Plot',imdbId:'tt0120338'};
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Offers/movie/597'){
+   const country=url.searchParams.get('country');
+   return jsonReply({country,offers:country==='gb'?[]:[{provider:'Netflix',access:'subscription',
+    titleUrl:'https://www.netflix.com/title/12345678',playerUrl:'https://www.netflix.com/watch/12345678'}]});
+  }
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('Film Fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ assert(findElement(t.root,e=>e.href==='https://www.netflix.com/watch/12345678'));
+ assert(!findElement(t.root,e=>e.href==='https://www.netflix.com/title/12345678'));
+ const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ country.value='gb';await country.onchange();
+ assert(t.root.textContent.includes('No offers were returned for this country.'));
+ assert(!findElement(t.root,e=>e.href==='https://www.netflix.com/watch/12345678'));
+});
 test('a film result displays a licensed Commons poster and exact watch links before opening details',async()=>{
  const t=setup({apiResponse:u=>{
   if(u.hostname==='commons.wikimedia.org'){

@@ -319,6 +319,7 @@ pub const MAX_BLOCKING_FILE_SYSTEM_CALLS: usize = 32;
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<Inner>,
+    pub(crate) public_catalog: Option<Arc<dyn crate::public_catalog::PublicCatalog>>,
     request_culture: Arc<crate::request_culture::RequestCultureOptions>,
     file_system_calls: Arc<tokio::sync::Semaphore>,
     pub(crate) account_gate: Arc<tokio::sync::Mutex<crate::handlers::bluefin_accounts::SignupBudget>>,
@@ -331,6 +332,11 @@ pub struct AppState {
 }
 
 impl AppState {
+    #[must_use]
+    pub fn with_public_catalog(mut self, catalog: Arc<dyn crate::public_catalog::PublicCatalog>) -> Self {
+        self.public_catalog = Some(catalog);
+        self
+    }
     /// Home history uses the same durable database and account IDs as playback.
     #[must_use]
     pub fn with_bluefin_home(mut self, db: ferrofin_db::Database) -> Self {
@@ -383,6 +389,7 @@ impl AppState {
         .expect("built-in request culture is valid");
         Self {
             inner: Arc::new(inner),
+            public_catalog: None,
             request_culture: Arc::new(request_culture),
             file_system_calls: Arc::new(tokio::sync::Semaphore::new(
                 MAX_BLOCKING_FILE_SYSTEM_CALLS,

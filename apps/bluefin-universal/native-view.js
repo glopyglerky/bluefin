@@ -499,6 +499,32 @@ async function tvmazeSearch(term,category,signal){
  }
  return titles;
 }
+const specialistKinds={
+ tmdbMovie:['movie','movies','movie'],tmdbSeries:['series','tvShows','series'],tmdbPerson:['person','people',null],
+ musicBrainzArtist:['artist','music',null],musicBrainzReleaseGroup:['album','music',null],musicBrainzRecording:['recording','music',null],
+};
+function specialistRecord(record){
+ const {id, title}=record||{},kind=specialistKinds[id?.kind];
+ if(!kind||typeof title!=='string'||!title.trim()||title.length>256)return null;
+ const value=String(id.value);
+ if(!(id.kind.startsWith('tmdb')?/^[1-9][0-9]{0,14}$/:uuidText).test(value))return null;
+ const source=id.kind.startsWith('tmdb')?'TMDB':'MusicBrainz';
+ const image=record.artwork?.url,creditUrl=record.artwork?.sourceUrl;
+ const assets=typeof image==='string'&&/^https:\/\/(?:image\.tmdb\.org\/t\/p\/w342\/|coverartarchive\.org\/release-group\/)/.test(image)&&
+  typeof creditUrl==='string'&&/^https:\/\/(?:www\.themoviedb\.org|musicbrainz\.org)\//.test(creditUrl)?
+  {art:image,credit:catalogText(record.artwork.credit,120)||source,creditUrl}:{};
+ return {catalogRef:{kind:kind[0],value},id:id.kind+':'+value,category:kind[1],kind:kind[2],name:title,
+  artist:kind[0]==='artist',source,year:Number.isInteger(record.year)?String(record.year):'',
+  description:catalogText(record.summary,4000),imdbId:typeof record.imdbId==='string'&&filmId.test(record.imdbId)?record.imdbId:null,...assets};
+}
+async function specialistSearch(kind,query,signal,page=1){
+ const url=new URL('/Bluefin/Catalog/Search',document.baseURI);
+ for(const [key,value] of Object.entries({kind,query,page}))url.searchParams.set(key,value);
+ const data=await publicCatalogJson(url,signal);
+ if(!Array.isArray(data?.results))throw Error('Invalid specialist catalog response');
+ const items=data.results.slice(0,20).map(specialistRecord).filter(Boolean);
+ return {items,next:Number.isSafeInteger(data.nextPage)&&data.nextPage===page+1?data.nextPage:null};
+}
 function wikidataJSON(params,signal){
  const url=new URL('https://www.wikidata.org/w/api.php');
  for(const [key,value] of Object.entries({format:'json',formatversion:'2',origin:'*',...params}))url.searchParams.set(key,value);
@@ -629,7 +655,10 @@ async function loadSearch(route,get,current,signal){
   search.catalogs.push(group);
   lookups.push((async()=>{
    try{
-    const rows=await load();current();group.items=rows;group.loading=false;render();
+    const result=await load(1);current();
+    const rows=Array.isArray(result)?result:result.items;
+    if(!Array.isArray(result)){group.next=result.next;group.loadPage=load;}
+    group.items=rows;group.loading=false;render();
     await attachCommonsArtwork(rows,signal);current();
    }
    catch(error){current();group.unavailable=true;}
@@ -637,6 +666,15 @@ async function loadSearch(route,get,current,signal){
   })());
  }
  if(term.length>=2&&!facets){
+  const specialist=(label,kind,scopes)=>{
+   if(scopes.includes(scope))catalog(label,page=>specialistSearch(kind,term,signal,page),true);
+  };
+  specialist('TMDB movies','movie',['all','movies']);
+  specialist('TMDB television','series',['all','tvShows']);
+  specialist('TMDB people','person',['all','people']);
+  specialist('MusicBrainz artists','artist',['all','music']);
+  specialist('MusicBrainz albums','album',['all','music']);
+  specialist('MusicBrainz recordings','recording',['all','music']);
   if(['all','tvShows','publicTv'].includes(scope))catalog('Public TV titles',()=>tvmazeSearch(term,'shows',signal));
   if(['all','people'].includes(scope))catalog('Public TV people',()=>tvmazeSearch(term,'people',signal));
   if(scope==='movies')catalog('Film catalog',async()=>{
@@ -1124,6 +1162,22 @@ async function relatedEntities(item,entity,signal){
 }
 async function loadPublicDetail(route,signal,current){
  const {item}=route;
+ if(item.catalogRef){
+  const {kind,value}=item.catalogRef;
+  const url=new URL('/Bluefin/Catalog/Details/'+kind+'/'+value,document.baseURI);
+  try{
+   const response=await publicCatalogJson(url,signal);current();
+   const details=specialistRecord(response);
+   if(!details||details.id!==item.id)throw Error('Invalid catalog identity');
+   for(const [key,value] of Object.entries(details))if(value!==null&&value!=='')item[key]=value;
+   route.credits=(Array.isArray(response.credits)?response.credits:[]).slice(0,36).flatMap(credit=>{
+    const related=specialistRecord({id:credit.id,title:credit.name});
+    return related?[{...related,role:catalogText(credit.role,120)}]:[];
+   });
+   if(item.kind){render();await loadRegionalOffers(route,route.offerCountry||defaultCountry(),signal);current();}
+  }catch{current();route.detailUnavailable=true;}
+  return;
+ }
  const jobs=[];
  if(item.tvmazePersonId){
   const person='people/'+item.tvmazePersonId;
@@ -1179,6 +1233,55 @@ async function loadPublicDetail(route,signal,current){
  const results=await Promise.allSettled(jobs);current();
  if(results.length&&results.every(result=>result.status==='rejected'))route.detailUnavailable=true;
 }
+function defaultCountry(){
+ try{
+  const region=new Intl.Locale(globalThis.navigator?.language||'en-US').maximize().region;
+  return /^[A-Z]{2}$/.test(region)?region.toLowerCase():'us';
+ }catch{return 'us';}
+}
+async function loadRegionalOffers(route,country,signal=routeController?.signal){
+ if(!signal||signal.aborted||!/^[a-z]{2}$/.test(country))return;
+ route.offerCountry=country;
+ const request=route.offers={loading:true};
+ const {kind,value}=route.item.catalogRef;
+ const url=new URL('/Bluefin/Catalog/Offers/'+kind+'/'+value,document.baseURI);
+ url.searchParams.set('country',country);
+ render();
+ try{
+  const result=await publicCatalogJson(url,signal);
+  if(state.route!==route||request!==route.offers||signal.aborted)return;
+  if(result.country!==country||!Array.isArray(result.offers))throw Error('Invalid availability response');
+  route.offers={rows:result.offers.slice(0,256)};
+ }catch{
+  if(state.route!==route||request!==route.offers||signal.aborted)return;
+  route.offers={unavailable:true};
+ }
+ render();
+}
+function offersView(route){
+ const content=node('div',undefined,'provider-actions');
+ const labels=new Intl.DisplayNames(undefined,{type:'region',fallback:'none'});
+ const countries=Array.from({length:676},(_,i)=>String.fromCharCode(65+Math.floor(i/26),65+i%26))
+  .map(country=>[country.toLowerCase(),labels.of(country)]).filter(([,label])=>label)
+  .sort((a,b)=>a[1].localeCompare(b[1]));
+ content.append(searchChoice('Country','offer-country',route.offerCountry||defaultCountry(),countries,
+  selected=>loadRegionalOffers(route,selected)));
+ const result=route.offers;
+ if(result?.loading||!result)content.append(node('p','Checking availability…','loading'));
+ else if(result.unavailable)content.append(node('p','Regional availability is unavailable.','secondary'));
+ else if(!result.rows.length)content.append(node('p','No offers were returned for this country.','secondary'));
+ else for(const row of result.rows){
+  if(!row||!['free','subscription','buy','rent','addon'].includes(row.access)||!catalogText(row.provider,120))continue;
+  const href=[row.playerUrl,row.titleUrl].find(value=>typeof value==='string'&&/^https:\/\//.test(value));
+  if(!href)continue;
+  const target=new URL(href);
+  if(target.username||target.password||['tv.apple.com','www.justwatch.com','www.themoviedb.org'].includes(target.hostname))continue;
+  const verb=({free:'Watch',subscription:'Watch',buy:'Buy',rent:'Rent',addon:'Watch'})[row.access];
+  const link=node('a',[verb+' on '+row.provider,catalogText(row.price,48)].filter(Boolean).join(' · '));
+  link.href=target.href;link.rel='noopener noreferrer';content.append(link);
+ }
+ return content;
+}
 async function openPublicTitle(item){
  const owned=state.search?.pages.find(page=>page.lane==='library')?.items||state.route.owned||[];
  state.back.push({...state.route});state.route={kind:'public-detail',title:item.name,item:{...item},owned};
@@ -1223,6 +1326,13 @@ function catalogResults(catalog){
    grid.append(card);
   }
   section.append(grid);
+  if(catalog.next&&catalog.loadPage)section.append(action('More '+catalog.title,async()=>{
+   const route=state.route,result=await catalog.loadPage(catalog.next);
+   if(route!==state.route)return;
+   const seen=new Set(catalog.items.map(item=>item.id));
+   catalog.items.push(...result.items.filter(item=>!seen.has(item.id)&&seen.add(item.id)));
+   catalog.next=result.next;
+  }));
  }
  return section;
 }
@@ -1247,7 +1357,10 @@ function publicTitleDetail(main,route){
  if(item.fact)info.append(node('p',item.fact,'secondary'));
  header.append(picture,info);main.append(header);
  if(item.kind||item.firstLinks?.length){
-  const availability=node('section',undefined,'detail-availability');availability.append(node('h2',item.category==='music'?'Where to listen':'Where to watch'),publicTitleActions(item,route.owned,!route.loading));
+  const availability=node('section',undefined,'detail-availability');
+  availability.append(node('h2',item.category==='music'?'Where to listen':'Where to watch'),
+   publicTitleActions(item,route.owned,!route.loading&&!item.catalogRef));
+  if(item.catalogRef&&item.kind)availability.append(offersView(route));
   main.append(availability);
  }
  if(state.session&&item.requestActions?.length)main.append(discoveryRequests(route));

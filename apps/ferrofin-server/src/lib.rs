@@ -25,6 +25,8 @@ pub mod config;
 mod connection_limits;
 mod encoding_options;
 mod existing_database;
+mod public_catalog;
+mod streaming_availability;
 pub mod listen;
 mod log_lines;
 pub mod media_encoding;

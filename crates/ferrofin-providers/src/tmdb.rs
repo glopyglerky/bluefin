@@ -1455,7 +1455,59 @@ impl Default for TmdbClient {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum CatalogVideoEntity {
+    Movie,
+    Series,
+    Person,
+}
+
+impl CatalogVideoEntity {
+    fn resource(self) -> &'static str {
+        match self {
+            Self::Movie => "movie",
+            Self::Series => "tv",
+            Self::Person => "person",
+        }
+    }
+}
+
 impl TmdbClient {
+    pub async fn catalog_search(
+        &self,
+        entity: CatalogVideoEntity,
+        query: &str,
+        page: u32,
+    ) -> Option<serde_json::Value> {
+        let resource = entity.resource();
+        self.catalog_get(&format!("search/{resource}"), &[
+            ("query", query.to_owned()),
+            ("page", page.to_string()),
+            ("include_adult", "false".to_owned()),
+        ]).await
+    }
+
+    pub async fn catalog_details(
+        &self,
+        entity: CatalogVideoEntity,
+        id: u64,
+    ) -> Option<serde_json::Value> {
+        let resource = entity.resource();
+        let includes = match entity {
+            CatalogVideoEntity::Person => "combined_credits,external_ids",
+            CatalogVideoEntity::Movie | CatalogVideoEntity::Series => "credits,external_ids",
+        };
+        self.catalog_get(&format!("{resource}/{id}"), &[("append_to_response", includes.to_owned())]).await
+    }
+
+    async fn catalog_get(&self, path: &str, params: &[(&str, String)]) -> Option<serde_json::Value> {
+        let response = self.http.get(format!("{}/{path}", self.base_url))
+            .query(&[("api_key", self.api_key.expose_secret())])
+            .query(params).send_limited(&self.limiter).await.ok()?;
+        if !response.status().is_success() { return None; }
+        response.counted_json().await.ok()
+    }
+
     /// A client using Jellyfin's built-in API key (zero configuration).
     #[must_use]
     pub fn new() -> Self {
