@@ -2428,6 +2428,48 @@ impl SyncPlayManager for FerrofinSyncPlayManager {
         }
     }
 
+    async fn current_playback(
+        &self,
+        session: &SyncPlaySession,
+    ) -> Result<Option<ferrofin_model::sync_play::CurrentRoomPlayback>, ServiceError> {
+        use ferrofin_model::sync_play::CurrentRoomPlayback;
+
+        require_user(session.user_id)?;
+        let snapshot = || {
+            let reg = self.lock();
+            let group_id = *reg.session_to_group.get(&session.session_id)?;
+            let group = reg.groups.get(&group_id)?;
+            if !group.members.iter().any(|member| {
+                member.session_id == session.session_id && member.user_id == session.user_id
+            }) {
+                return None;
+            }
+            Some(CurrentRoomPlayback {
+                group_id,
+                state: group.state,
+                item: group.queue.current().copied(),
+                position_ticks: group.position_ticks,
+                anchor_time: group.last_activity,
+            })
+        };
+        let Some(previous) = snapshot() else {
+            return Ok(None);
+        };
+        if let Some(item) = previous.item {
+            if !self
+                .has_access_to_queue(session.user_id, &[item.item_id])
+                .await
+            {
+                return Ok(None);
+            }
+        }
+        // Visibility is evaluated off-lock. Refuse to publish a different
+        // room or occurrence that was selected while the lookup was pending.
+        Ok(snapshot().filter(|current| {
+            current.group_id == previous.group_id && current.item == previous.item
+        }))
+    }
+
     async fn handle_request(
         &self,
         session: &SyncPlaySession,
@@ -5387,6 +5429,41 @@ mod tests {
             m.get_group(&other, info.group_id).await.is_err(),
             "and is indistinguishable from a missing group"
         );
+    }
+
+    #[tokio::test]
+    async fn current_playback_requires_the_joined_session_and_current_item_access() {
+        let (manager, _bus, db, library) = access_mgr().await;
+        let host = db_session(&db, "host", "host").await;
+        let guest = db_session(&db, "guest", "guest").await;
+        let another_device = SyncPlaySession {
+            session_id: "another-device".into(),
+            ..guest.clone()
+        };
+        let film = seed_movie(&db, "Movie").await;
+        let group = manager
+            .new_group(&host, "watch together", None)
+            .await
+            .unwrap();
+        set_queue(&manager, &host, vec![film]).await;
+
+        assert!(manager.current_playback(&guest).await.unwrap().is_none());
+        manager.join_group(&guest, group.group_id).await.unwrap();
+        let room = manager.current_playback(&guest).await.unwrap().unwrap();
+        assert_eq!(room.group_id, group.group_id);
+        assert_eq!(room.item.unwrap().item_id, film);
+        assert!(
+            manager
+                .current_playback(&another_device)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        delete_item(library.as_ref(), film).await;
+        assert!(manager.current_playback(&guest).await.unwrap().is_none());
+        manager.leave_group(&guest).await.unwrap();
+        assert!(manager.current_playback(&guest).await.unwrap().is_none());
     }
 
     #[tokio::test]

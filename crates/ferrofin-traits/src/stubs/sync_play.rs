@@ -12,7 +12,9 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use ferrofin_model::sync_play::{GroupInfoDto, GroupQueueMode, GroupRepeatMode, GroupShuffleMode};
+use ferrofin_model::sync_play::{
+    CurrentRoomPlayback, GroupInfoDto, GroupQueueMode, GroupRepeatMode, GroupShuffleMode,
+};
 use uuid::Uuid;
 
 use crate::error::ServiceError;
@@ -196,6 +198,14 @@ pub trait SyncPlayManager: Send + Sync {
         session: &SyncPlaySession,
         group_id: Uuid,
     ) -> Result<GroupInfoDto, ServiceError>;
+
+    /// Read the current timeline only after this exact session joined.
+    async fn current_playback(
+        &self,
+        _session: &SyncPlaySession,
+    ) -> Result<Option<CurrentRoomPlayback>, ServiceError> {
+        Ok(None)
+    }
 
     /// Applies a playback request to the session's group, broadcasting any
     /// resulting commands/updates to members.
