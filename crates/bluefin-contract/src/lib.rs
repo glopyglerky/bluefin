@@ -109,3 +109,6 @@ mod tests {
         );
     }
 }
+
+/// Source-backed public metadata, independent of private library state.
+pub mod public_catalog;

@@ -184,7 +184,11 @@ pub fn project_musicbrainz_release_group_editions(
         let edition_request = LookupRequest {
             identity: CatalogIdentity {
                 kind: MediaKind::Release,
-                ids: vec![CatalogId { source: "musicbrainz".into(), id: id.to_ascii_lowercase() }],
+                ids: vec![
+                    CatalogId { source: "musicbrainz".into(), id: id.to_ascii_lowercase() },
+                    // This parent link is explicit in the upstream edition, never a title guess.
+                    CatalogId { source: "musicbrainz-release-group".into(), id: group_id.clone() },
+                ],
             },
             country: request.country.clone(),
         };
@@ -527,6 +531,7 @@ mod tests {
         assert_eq!(output.offers.len(),1);
         assert_eq!(output.offers[0].identity.kind,MediaKind::Release);
         assert_eq!(output.offers[0].identity.id("musicbrainz"),Some(edition_id));
+        assert_eq!(output.offers[0].identity.id("musicbrainz-release-group"),Some(MBID));
         assert_eq!(output.sources[0].status,SourceStatus::Partial);
         assert!(!output.offers[0].evidence.region_verified);
     }

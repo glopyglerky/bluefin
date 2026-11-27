@@ -50,6 +50,67 @@ impl MusicBrainzClient {
         Ok(Self { client })
     }
 
+
+    /// Searches one typed public music catalog page using MusicBrainz's shared IP budget.
+    /// The returned count and offset belong to the source; a page is not a complete catalog.
+    pub async fn search(
+        &self, kind: MediaKind, term: &str, offset: u64,
+    ) -> MusicBrainzDocument {
+        let (entity, field) = match kind {
+            MediaKind::Artist => ("artist", "artists"),
+            MediaKind::ReleaseGroup => ("release-group", "release-groups"),
+            MediaKind::Recording => ("recording", "recordings"),
+            _ => return MusicBrainzDocument::failure(SourceStatus::UnsupportedIdentity),
+        };
+        let term = term.trim();
+        if !(2..=160).contains(&term.chars().count()) || term.chars().any(char::is_control)
+            || offset > 100_000 {
+            return MusicBrainzDocument::failure(SourceStatus::InvalidResponse);
+        }
+        let Ok(mut url) = reqwest::Url::parse(&format!("https://musicbrainz.org/ws/2/{entity}")) else {
+            return MusicBrainzDocument::failure(SourceStatus::InvalidResponse);
+        };
+        url.query_pairs_mut().append_pair("query", &search_query(term)).append_pair("fmt","json")
+            .append_pair("limit","20").append_pair("offset",&offset.to_string());
+        let acquired = acquire(&self.client, provider_state(Provider::MusicBrainz),
+            url.as_str(), Provider::MusicBrainz, |body| {
+                if body[field].as_array().is_none() || body["count"].as_u64().is_none()
+                    || body["offset"].as_u64() != Some(offset) {
+                    Some(SourceStatus::InvalidResponse)
+                } else { None }
+            }).await;
+        MusicBrainzDocument::from(acquired)
+    }
+
+    /// Loads descriptive metadata and related entities for one exact MusicBrainz identity.
+    pub async fn metadata(&self, identity: &crate::CatalogIdentity) -> MusicBrainzDocument {
+        let Some((entity,id)) = musicbrainz_entity(identity) else {
+            return MusicBrainzDocument::failure(SourceStatus::UnsupportedIdentity);
+        };
+        let include = match identity.kind {
+            MediaKind::Artist => "url-rels+release-groups+genres",
+            MediaKind::ReleaseGroup => "artists+releases+url-rels+genres",
+            MediaKind::Release => "artists+recordings+release-groups+url-rels+genres",
+            MediaKind::Recording | MediaKind::MusicVideo => "artists+releases+isrcs+url-rels+genres",
+            _ => "url-rels+genres",
+        };
+        let Ok(mut url) = reqwest::Url::parse(&format!("https://musicbrainz.org/ws/2/{entity}/{id}")) else {
+            return MusicBrainzDocument::failure(SourceStatus::InvalidResponse);
+        };
+        url.query_pairs_mut().append_pair("inc",include).append_pair("fmt","json");
+        let acquired = acquire(&self.client, provider_state(Provider::MusicBrainz),
+            url.as_str(), Provider::MusicBrainz, |body| {
+                if !body["id"].as_str().is_some_and(|actual| actual.eq_ignore_ascii_case(&id)) {
+                    Some(SourceStatus::IdentityMismatch)
+                } else if identity.kind == MediaKind::MusicVideo && body["video"].as_bool()!=Some(true) {
+                    Some(SourceStatus::IdentityMismatch)
+                } else if body["name"].as_str().or_else(||body["title"].as_str()).is_none() {
+                    Some(SourceStatus::InvalidResponse)
+                } else { None }
+            }).await;
+        MusicBrainzDocument::from(acquired)
+    }
+
     /// Looks up real music access links and, when requested, exact regional purchase listings.
     ///
     /// MusicBrainz relationships stay region-unknown. The iTunes supplement requires an
@@ -221,6 +282,40 @@ impl MusicBrainzClient {
     }
 }
 
+
+/// A public upstream document with its real observation time and acquisition state.
+/// Stale cached metadata can be retained during an outage without relabelling it as current.
+#[derive(Clone, Debug)]
+pub struct MusicBrainzDocument {
+    pub body: Option<Value>,
+    pub observed_at: u64,
+    pub status: SourceStatus,
+}
+impl MusicBrainzDocument {
+    fn failure(status: SourceStatus) -> Self {
+        Self { body: None, observed_at: 0, status }
+    }
+}
+impl From<Acquisition> for MusicBrainzDocument {
+    fn from(value: Acquisition) -> Self {
+        Self { body: value.body, observed_at: value.observed_at, status: value.status }
+    }
+}
+
+
+fn search_query(term: &str) -> String {
+    // Treat a person's title/artist phrase as text, not MusicBrainz's Lucene operators.
+    let mut escaped = String::new();
+    for character in term.chars() {
+        if matches!(character, '+' | '-' | '&' | '|' | '!' | '(' | ')' | '{' | '}' |
+            '[' | ']' | '^' | '"' | '~' | '*' | '?' | ':' | '\\' | '/') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
+}
+
 #[derive(Clone, Copy)]
 enum Provider { MusicBrainz, Itunes }
 
@@ -296,12 +391,16 @@ async fn acquire(
     state.cache.retain(|_, entry| entry.stale_until > now);
     if let Some(entry) = state.cache.get_mut(url).filter(|entry| entry.fresh_until > now) {
         entry.last_used = now;
+        // Recording and MusicVideo may share a URL; every caller still verifies its typed identity.
+        if let Some(status) = entry.body.as_ref().and_then(&validate) {
+            return Acquisition { body: None, observed_at: entry.observed_at, status };
+        }
         return Acquisition {
             body: entry.body.clone(), observed_at: entry.observed_at, status: entry.status,
         };
     }
     if let Some((_, status, failed_at)) = state.cooldown.filter(|(until, _, _)| *until > now) {
-        return fallback(&state, url, status, failed_at);
+        return fallback(&state, url, status, failed_at, &validate);
     }
     if let Some(next) = state.next_request {
         if let Some(wait) = next.checked_duration_since(Instant::now()) {
@@ -314,7 +413,7 @@ async fn acquire(
     match answer {
         Ok((body, bytes)) => {
             if let Some(status) = validate(&body) {
-                return fallback(&state, url, status, received_at);
+                return fallback(&state, url, status, received_at, &validate);
             }
             let now = Instant::now();
             insert_cache(&mut state, url, Cached {
@@ -349,14 +448,18 @@ async fn acquire(
                 let until = now.checked_add(wait).unwrap_or(now + Duration::from_secs(86_400));
                 state.cooldown = Some((until, failure.status, received_at));
             }
-            fallback(&state, url, failure.status, received_at)
+            fallback(&state, url, failure.status, received_at, &validate)
         }
     }
 }
 
-fn fallback(state: &HttpState, url: &str, status: SourceStatus, failed_at: u64) -> Acquisition {
+fn fallback(
+    state: &HttpState, url: &str, status: SourceStatus, failed_at: u64,
+    validate: &impl Fn(&Value) -> Option<SourceStatus>,
+) -> Acquisition {
     let previous = state.cache.get(url).filter(|entry| {
-        entry.body.is_some() && entry.stale_until > Instant::now()
+        entry.stale_until > Instant::now()
+            && entry.body.as_ref().is_some_and(|body| validate(body).is_none())
     });
     Acquisition {
         body: previous.and_then(|entry| entry.body.clone()),
@@ -545,6 +648,46 @@ mod tests {
         assert!(second.body.is_none());
         assert_eq!(hits.load(Ordering::SeqCst),1);
         worker.join().expect("server");
+    }
+
+
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cache_never_reuses_an_audio_document_as_a_video_identity() {
+        let body = json!({"id":"known","title":"Audio recording","video":false});
+        let unavailable = "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 120\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string();
+        let (url,hits,worker) = server(vec![ok(&body),unavailable]);
+        let state = Mutex::new(HttpState::default());
+        let client = MusicBrainzClient::new().expect("client");
+        let first = acquire(&client.client,&state,&url,Provider::MusicBrainz, |_| None).await;
+        let video = |value:&Value| {
+            (value["video"].as_bool()!=Some(true)).then_some(SourceStatus::IdentityMismatch)
+        };
+        let wrong_kind = acquire(&client.client,&state,&url,Provider::MusicBrainz,video).await;
+        assert_eq!(wrong_kind.status,SourceStatus::IdentityMismatch);
+        assert!(wrong_kind.body.is_none());
+        assert_eq!(hits.load(Ordering::SeqCst),1);
+        {
+            let mut gate=state.lock().await;
+            gate.cache.get_mut(&url).expect("cached").fresh_until=Instant::now();
+            gate.next_request=None;
+        }
+        let failed_video = acquire(&client.client,&state,&url,Provider::MusicBrainz,video).await;
+        assert_eq!(failed_video.status,SourceStatus::Unavailable);
+        assert!(failed_video.body.is_none());
+        let stale_audio = acquire(&client.client,&state,&url,Provider::MusicBrainz, |_| None).await;
+        assert_eq!(stale_audio.status,SourceStatus::Unavailable);
+        assert_eq!(stale_audio.body,Some(body));
+        assert_eq!(stale_audio.observed_at,first.observed_at);
+        assert_eq!(hits.load(Ordering::SeqCst),2);
+        worker.join().expect("server");
+    }
+
+    #[test]
+    fn public_search_escapes_query_operators_but_keeps_artist_spelling() {
+        assert_eq!(search_query("AC/DC"), r"AC\/DC");
+        assert_eq!(search_query("Beyoncé"), "Beyoncé");
+        assert_eq!(search_query("Artist: title?"), r"Artist\: title\?");
     }
 
     #[test]
