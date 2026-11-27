@@ -16,7 +16,7 @@ let modalWasOpen=false,focusReturn=null,pageRetired=false,authTask=false,playbac
 let meshBeginStarted=false;
 let localLibrary=null,routeController=null,lyricsView=null,lyricsFrame=null;
 const categories=[['Home','home'],['Sports','sports'],['TV Shows','shows'],['Movies','movies'],['Live TV','live'],['Music','music']];
-const searchScopes=[['all','All',null],['movies','Movies','Movie'],['tvShows','TV Shows','Series,Season,Episode'],['music','Music','Audio,MusicAlbum,MusicArtist,MusicVideo,Playlist'],['sports','Sports',null],['liveTv','Live TV','TvChannel,LiveTvProgram']];
+const searchScopes=[['all','All',null],['movies','Movies','Movie'],['tvShows','TV Shows','Series,Season,Episode'],['music','Music','Audio,MusicAlbum,MusicArtist,MusicVideo,Playlist'],['sports','Sports',null],['liveTv','Live TV','TvChannel,LiveTvProgram'],['publicTv','Public TV catalog (TVmaze)',null]];
 function aborted(){return Object.assign(Error('The search or library view changed.'),{name:'AbortError'});}
 function notFound(error){return error?.status===404||/\bHTTP 404\b/.test(String(error?.message||error||''));}
 
@@ -429,11 +429,12 @@ async function readInvitationImage(file) {
 function hasSearchFacets(filters){return !!(filters.studioID||filters.tag||filters.collectionID);}
 function cleanSearchFilters(value={}) {
  const scope=searchScopes.some(([key])=>key===value.scope)?value.scope:'all';
- if(scope==='sports')return {scope,studioID:'',tag:'',collectionID:''};
+ if(scope==='sports'||scope==='publicTv')return {scope,studioID:'',tag:'',collectionID:''};
  return {scope,studioID:uuid(value.studioID)?id(value.studioID):'',tag:typeof value.tag==='string'?value.tag.slice(0,512):'',
   collectionID:uuid(value.collectionID)?id(value.collectionID):''};
 }
 function searchLanes(filters){
+ if(filters.scope==='publicTv')return [];
  if(hasSearchFacets(filters))return ['library'];
  if(filters.scope==='sports')return ['programmes'];
  if(filters.scope==='liveTv')return ['programmes','channels'];
@@ -508,7 +509,7 @@ async function loadSearch(route,get,current,signal){
   render();
  });
  const publicTerm=Array.from(route.query).slice(0,160).join('');
- if(publicTerm.length>=2&&!hasSearchFacets(route.filters)&&['all','tvShows'].includes(route.filters.scope)){
+ if(publicTerm.length>=2&&route.filters.scope==='publicTv'){
   search.publicTV={loading:true,items:[],unavailable:false};
   lookups.push(publicTVSearch(publicTerm,signal).then(titles=>{
    current();search.publicTV.items=titles;
@@ -520,11 +521,11 @@ async function loadSearch(route,get,current,signal){
 }
 async function startSearch(query,filters={},record=false){
  const previous=state.route,route={kind:'search',title:'Search',query:String(query).trim().slice(0,256),
-  filters:cleanSearchFilters(filters),refine:previous.kind==='search'&&previous.refine,liveAfter:new Date().toISOString()};
+  filters:cleanSearchFilters(state.session?filters:{scope:'publicTv'}),refine:previous.kind==='search'&&previous.refine,liveAfter:new Date().toISOString()};
  state.query=route.query;state.route=route;state.error='';
  const search=loadRoute();render();
- if(route.refine&&route.filters.scope!=='sports'&&(!state.facets||state.facets.loading))loadSearchFacets().catch(()=>{});
- if(record)recordHomeSearch(route.query).catch(()=>{});
+ if(route.refine&&!['sports','publicTv'].includes(route.filters.scope)&&(!state.facets||state.facets.loading))loadSearchFacets().catch(()=>{});
+ if(record&&route.filters.scope!=='publicTv')recordHomeSearch(route.query).catch(()=>{});
  try{await search;}catch(error){if(route===state.route&&error.name!=='AbortError')state.error=String(error.message||error);}
  finally{if(route===state.route)render();}
 }
@@ -850,8 +851,8 @@ function searchView(main){
  const route=state.route,filters=cleanSearchFilters(route.filters);
  const form=node('form',undefined,'search-form'),input=node('input');
  form.setAttribute('role','search');
- input.id='bluefin-search';input.type='search';input.placeholder=state.session?'Titles, artists, and channels':'TV show title';input.value=state.query;
- input.setAttribute('aria-label',state.session?'Search all media':'Search TV shows');input.maxLength=256;
+ input.id='bluefin-search';input.type='search';input.placeholder=state.session&&filters.scope!=='publicTv'?'Titles, artists, and channels':'TV show title';input.value=state.query;
+ input.setAttribute('aria-label',state.session&&filters.scope!=='publicTv'?'Search connected media':'Search TV shows');input.maxLength=256;
  input.oninput=()=>{state.query=input.value;};
  const submit=node('button','Search','primary');
  submit.type='submit';submit.id='bluefin-search-submit';
@@ -876,9 +877,9 @@ function searchView(main){
   route.refine=!route.refine;render();if(route.refine)loadSearchFacets().catch(error=>{state.error=String(error.message||error);render();});
  },'search-filter');
  refine.setAttribute('aria-expanded',String(!!route.refine));
- if(filters.scope!=='sports')tools.append(refine);
+ if(!['sports','publicTv'].includes(filters.scope))tools.append(refine);
  main.append(tools);
- if(route.refine&&filters.scope!=='sports'){
+ if(route.refine&&!['sports','publicTv'].includes(filters.scope)){
   const panel=node('section',undefined,'search-refinements'),facets=state.facets;
   panel.append(searchChoice('Studio','studio',filters.studioID,[['','All studios'],...(facets?.studios||[]).map(value=>[value.id,value.name])],
    studioID=>startSearch(state.query,{...filters,studioID}),facets?.pending?.has('studios')||false));
@@ -893,7 +894,10 @@ function searchView(main){
  }
  if(hasSearchFacets(filters))main.append(node('p','Filtering your library. The live guide is searched when these refinements are cleared.','secondary'),
   button('Clear refinements',()=>startSearch(state.query,{scope:filters.scope}),'plain'));
- if(search?.route===route&&search.publicTV)main.append(publicTVResults(search.publicTV));
+ if(filters.scope==='publicTv'){
+  if(search?.route===route&&search.publicTV)main.append(publicTVResults(search.publicTV));
+  return;
+ }
  if(search?.route===route)for(const page of search.pages){
   if(!page.items.length)continue;
   const section=node('section',undefined,'search-results');section.append(node('h2',page.title));

@@ -238,6 +238,7 @@ struct UnifiedSearchResults: View {
     @StateObject private var model = UnifiedSearchModel()
     @State private var filters: UnifiedSearchFilters
     @State private var showFilters = false
+    @State private var publicSearch: UnifiedSearchIdentity?
     init(query: String, initialScope: UnifiedSearchScope = .all) {
         self.query = query
         _filters = State(initialValue: .init(scope: initialScope))
@@ -267,8 +268,13 @@ struct UnifiedSearchResults: View {
                 }
             }
             if active {
-                if !store.preview && !filters.hasFacets && (filters.scope == .all || filters.scope == .tvShows) {
-                    PublicTVSearchSection(query: query)
+                if !store.preview && query.count >= 2 && !filters.hasFacets &&
+                    (filters.scope == .all || filters.scope == .tvShows) {
+                    if publicSearch == identity {
+                        PublicTVSearchSection(query: query)
+                    } else {
+                        Button("Search public TV titles on TVmaze") { publicSearch = identity }
+                    }
                 }
                 if !query.isEmpty && !filters.hasFacets {
                     if filters.scope.includesCatalog { ServerDiscoverySection(query: query, scope: filters.scope) }
@@ -301,7 +307,7 @@ struct UnifiedSearchResults: View {
             } else {
                 Section {
                     Label("Find your next favorite", systemImage: "magnifyingglass").font(.headline)
-                    Text("Search for a title or choose a media type. Connected libraries and the public TV catalog can appear together.")
+                    Text("Search for a title or choose a media type. You can also search the public TV catalog.")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -310,6 +316,7 @@ struct UnifiedSearchResults: View {
         .task(id: showFilters ? store.accountContext : nil) {
             if showFilters { await model.loadFacets(store: store) }
         }
+        .onChange(of: identity) { _ in publicSearch = nil }
         .onDisappear { model.cancel() }
     }
 

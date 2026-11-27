@@ -698,9 +698,13 @@ test('public TV discovery works without any connected peer and keeps catalog req
  assert(t.root.textContent.includes('Streaming availability for these results is unverified.'));
  assert(!findElement(t.root,e=>String(e.src).includes('unrelated.test')));
  await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
- await t.ui.startSearch('stage');
+ await t.ui.startSearch('private library title');
+ await t.ui.startSearch('private TV title',{scope:'tvShows'});
+ assert.equal(t.requests.filter(r=>new URL(r.url).hostname==='api.tvmaze.com').length,1);
+ await t.ui.startSearch('stage',{scope:'publicTv'});
  const publicRequests=t.requests.filter(r=>new URL(r.url).hostname==='api.tvmaze.com');
  assert.equal(publicRequests.length,2);
+ assert.equal(new URL(publicRequests[1].url).searchParams.get('q'),'stage');
  assert(publicRequests.every(r=>r.options.headers===undefined&&r.options.credentials==='omit'));
 });
 
