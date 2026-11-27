@@ -78,6 +78,14 @@ struct MusicAssistantQueue: Decodable, Sendable {
     let truncated: Bool?
 }
 
+/// Offscreen slots retain only their position, not provider URIs or track data.
+struct MusicAssistantTrackSlot: Identifiable {
+    let offset: UInt64
+    let count: Int
+    var items: [MusicAssistantTrack]?
+    var id: UInt64 { offset }
+}
+
 @MainActor final class MusicAssistantModel: ObservableObject {
     @Published var server = ""
     @Published var token = ""
@@ -86,6 +94,7 @@ struct MusicAssistantQueue: Decodable, Sendable {
     @Published private(set) var info: MusicAssistantInfo?
     @Published private(set) var players: [MusicAssistantPlayer] = []
     @Published private(set) var tracks: [MusicAssistantTrack] = []
+    @Published private(set) var trackPages: [MusicAssistantTrackSlot] = []
     @Published private(set) var queue: MusicAssistantQueue?
     @Published private(set) var selectedPlayerId: String?
     @Published private(set) var ready = false
@@ -97,6 +106,13 @@ struct MusicAssistantQueue: Decodable, Sendable {
     @Published private(set) var offset: UInt64 = 0
     @Published private(set) var hasMore = false
     private var nextOffset: UInt64 = 0
+    private var requestedLibraryPage: UInt64?
+    private var activeLibraryPage: UInt64?
+    private var failedLibraryPage: UInt64?
+    private var visibleLibraryPages: [UInt64: Int] = [:]
+    private var libraryPageRecency: [UInt64] = []
+    var libraryCursor: UInt64 { nextOffset }
+    var canRetryLibrary: Bool { failedLibraryPage != nil }
     private var connection: MusicAssistantConnection?
     private weak var store: LibraryStore?
     private var owner: String?
@@ -139,6 +155,7 @@ struct MusicAssistantQueue: Decodable, Sendable {
         pending?.cancel()
         pending = nil
         requestID = nil
+        resetLibraryWindow()
         store = nil
         accountGeneration = nil
         owner = nil
@@ -188,6 +205,7 @@ struct MusicAssistantQueue: Decodable, Sendable {
                     self.requestID = nil
                     self.pending = nil
                     self.busy = false
+                    self.scheduleLibraryPage()
                 }
             }
             do {
@@ -232,6 +250,7 @@ struct MusicAssistantQueue: Decodable, Sendable {
             self.connection = saved
             self.info = result
             self.server = result.server
+            self.resetLibraryWindow()
             self.ready = true
             try await self.loadPlayers(request)
             if result.capabilities.library { try await self.loadLibrary(request, offset: 0) }
@@ -242,7 +261,7 @@ struct MusicAssistantQueue: Decodable, Sendable {
         guard !busy, let saved = connection else { return }
         ready = false
         players = []
-        tracks = []
+        resetLibraryWindow()
         queue = nil
         selectedPlayerId = nil
         run { [weak self] request in
@@ -267,7 +286,7 @@ struct MusicAssistantQueue: Decodable, Sendable {
             connection = nil
             info = nil
             players = []
-            tracks = []
+            resetLibraryWindow()
             queue = nil
             selectedPlayerId = nil
             token = ""
@@ -305,25 +324,128 @@ struct MusicAssistantQueue: Decodable, Sendable {
         if selectedPlayer != nil, info?.capabilities.queue == true { refreshQueue() }
     }
 
-    private func loadLibrary(_ request: Request, offset: UInt64) async throws {
-        let page: MusicAssistantTrackPage = try await call("musicAssistantLibrary", request,
-            fields: ["limit": 25, "offset": offset])
-        tracks = page.items
-        self.offset = offset
-        nextOffset = page.nextOffset
-        hasMore = page.hasMore
+    private func resetLibraryWindow() {
+        tracks = []
+        trackPages = []
+        visibleLibraryPages = [:]
+        libraryPageRecency = []
+        requestedLibraryPage = nil
+        activeLibraryPage = nil
+        failedLibraryPage = nil
+        offset = 0
+        nextOffset = 0
+        hasMore = false
         isSearch = false
     }
 
+    private func loadLibrary(_ request: Request, offset: UInt64) async throws {
+        activeLibraryPage = offset
+        defer { if requestID == request.id, activeLibraryPage == offset { activeLibraryPage = nil } }
+        do {
+            let page: MusicAssistantTrackPage = try await call("musicAssistantLibrary", request,
+                fields: ["limit": 25, "offset": offset])
+            if let index = trackPages.firstIndex(where: { $0.offset == offset }) {
+                // A changed provider page must not shift the retained scroll slots.
+                trackPages[index].items = Array(page.items.prefix(trackPages[index].count))
+            } else {
+                trackPages.append(MusicAssistantTrackSlot(offset: offset, count: page.items.count, items: page.items))
+                trackPages.sort { $0.offset < $1.offset }
+            }
+            self.offset = offset
+            if page.nextOffset >= nextOffset {
+                nextOffset = page.nextOffset
+                hasMore = page.hasMore && page.nextOffset > offset
+            }
+            failedLibraryPage = nil
+            isSearch = false
+            // The upstream cursor counts inspected rows, including unavailable
+            // entries omitted by projection. Advance an empty page rather than
+            // leaving an unfillable loading row at the visible end.
+            if page.items.isEmpty, page.hasMore, page.nextOffset == nextOffset, page.nextOffset > offset {
+                requestedLibraryPage = page.nextOffset
+            }
+            touchLibraryPage(offset)
+            trimLibraryPages()
+        } catch {
+            if !(error is CancellationError) {
+                do { try check(request); failedLibraryPage = offset } catch {}
+            }
+            throw error
+        }
+    }
+
     func libraryPage(_ offset: UInt64 = 0) {
-        guard info?.capabilities.library == true else { return }
+        guard !busy, pending == nil, ready, info?.capabilities.library == true else { return }
+        resetLibraryWindow()
         run { [weak self] request in
             guard let self else { return }
             try await self.loadLibrary(request, offset: offset)
         }
     }
-    func nextPage() { if hasMore { libraryPage(nextOffset) } }
-    func previousPage() { libraryPage(offset > 25 ? offset - 25 : 0) }
+
+    func libraryPageAppeared(_ offset: UInt64, index: Int) {
+        visibleLibraryPages[offset, default: 0] += 1
+        touchLibraryPage(offset)
+        if trackPages.first(where: { $0.offset == offset })?.items == nil {
+            requestedLibraryPage = offset
+            scheduleLibraryPage()
+        }
+        trimLibraryPages()
+        if let page = trackPages.last, page.offset == offset, index >= max(0, page.count - 5) {
+            loadMoreTracks()
+        }
+    }
+
+    func libraryPageDisappeared(_ offset: UInt64) {
+        if let count = visibleLibraryPages[offset], count > 1 { visibleLibraryPages[offset] = count - 1 }
+        else { visibleLibraryPages[offset] = nil }
+        trimLibraryPages()
+    }
+
+    func loadMoreTracks() {
+        guard !isSearch, hasMore else { return }
+        requestedLibraryPage = nextOffset
+        scheduleLibraryPage()
+    }
+
+    func retryLibrary() {
+        guard let failedLibraryPage else { return }
+        self.failedLibraryPage = nil
+        requestedLibraryPage = failedLibraryPage
+        scheduleLibraryPage()
+    }
+
+    private func scheduleLibraryPage() {
+        guard !busy, pending == nil, ready, !isSearch, info?.capabilities.library == true else { return }
+        let visibleMissing = visibleLibraryPages.keys.sorted().first { offset in
+            offset != failedLibraryPage && trackPages.first(where: { $0.offset == offset })?.items == nil
+        }
+        guard let target = visibleMissing ?? requestedLibraryPage, target != failedLibraryPage else { return }
+        requestedLibraryPage = nil
+        guard trackPages.first(where: { $0.offset == target })?.items == nil else { return }
+        run { [weak self] request in
+            guard let self else { return }
+            try await self.loadLibrary(request, offset: target)
+        }
+    }
+
+    private func touchLibraryPage(_ offset: UInt64) {
+        libraryPageRecency.removeAll { $0 == offset }
+        libraryPageRecency.append(offset)
+    }
+
+    private func trimLibraryPages() {
+        var retained = trackPages.filter { $0.items != nil }.count
+        for offset in libraryPageRecency where retained > 5 {
+            guard visibleLibraryPages[offset] == nil, offset != activeLibraryPage,
+                  let index = trackPages.firstIndex(where: { $0.offset == offset }), trackPages[index].items != nil else { continue }
+            trackPages[index].items = nil
+            retained -= 1
+        }
+        let cached = Set(trackPages.filter { $0.items != nil }.map(\.offset))
+        libraryPageRecency.removeAll { !cached.contains($0) }
+        if !isSearch { tracks = trackPages.compactMap(\.items).flatMap { $0 } }
+    }
 
     func search() {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -332,6 +454,7 @@ struct MusicAssistantQueue: Decodable, Sendable {
             guard let self else { return }
             let page: MusicAssistantTrackPage = try await self.call("musicAssistantSearch", request,
                 fields: ["query": query, "limit": 25])
+            self.resetLibraryWindow()
             self.tracks = page.items
             self.offset = 0
             self.nextOffset = 0
@@ -380,6 +503,7 @@ struct MusicAssistantQueue: Decodable, Sendable {
 struct MusicAssistantView: View {
     @EnvironmentObject private var store: LibraryStore
     @StateObject private var model = MusicAssistantModel()
+    @ScaledMetric(relativeTo: .body) private var trackRowHeight: CGFloat = 140
 
     var body: some View {
         Form {
@@ -453,31 +577,51 @@ struct MusicAssistantView: View {
                     }
                 }
             }
-            ForEach(model.tracks) { track in
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(track.title).font(.headline)
-                    if !track.artist.isEmpty { Text(track.artist).font(.subheadline).foregroundStyle(.secondary) }
-                    HStack {
-                        Button("Play") { model.play(track, mode: "play") }
-                        Button("Add to queue") { model.play(track, mode: "add") }
-                    }.disabled(!model.canPlay || !track.available)
-                    if !track.available { Text("Unavailable in Music Assistant").font(.caption).foregroundStyle(.secondary) }
-                }.padding(.vertical, 4)
-            }
-            if model.tracks.isEmpty && !model.busy {
-                Text(model.isSearch ? "No matching tracks in this account's library." : "No tracks on this page.")
-                    .foregroundStyle(.secondary)
-            }
-            if !model.isSearch {
-                HStack {
-                    Button("Previous page") { model.previousPage() }.disabled(model.busy || model.offset == 0)
-                    Spacer()
-                    Button("Next page") { model.nextPage() }.disabled(model.busy || !model.hasMore)
+            if model.isSearch {
+                ForEach(model.tracks) { track in trackRow(track) }
+            } else {
+                ForEach(model.trackPages) { page in
+                    ForEach(0..<page.count, id: \.self) { index in
+                        Group {
+                            if let tracks = page.items, tracks.indices.contains(index) {
+                                trackRow(tracks[index])
+                            } else if page.items != nil {
+                                Text("This track is no longer available.").foregroundStyle(.secondary).frame(height: trackRowHeight)
+                            } else {
+                                ProgressView("Loading track…").frame(height: trackRowHeight)
+                            }
+                        }
+                        .onAppear { model.libraryPageAppeared(page.offset, index: index) }
+                        .onDisappear { model.libraryPageDisappeared(page.offset) }
+                    }
                 }
+                if model.hasMore {
+                    ProgressView("Loading more tracks…")
+                        .onAppear { model.loadMoreTracks() }
+                }
+                if model.canRetryLibrary {
+                    Button("Retry loading tracks") { model.retryLibrary() }.disabled(model.busy)
+                }
+            }
+            if model.tracks.isEmpty && model.trackPages.isEmpty && !model.busy {
+                Text(model.isSearch ? "No matching tracks in this account's library." : "No tracks are available in this library.")
+                    .foregroundStyle(.secondary)
             }
             Text("Music Assistant checks this account's sources and plays on the selected player. This connection does not download or share streaming-service audio.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
+    }
+
+    private func trackRow(_ track: MusicAssistantTrack) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(track.title).font(.headline).lineLimit(2)
+            if !track.artist.isEmpty { Text(track.artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
+            HStack {
+                Button("Play") { model.play(track, mode: "play") }
+                Button("Add to queue") { model.play(track, mode: "add") }
+            }.disabled(!model.canPlay || !track.available)
+            if !track.available { Text("Unavailable in Music Assistant").font(.caption).foregroundStyle(.secondary) }
+        }.padding(.vertical, 4).frame(height: trackRowHeight)
     }
 
     private var queue: some View {

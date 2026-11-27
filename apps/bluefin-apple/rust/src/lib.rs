@@ -781,9 +781,9 @@ pub fn call(v: &Value) -> Result<Value> {
                 ("Limit", count(v, "limit", 50, 200)?.to_string()),
                 ("Recursive", "true".into()),
                 ("Fields", if v.get("searchScope").and_then(Value::as_str).is_some() {
-                    "PrimaryImageAspectRatio,Overview,ProviderIds"
+                    "PrimaryImageAspectRatio,Overview,Genres,DateCreated,ProviderIds"
                 } else {
-                    "PrimaryImageAspectRatio,Overview"
+                    "PrimaryImageAspectRatio,Overview,Genres,DateCreated"
                 }.into()),
             ];
             for (key, out) in [

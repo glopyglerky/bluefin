@@ -34,8 +34,72 @@ struct UnifiedSearchFilters: Hashable, Sendable {
     var studioID: String?
     var tag: String?
     var collectionID: String?
-    var hasFacets: Bool { studioID != nil || tag != nil || collectionID != nil }
-    var count: Int { [studioID, tag, collectionID].compactMap { $0 }.count }
+    var source = UnifiedSearchSource.allSources
+    var sort = LibrarySearchSort.relevance
+    var watched = LibraryWatchFilter.all
+    var favoritesOnly = false
+    var genre: String?
+    var year: Int?
+    var hasFacets: Bool {
+        studioID != nil || tag != nil || collectionID != nil || watched != .all || favoritesOnly || genre != nil || year != nil
+    }
+    var count: Int {
+        [studioID, tag, collectionID, genre].compactMap { $0 }.count +
+        (watched == .all ? 0 : 1) + (favoritesOnly ? 1 : 0) + (year == nil ? 0 : 1)
+    }
+    var libraryOnly: Bool { scope == .libraryOnly || source == .library || hasFacets || sort != .relevance }
+    func apply(to fields: inout [String: Any]) {
+        sort.apply(to: &fields)
+        if let id = studioID { fields["studioIds"] = [id] }
+        if let tag { fields["tags"] = [tag] }
+        if let id = collectionID { fields["parentId"] = id }
+        if watched != .all { fields["isPlayed"] = watched == .watched }
+        if favoritesOnly { fields["isFavorite"] = true }
+        if let genre { fields["genres"] = [genre] }
+        if let year { fields["years"] = [year] }
+    }
+}
+
+enum UnifiedSearchSource: String, CaseIterable, Identifiable, Sendable {
+    case allSources, library
+    var id: Self { self }
+    var title: String { self == .library ? "Your library" : "All sources" }
+}
+
+enum LibrarySearchSort: String, CaseIterable, Identifiable, Sendable {
+    case relevance, titleAscending, titleDescending, recentlyAdded, newestReleased, oldestReleased
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .relevance: "Relevance"
+        case .titleAscending: "Title A–Z"
+        case .titleDescending: "Title Z–A"
+        case .recentlyAdded: "Recently added"
+        case .newestReleased: "Newest release"
+        case .oldestReleased: "Oldest release"
+        }
+    }
+    func apply(to fields: inout [String: Any]) {
+        guard self != .relevance else { return }
+        let key: String
+        switch self {
+        case .relevance: return
+        case .titleAscending, .titleDescending: key = "SortName"
+        case .recentlyAdded: key = "DateCreated"
+        case .newestReleased, .oldestReleased: key = "PremiereDate"
+        }
+        fields["sortBy"] = key
+        fields["sortOrder"] = self == .titleAscending || self == .oldestReleased ? "Ascending" : "Descending"
+        fields["searchOrder"] = "SortBy"
+    }
+}
+
+enum LibraryWatchFilter: String, CaseIterable, Identifiable, Sendable {
+    case all, unwatched, watched
+    var id: Self { self }
+    var title: String {
+        switch self { case .all: "All"; case .unwatched: "Unwatched"; case .watched: "Watched" }
+    }
 }
 
 struct UnifiedSearchIdentity: Hashable {
@@ -57,8 +121,7 @@ enum UnifiedSearchLane: String, CaseIterable, Sendable {
     }
 }
 
-/// Every page carries the same server filters. Guide endpoints do not support
-/// library metadata facets, so refined searches use the scoped Items endpoint.
+/// Each fetched or rehydrated page carries the complete original search.
 struct UnifiedSearchRequest {
     let query: String
     let filters: UnifiedSearchFilters
@@ -69,7 +132,7 @@ struct UnifiedSearchRequest {
         minEndDate = ISO8601DateFormatter().string(from: now)
     }
     var lanes: [UnifiedSearchLane] {
-        if filters.hasFacets { return [.library] }
+        if filters.libraryOnly { return [.library] }
         if filters.scope == .liveTv { return [.programmes, .channels] }
         if filters.scope == .people { return [.people] }
         var values: [UnifiedSearchLane] = [.library]
@@ -78,16 +141,15 @@ struct UnifiedSearchRequest {
         if filters.scope.includesChannels { values += [.programmes, .channels] }
         return values
     }
-    var isActive: Bool { !query.isEmpty || filters.scope != .all || filters.hasFacets }
-    func call(for lane: UnifiedSearchLane, start: Int) -> (operation: String, fields: [String: Any]) {
-        var fields: [String: Any] = ["startIndex": start, "limit": 60]
+    var isActive: Bool { !query.isEmpty || filters.scope != .all || filters.libraryOnly }
+    func call(for lane: UnifiedSearchLane, start: Int, limit: Int = MediaPageWindow.pageSize) -> (operation: String, fields: [String: Any]) {
+        var fields: [String: Any] = ["startIndex": start, "limit": limit]
         if !query.isEmpty { fields["searchTerm"] = query }
         switch lane {
         case .library:
             fields["searchScope"] = filters.scope == .libraryOnly || filters.scope == .people ? "all" : filters.scope.rawValue
-            if let id = filters.studioID { fields["studioIds"] = [id] }
-            if let tag = filters.tag { fields["tags"] = [tag] }
-            if let id = filters.collectionID { fields["parentId"] = id }
+            if filters.scope == .people { fields["includeItemTypes"] = "Person"; fields.removeValue(forKey: "searchScope") }
+            filters.apply(to: &fields)
             return ("items", fields)
         case .artists:
             fields["kind"] = "artists"
@@ -103,18 +165,7 @@ struct UnifiedSearchRequest {
     }
 }
 
-struct UnifiedSearchPage {
-    private(set) var items: [MediaItem] = []
-    private(set) var nextIndex = 0
-    private(set) var total = 0
-    var hasMore: Bool { nextIndex < total }
-    mutating func append(_ page: ItemPage) {
-        var existing = Set(items.map(\.Id))
-        items += page.Items.filter { existing.insert($0.Id).inserted }
-        nextIndex += page.Items.count
-        total = page.Items.isEmpty ? nextIndex : max(nextIndex, page.TotalRecordCount ?? nextIndex)
-    }
-}
+typealias UnifiedSearchPage = MediaPageWindow
 
 struct UnifiedSearchFacetOption: Decodable, Identifiable {
     let id: String
@@ -124,99 +175,93 @@ struct UnifiedSearchFacets: Decodable {
     var studios: [UnifiedSearchFacetOption] = []
     var tags: [String] = []
     var collections: [UnifiedSearchFacetOption] = []
+    var genres: [String]?
+    var years: [Int]?
     var truncated: Bool?
 }
 
 @MainActor final class UnifiedSearchModel: ObservableObject {
-    @Published private(set) var pages: [UnifiedSearchLane: UnifiedSearchPage] = [:]
+    @Published private(set) var laneModels: [UnifiedSearchLane: PagedMediaModel] = [:]
     @Published private(set) var loading = false
     @Published private(set) var loadedContext: UUID?
-    @Published private(set) var failures: [String] = []
+    @Published private(set) var loadedQuery = ""
     @Published private(set) var filters = UnifiedSearchFilters()
     @Published private(set) var facets = UnifiedSearchFacets()
     @Published private(set) var facetsLoading = false
     @Published private(set) var facetsProblem: String?
     private var facetsContext: UUID?
     private var generation = UUID()
-    private var request: UnifiedSearchRequest?
-    private var moreTask: Task<Void, Never>?
-    private enum Part { case page(UnifiedSearchLane, ItemPage), failure(String) }
-    var items: [MediaItem] { pages[.library]?.items ?? [] }
-    var artists: [MediaItem] { pages[.artists]?.items ?? [] }
-    var channels: [MediaItem] { pages[.channels]?.items ?? [] }
-    var programmes: [MediaItem] { pages[.programmes]?.items ?? [] }
-    var isEmpty: Bool { pages.values.allSatisfy { $0.items.isEmpty } }
+    private var loadedIdentity: UnifiedSearchIdentity?
+    var pages: [UnifiedSearchLane: UnifiedSearchPage] { laneModels.mapValues(\.window) }
+    var items: [MediaItem] { laneModels[.library]?.items ?? [] }
+    var artists: [MediaItem] { laneModels[.artists]?.items ?? [] }
+    var channels: [MediaItem] { laneModels[.channels]?.items ?? [] }
+    var programmes: [MediaItem] { laneModels[.programmes]?.items ?? [] }
+    var isEmpty: Bool { laneModels.values.allSatisfy { $0.window.nextIndex == 0 } }
 
     func load(query: String, store: LibraryStore, filters: UnifiedSearchFilters = .init()) async {
-        moreTask?.cancel(); moreTask = nil
-        let current = UUID(); generation = current
-        let context = store.accountContext
+        let identity = UnifiedSearchIdentity(query: query, filters: filters, account: store.accountContext)
+        if loadedIdentity == identity, !laneModels.isEmpty { return }
+        cancel()
+        loadedIdentity = identity
+        let current = generation, context = store.accountContext
         let request = UnifiedSearchRequest(query: query, filters: filters)
-        self.request = request; self.filters = filters
-        loadedContext = nil; pages = [:]; failures = []; loading = request.isActive
+        self.filters = filters; loadedQuery = request.query
+        loadedContext = nil; laneModels = [:]; loading = request.isActive
         guard request.isActive else { return }
+        await store.loadSearchCapabilities()
+        guard generation == current, store.accountContext == context, !Task.isCancelled else { return }
+        laneModels = Dictionary(uniqueKeysWithValues: request.lanes.map { ($0, PagedMediaModel()) })
+        loadedContext = context
         defer { if generation == current { loading = false } }
-        await withTaskGroup(of: Part.self) { group in
-            for lane in request.lanes {
+        await withTaskGroup(of: Void.self) { group in
+            for (lane, model) in laneModels {
                 group.addTask {
-                    do { return .page(lane, try await Self.fetch(request, lane: lane, start: 0, store: store, context: context)) }
-                    catch is CancellationError { return .failure("") }
-                    catch { return .failure(lane.title + ": " + error.localizedDescription) }
+                    await model.start { start, limit in
+                        try Task.checkCancellation()
+                        guard store.accountContext == context else { throw CancellationError() }
+                        return try await Self.fetch(request, lane: lane, start: start, limit: limit, store: store, context: context)
+                    }
                 }
             }
-            for await part in group {
-                guard generation == current, !Task.isCancelled, store.accountContext == context else {
-                    group.cancelAll(); continue
-                }
-                loadedContext = context
-                switch part {
-                case .page(let lane, let page):
-                    var result = UnifiedSearchPage(); result.append(page); pages[lane] = result
-                case .failure(let message):
-                    if !message.isEmpty { failures.append(message) }
-                }
-            }
+            await group.waitForAll()
         }
+        guard generation == current, store.accountContext == context, !Task.isCancelled else { return }
     }
 
     func loadMore(_ lane: UnifiedSearchLane, store: LibraryStore) {
-        guard !loading, let request, let page = pages[lane], page.hasMore,
-              loadedContext == store.accountContext else { return }
-        let current = generation, context = store.accountContext
-        loading = true
-        moreTask = Task {
-            defer { if generation == current { loading = false } }
-            do {
-                let next = try await Self.fetch(request, lane: lane, start: page.nextIndex, store: store, context: context)
-                try Task.checkCancellation()
-                guard generation == current, store.accountContext == context else { return }
-                var updated = page; updated.append(next); pages[lane] = updated
-            } catch is CancellationError {} catch {
-                guard generation == current, store.accountContext == context else { return }
-                failures.append(lane.title + ": " + error.localizedDescription)
-            }
-        }
+        guard loadedContext == store.accountContext else { return }
+        laneModels[lane]?.loadNext()
     }
 
-    func cancel() { moreTask?.cancel(); moreTask = nil; generation = UUID(); loading = false }
+    func cancel() {
+        generation = UUID()
+        laneModels.values.forEach { $0.cancel() }
+        loading = false
+    }
 
-    private static func fetch(_ request: UnifiedSearchRequest, lane: UnifiedSearchLane, start: Int,
+    private static func fetch(_ request: UnifiedSearchRequest, lane: UnifiedSearchLane, start: Int, limit: Int,
                               store: LibraryStore, context: UUID) async throws -> ItemPage {
         try Task.checkCancellation()
         guard store.accountContext == context else { throw CancellationError() }
         if store.preview {
-            if request.filters.hasFacets { return .init(Items: [], TotalRecordCount: 0) }
             switch lane {
             case .library:
-                return try await store.items(query: request.query, start: start, includeItemTypes: request.filters.scope.previewTypes)
+                return try await store.items(query: request.query, start: start,
+                    includeItemTypes: request.filters.scope.previewTypes, limit: limit, filters: request.filters)
             case .artists:
-                return try await store.musicItems(type: "MusicArtist", start: start, query: request.query)
+                return try await store.musicItems(type: "MusicArtist", start: start, query: request.query, limit: limit)
             case .people, .programmes, .channels:
                 return .init(Items: [], TotalRecordCount: 0)
             }
         }
-        let call = request.call(for: lane, start: start)
+        if !request.query.isEmpty, request.filters.sort != .relevance, !store.supportsExplicitSearchSort {
+            throw BluefinError.message("This server does not support sorting search results. Choose Relevance.")
+        }
+        var call = request.call(for: lane, start: start, limit: limit)
+        if request.query.isEmpty { call.fields.removeValue(forKey: "searchOrder") }
         let page: ItemPage = try await store.authenticated(call.operation, fields: call.fields)
+        try Task.checkCancellation()
         guard store.accountContext == context else { throw CancellationError() }
         return page
     }
@@ -240,6 +285,44 @@ struct UnifiedSearchFacets: Decodable {
     }
 }
 
+struct SearchLaneRows<Row: View>: View {
+    let title: String
+    @ObservedObject var model: PagedMediaModel
+    @ViewBuilder var row: (MediaItem) -> Row
+    @ScaledMetric(relativeTo: .body) private var rowHeight: CGFloat = 78
+    var body: some View {
+        Section(title) {
+            ForEach(model.window.pages) { page in
+                ForEach(page.range, id: \.self) { index in
+                    Group {
+                        if model.window.isDuplicate(at: index) {
+                            Color.clear.accessibilityHidden(true)
+                        } else if let item = model.window.item(at: index) {
+                            row(item)
+                        } else if let problem = model.failures[page.start] {
+                            MediaLoadingRow(message: problem, retry: { model.retry(page.start) })
+                        } else if page.items != nil {
+                            Text("This title is no longer available.").foregroundStyle(.secondary)
+                        } else {
+                            MediaLoadingRow()
+                        }
+                    }
+                    .frame(height: rowHeight, alignment: .leading)
+                    .onAppear { model.appear(index) }
+                    .onDisappear { model.disappear(index) }
+                }
+            }
+            if let problem = model.failures[model.window.nextIndex] {
+                MediaLoadingRow(message: problem, retry: { model.retry(model.window.nextIndex) })
+            } else if model.loading {
+                ProgressView("Loading results")
+            } else if model.window.nextIndex > 0 && !model.window.hasMore {
+                Text("All results loaded").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 struct UnifiedSearchResults: View {
     let query: String
     @EnvironmentObject private var store: LibraryStore
@@ -248,85 +331,107 @@ struct UnifiedSearchResults: View {
     @State private var showFilters = false
     init(query: String, initialScope: UnifiedSearchScope = .all) {
         self.query = query
-        _filters = State(initialValue: .init(scope: initialScope))
+        _filters = State(initialValue: .init(scope: initialScope == .libraryOnly ? .all : initialScope,
+            source: initialScope == .libraryOnly ? .library : .allSources))
     }
     private var identity: UnifiedSearchIdentity {
         .init(query: query, filters: filters, account: store.accountContext)
     }
-    private var active: Bool { !query.isEmpty || filters.scope != .all || filters.hasFacets }
-    private var current: Bool { model.filters == filters && model.loadedContext == store.accountContext }
+    private var active: Bool { !query.isEmpty || filters.scope != .all || filters.libraryOnly }
+    private var current: Bool {
+        model.filters == filters && model.loadedContext == store.accountContext &&
+        model.loadedQuery == query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
     var body: some View {
         List {
             Section {
                 scopePicker
+                Picker("Sources", selection: Binding(get: { filters.source }, set: { source in
+                    if source == .allSources { filters = .init(scope: filters.scope, source: source) }
+                    else { filters.source = source }
+                })) {
+                    ForEach(UnifiedSearchSource.allCases) { Text($0.title).tag($0) }
+                }.accessibilityIdentifier("searchSources")
+                if filters.source == .library {
+                    Picker("Sort", selection: $filters.sort) {
+                        ForEach(LibrarySearchSort.allCases.filter { query.isEmpty || store.supportsExplicitSearchSort || $0 == .relevance }) {
+                            Text($0.title).tag($0)
+                        }
+                    }.accessibilityIdentifier("searchSort")
+                    if !query.isEmpty && !store.supportsExplicitSearchSort {
+                        Text("This server supports relevance search. Other search orders are unavailable.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    HStack { Text("Sort"); Spacer(); Text("Relevance").foregroundStyle(.secondary) }
+                }
                 Button { showFilters.toggle() } label: {
                     Label(filters.hasFacets ? "Refine search (\(filters.count))" : "Refine search",
                           systemImage: "line.3.horizontal.decrease.circle")
                 }.accessibilityIdentifier("searchRefinements")
                 if showFilters { refinementControls }
-                if filters.hasFacets {
+                if filters.hasFacets { activeFilterChips }
+                if filters.libraryOnly {
                     HStack {
-                        Text("Filtering your library").font(.caption).foregroundStyle(.secondary)
+                        Text("Showing matching titles in your library.").font(.caption).foregroundStyle(.secondary)
                         Spacer()
-                        Button("Clear refinements") {
-                            filters.studioID = nil; filters.tag = nil; filters.collectionID = nil
-                        }
+                        Button("Clear") { filters = .init(scope: filters.scope, source: filters.source) }
                     }
                 }
             }
             if active {
-                if !store.preview && query.count >= 2 && !filters.hasFacets {
-                    if filters.scope == .all || filters.scope == .tvShows {
-                        PublicTitleSearchSection(query: query, catalog: .television)
-                    }
-                    if filters.scope == .all || filters.scope == .movies {
-                        PublicTitleSearchSection(query: query, catalog: .film, library: current ? model.items : [])
+                if current {
+                    ForEach(UnifiedSearchLane.allCases, id: \.self) { lane in
+                        if let page = model.laneModels[lane] {
+                            SearchLaneRows(title: lane.title, model: page) { item in result(item) }
+                        }
                     }
                 }
-                if !store.preview && !filters.hasFacets && filters.scope.includesArtists {
-                    PublicMusicSearchSection(query: query, kind: "artist", library: current ? model.items : [])
-                    PublicMusicSearchSection(query: query, kind: "releaseGroup", library: current ? model.items : [])
-                    PublicMusicSearchSection(query: query, kind: "recording", library: current ? model.items : [])
-                }
-                if !query.isEmpty && !filters.hasFacets {
-                    if filters.scope.includesCatalog { ServerDiscoverySection(query: query, scope: filters.scope) }
-                    if filters.scope == .all || filters.scope == .music { ServerDiscoverySection(query: query, scope: .music) }
+                if model.loading && !current { ProgressView("Searching") }
+                if !model.loading && current && model.isEmpty {
+                    Text(filters.hasFacets ? "No titles match these refinements." : "No matching titles in your connected library or guide.")
+                        .foregroundStyle(.secondary)
                 }
                 if current && !query.isEmpty {
                     LocalAssistanceSearchSection(query: query, candidates: model.items + model.artists,
                                                  loadedContext: model.loadedContext)
                         .id(identity)
                 }
-                if current {
-                    ForEach(UnifiedSearchLane.allCases, id: \.self) { lane in
-                        if let page = model.pages[lane], !page.items.isEmpty {
-                            Section(lane.title) {
-                                ForEach(displayed(page.items, lane: lane)) { item in result(item) }
-                                if page.hasMore {
-                                    Button("More \(lane.title.lowercased()) results") { model.loadMore(lane, store: store) }
-                                        .disabled(model.loading)
-                                }
-                            }
-                        }
-                    }
+                if !query.isEmpty && !filters.libraryOnly {
+                    if filters.scope.includesCatalog { ServerDiscoverySection(query: query, scope: filters.scope) }
+                    if filters.scope == .all || filters.scope == .music { ServerDiscoverySection(query: query, scope: .music) }
                 }
-                if model.loading { ProgressView("Searching") }
-                ForEach(model.failures, id: \.self) { Text($0).font(.callout).foregroundStyle(.secondary) }
-                if !model.loading && current && model.isEmpty {
-                    Text(filters.hasFacets ? "No titles match these refinements." : "No matching titles in your connected library or guide.")
-                        .foregroundStyle(.secondary)
+                if !store.preview && query.count >= 2 && !filters.libraryOnly {
+                    if filters.scope == .all || filters.scope == .tvShows {
+                        PublicTitleSearchSection(query: query, catalog: .television)
+                    }
+                    if filters.scope == .all || filters.scope == .movies {
+                        PublicTitleSearchSection(query: query, catalog: .film, library: current ? model.items : [])
+                    }
+                    if filters.scope.includesArtists {
+                        PublicMusicSearchSection(query: query, kind: "artist", library: current ? model.items : [])
+                        PublicMusicSearchSection(query: query, kind: "releaseGroup", library: current ? model.items : [])
+                        PublicMusicSearchSection(query: query, kind: "recording", library: current ? model.items : [])
+                    }
                 }
             } else {
                 Section {
                     Label("Find your next favorite", systemImage: "magnifyingglass").font(.headline)
-                    Text("Search your connected media and public catalogs. Choose Library only to search your connected library.")
+                    Text("Search your connected media and public catalogs. Choose Your library to search only your connected media.")
                         .foregroundStyle(.secondary)
                 }
             }
         }
+        .id(identity)
         .task(id: identity) { await model.load(query: query, store: store, filters: filters) }
         .task(id: showFilters ? store.accountContext : nil) {
             if showFilters { await model.loadFacets(store: store) }
+        }
+        .onChange(of: filters.hasFacets) { hasFacets in
+            if hasFacets { filters.source = .library }
+        }
+        .onChange(of: store.supportsExplicitSearchSort) { supported in
+            if !supported && !query.isEmpty { filters.sort = .relevance }
         }
         .onDisappear { model.cancel() }
     }
@@ -342,15 +447,52 @@ struct UnifiedSearchResults: View {
     }
     private var picker: some View {
         Picker("Media type", selection: $filters.scope) {
-            ForEach(UnifiedSearchScope.allCases) { scope in Text(scope.title).tag(scope) }
+            ForEach(UnifiedSearchScope.allCases.filter { $0 != .libraryOnly }) { scope in Text(scope.title).tag(scope) }
         }
     }
     private func selection(_ keyPath: WritableKeyPath<UnifiedSearchFilters, String?>) -> Binding<String> {
         Binding(get: { filters[keyPath: keyPath] ?? "" },
                 set: { filters[keyPath: keyPath] = $0.isEmpty ? nil : $0 })
     }
+    private func filterChip(_ title: String, clear: @escaping () -> Void) -> some View {
+        Button(action: clear) { Label(title, systemImage: "xmark.circle.fill") }
+            .font(.caption).buttonStyle(.bordered).accessibilityLabel("Remove filter: " + title)
+    }
+    private var activeFilterChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack {
+                if filters.watched != .all { filterChip(filters.watched.title) { filters.watched = .all } }
+                if filters.favoritesOnly { filterChip("Favorites") { filters.favoritesOnly = false } }
+                if let genre = filters.genre { filterChip(genre) { filters.genre = nil } }
+                if let year = filters.year { filterChip(String(year)) { filters.year = nil } }
+                if let tag = filters.tag { filterChip(tag) { filters.tag = nil } }
+                if let id = filters.studioID {
+                    filterChip(model.facets.studios.first { $0.id == id }?.name ?? "Studio") { filters.studioID = nil }
+                }
+                if let id = filters.collectionID {
+                    filterChip(model.facets.collections.first { $0.id == id }?.name ?? "Collection") { filters.collectionID = nil }
+                }
+            }
+        }
+    }
     @ViewBuilder private var refinementControls: some View {
-        if model.facetsLoading { ProgressView("Loading your server’s refinements") }
+        Picker("Watch status", selection: $filters.watched) {
+            ForEach(LibraryWatchFilter.allCases) { Text($0.title).tag($0) }
+        }
+        Toggle("Favorites only", isOn: $filters.favoritesOnly)
+        if model.facetsLoading { ProgressView("Loading refinements") }
+        if let genres = model.facets.genres, !genres.isEmpty {
+            Picker("Genre", selection: selection(\.genre)) {
+                Text("All genres").tag("")
+                ForEach(genres, id: \.self) { Text($0).tag($0) }
+            }
+        }
+        if let years = model.facets.years, !years.isEmpty {
+            Picker("Release year", selection: Binding(get: { filters.year ?? 0 }, set: { filters.year = $0 == 0 ? nil : $0 })) {
+                Text("All years").tag(0)
+                ForEach(years, id: \.self) { Text(String($0)).tag($0) }
+            }
+        }
         Picker("Studio", selection: selection(\.studioID)) {
             Text("All studios").tag("")
             ForEach(model.facets.studios) { Text($0.name).tag($0.id) }
@@ -363,21 +505,14 @@ struct UnifiedSearchResults: View {
             Text("All collections").tag("")
             ForEach(model.facets.collections) { Text($0.name).tag($0.id) }
         }
-        Text("Studios, tags, and collections come from your server. Use its tags for services or custom groups, and its collections for grouped titles. Refinements search library metadata; connected catalogs and the live guide are searched without these refinements.")
-            .font(.footnote).foregroundStyle(.secondary)
         if model.facets.truncated == true {
-            Text("Your server has more refinements than can be shown here. Open Collections to browse all groups.")
+            Text("Some refinements are available by opening their collection.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
         if let problem = model.facetsProblem {
             Text(problem).font(.footnote).foregroundStyle(.secondary)
             Button("Reload refinements") { Task { await model.loadFacets(store: store) } }
         }
-    }
-    private func displayed(_ items: [MediaItem], lane: UnifiedSearchLane) -> [MediaItem] {
-        guard lane == .artists || lane == .programmes else { return items }
-        let existing = Set(model.items.map(\.Id))
-        return items.filter { !existing.contains($0.Id) }
     }
     @ViewBuilder private func result(_ item: MediaItem) -> some View {
         if ["Audio", "MusicAlbum", "MusicArtist", "Playlist"].contains(item.Type ?? "") {
@@ -389,19 +524,20 @@ struct UnifiedSearchResults: View {
             } else {
                 resultLink(item) { MusicRow(item: item) }
             }
-        } else if ["TvChannel", "LiveTvChannel"].contains(item.Type ?? "") {
+        } else {
             resultLink(item) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(item.title).font(.headline)
-                    if let programme = item.CurrentProgram?.title { Text(programme).font(.subheadline).foregroundStyle(.secondary) }
+                HStack(spacing: 14) {
+                    Artwork(item: item, thumbnailWidth: 128)
+                        .aspectRatio(2 / 3, contentMode: .fit).frame(width: 42, height: 63)
+                        .clipShape(RoundedRectangle(cornerRadius: 6)).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.displayTitle).font(.headline).lineLimit(1)
+                        if !item.displaySubtitle.isEmpty {
+                            Text(item.displaySubtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
                 }
             }
-        } else if ["Program", "LiveTvProgram"].contains(item.Type ?? "") {
-            if item.ChannelId != nil {
-                resultLink(item) { Label(item.title, systemImage: "calendar") }
-            } else { Label(item.title, systemImage: "calendar") }
-        } else {
-            resultLink(item) { Label(item.title, systemImage: ["Episode", "Season", "Series"].contains(item.Type ?? "") ? "tv" : "film") }
         }
     }
     private func resultLink<LabelView: View>(_ item: MediaItem, @ViewBuilder label: @escaping () -> LabelView) -> some View {

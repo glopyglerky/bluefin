@@ -108,8 +108,7 @@ struct MusicCollection: View {
     var initialFavorites = false
     var genre = ""
     @EnvironmentObject private var store: LibraryStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @StateObject private var model = MusicLibraryModel()
+    @StateObject private var model = PagedMediaModel()
     @State private var query = ""
     @State private var sort: MusicSort = .name
     @State private var favorites = false
@@ -118,6 +117,9 @@ struct MusicCollection: View {
     @State private var selectedTracks: [MediaItem] = []
     @State private var refresh = UUID()
     @State private var fromLetter = ""
+    @State private var loadedKey: String?
+    @ScaledMetric(relativeTo: .body) private var trackHeight: CGFloat = 74
+    @ScaledMetric(relativeTo: .subheadline) private var captionHeight: CGFloat = 76
     init(title: String, type: String = "Audio", parent: MediaItem? = nil,
          initialSort: MusicSort = .name, initialFavorites: Bool = false, genre: String = "") {
         self.title = title; self.type = type; self.parent = parent
@@ -127,10 +129,16 @@ struct MusicCollection: View {
     private var isAlbum: Bool { parent?.Type == "MusicAlbum" }
     private var isPlaylist: Bool { parent?.Type == "Playlist" }
     private var isTracks: Bool { type == "Audio" }
-    private var requestKey: String { "\(query)|\(sort.rawValue)|\(favorites)|\(fromLetter)|\(refresh)|\(store.session?.server ?? "")|\(store.session?.userId ?? "")" }
+    private var requestKey: String {
+        "\(type)|\(parent?.Id ?? "")|\(query)|\(sort.rawValue)|\(favorites)|\(genre)|\(fromLetter)|\(refresh)|\(store.accountContext)"
+    }
+    private var current: Bool { loadedKey == requestKey }
     private var letters: [String] { "ABCDEFGHIJKLMNOPQRSTUVWXYZ".map(String.init) }
     var body: some View {
-        ScrollViewReader { reader in
+        GeometryReader { geometry in
+            let width = max(1, geometry.size.width - 40)
+            let columns = max(1, Int((width + 20) / (cardWidth + 20)))
+            let cellWidth = max(1, (width - CGFloat(columns - 1) * 20) / CGFloat(columns))
             List {
                 if let parent { Section { collectionHeader(parent).listRowBackground(Color.clear) } }
                 if let parent, let identity = PublicCatalogIdentity.library(parent) {
@@ -139,96 +147,158 @@ struct MusicCollection: View {
                 if !isPlaylist && !isAlbum {
                     Section {
                         HStack {
-                            if !isAlbum { Picker("Sort", selection: $sort) { ForEach(MusicSort.allCases) { Text($0.rawValue).tag($0) } } }
+                            Picker("Sort", selection: $sort) { ForEach(MusicSort.allCases) { Text($0.rawValue).tag($0) } }
                             Toggle("Favorites", isOn: $favorites)
                         }
-                        if sort == .name && !isAlbum && !model.items.isEmpty {
+                        if sort == .name {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack {
                                     Button("All") { fromLetter = "" }.frame(minWidth: 44, minHeight: 44)
                                     ForEach(letters, id: \.self) { letter in
-                                        Button(letter) {
-                                            fromLetter = letter
-                                        }.frame(minWidth: 44, minHeight: 44).accessibilityLabel("Browse from \(letter)")
+                                        Button(letter) { fromLetter = letter }
+                                            .frame(minWidth: 44, minHeight: 44).accessibilityLabel("Browse from \(letter)")
                                     }
                                 }
                             }
                         }
                     }
                 }
-                if isTracks && !model.items.isEmpty {
+                if current && isTracks && !model.items.isEmpty {
                     Section {
-                        MusicPlayActions(pageOnly: model.hasNext || model.hasPrevious, disabled: store.startingPlayback) { shuffled in
-                            Task { await store.playMusic(model.items, shuffled: shuffled) }
+                        MusicPlayActions(pageOnly: model.window.cachedItemCount < model.window.total, songCount: model.items.count, disabled: store.startingPlayback) { shuffled in
+                            let songs = model.items, context = store.accountContext
+                            Task {
+                                guard store.accountContext == context else { return }
+                                await store.playMusic(songs, shuffled: shuffled)
+                            }
                         }
                     }
                 }
-                if isTracks {
-                    Section {
-                        ForEach(Array(model.items.enumerated()), id: \.offset) { index, item in
-                            Button { Task { await store.playMusic(model.items, at: index) } } label: {
-                                MusicRow(item: item, trackNumber: isAlbum ? item.IndexNumber : nil)
-                            }.modifier(MusicContentLinkStyle()).disabled(store.startingPlayback).id(isPlaylist ? "\(index):\(item.Id)" : item.Id)
-                                .contextMenu { trackMenu(item) }
-                        }
-                    }
-                } else {
-                    Section {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: cardWidth), spacing: 20)], alignment: .leading, spacing: 26) {
-                            ForEach(model.items) { item in
-                                NavigationLink(destination: MusicCollection(title: item.title, type: item.Type == "MusicArtist" ? "MusicAlbum" : "Audio", parent: item)) { MusicShelfCard(item: item) }.id(item.Id)
+                if current {
+                    if isTracks {
+                        Section {
+                            ForEach(model.window.pages) { page in
+                                ForEach(page.range, id: \.self) { index in
+                                    trackSlot(index, page: page)
+                                        .frame(height: trackHeight)
+                                        .onAppear { model.appear(index) }
+                                        .onDisappear { model.disappear(index) }
+                                }
                             }
-                        }.padding(.vertical, 12).listRowBackground(Color.clear)
+                        }
+                    } else {
+                        Section {
+                            ForEach(0..<((model.window.nextIndex + columns - 1) / columns), id: \.self) { row in
+                                HStack(alignment: .top, spacing: 20) {
+                                    ForEach(0..<columns, id: \.self) { column in
+                                        let index = row * columns + column
+                                        if index < model.window.nextIndex {
+                                            collectionSlot(index)
+                                                .frame(width: cellWidth, height: cellWidth + captionHeight, alignment: .topLeading)
+                                                .onAppear { model.appear(index) }
+                                                .onDisappear { model.disappear(index) }
+                                        } else { Color.clear.frame(width: cellWidth, height: cellWidth + captionHeight) }
+                                    }
+                                }.padding(.vertical, 10).listRowBackground(Color.clear)
+                            }
+                        }
                     }
                 }
                 Section {
-                    if model.loading { ProgressView("Loading music") }
-                    if let problem = model.problem {
-                        Text(problem).foregroundStyle(.secondary)
-                        Button("Try again") { Task { await load(start: model.start) } }
-                    } else if model.items.isEmpty && !model.loading {
+                    if !current || model.loading { ProgressView("Loading music") }
+                    if current, let problem = model.failures[model.window.nextIndex] {
+                        MediaLoadingRow(message: problem, retry: { model.retry(model.window.nextIndex) })
+                    } else if current && model.window.nextIndex == 0 && !model.loading {
                         MusicEmptyState(title: "No music found", message: query.isEmpty ? "Try another filter or add music to your server library." : "Try a different search.")
+                    } else if current && !model.window.hasMore && model.window.nextIndex > 0 {
+                        Text("All music loaded").font(.caption).foregroundStyle(.secondary)
                     }
-                    if !model.loading && model.problem == nil && (model.hasPrevious || model.hasNext) {
-                        Text("\(model.start + 1)–\(model.start + model.items.count) of \(model.total)").font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
-                        HStack {
-                            Button("Previous page") { Task { await load(start: max(0, model.start - 60)) } }.disabled(!model.hasPrevious)
-                            Spacer()
-                            Button("Next page") { Task { await load(start: model.start + model.pageCount) } }.disabled(!model.hasNext)
+                }
+            }
+            .id(requestKey)
+            .navigationTitle(title)
+            .modifier(MusicNavigationTitle(large: parent == nil))
+            .modifier(MusicSearch(text: $query, enabled: !isPlaylist, prompt: "Search \(title.lowercased())"))
+            .background(BluefinBackground())
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    HStack {
+                        if parent != nil && isPlaylist {
+                            Button { playlistSettings = true } label: { Image(systemName: "ellipsis.circle") }.accessibilityLabel("Playlist settings")
+                        }
+                        if type == "Playlist" && parent == nil {
+                            Button { selectedTracks = []; playlistPicker = true } label: { Image(systemName: "plus") }.accessibilityLabel("Create playlist")
                         }
                     }
                 }
-            }.navigationTitle(title).modifier(MusicNavigationTitle(large: parent == nil)).modifier(MusicSearch(text: $query, enabled: !isPlaylist, prompt: "Search \(title.lowercased())"))
-                .background(BluefinBackground())
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        HStack {
-                            if parent != nil && isPlaylist {
-                                Button { playlistSettings = true } label: { Image(systemName: "ellipsis.circle") }.accessibilityLabel("Playlist settings")
-                            }
-                            if type == "Playlist" && parent == nil {
-                                Button { selectedTracks = []; playlistPicker = true } label: { Image(systemName: "plus") }.accessibilityLabel("Create playlist")
-                            }
-                        }
-                    }
+            }
+            .sheet(isPresented: $playlistPicker, onDismiss: { refresh = UUID() }) { MusicPlaylistPicker(items: selectedTracks).environmentObject(store) }
+            .sheet(isPresented: $playlistSettings, onDismiss: { refresh = UUID() }) { if let parent { MusicPlaylistSettings(playlist: parent).environmentObject(store) } }
+        }
+        .task(id: requestKey) {
+            let key = requestKey
+            if loadedKey != key { loadedKey = nil }
+            do {
+                if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    try await Task.sleep(nanoseconds: 250_000_000)
                 }
-                .sheet(isPresented: $playlistPicker, onDismiss: { refresh = UUID() }) { MusicPlaylistPicker(items: selectedTracks).environmentObject(store) }
-                .sheet(isPresented: $playlistSettings, onDismiss: { refresh = UUID() }) { if let parent { MusicPlaylistSettings(playlist: parent).environmentObject(store) } }
-                .task(id: requestKey) {
-                    do {
-                        if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            try await Task.sleep(nanoseconds: 250_000_000)
-                        }
-                        try Task.checkCancellation(); await load()
-                    } catch {}
+                try Task.checkCancellation()
+                await load(key: key)
+                try Task.checkCancellation()
+                if requestKey == key { loadedKey = key }
+            } catch {}
+        }
+        .onDisappear { model.cancel() }
+    }
+
+    @ViewBuilder private func trackSlot(_ index: Int, page: MediaPageWindow.Page) -> some View {
+        if model.window.isDuplicate(at: index) {
+            Color.clear.accessibilityHidden(true)
+        } else if let item = model.window.item(at: index) {
+            Button {
+                let songs = page.items ?? [item], context = store.accountContext
+                let position = max(0, index - page.start)
+                Task {
+                    guard store.accountContext == context else { return }
+                    await store.playMusic(songs, at: position)
                 }
+            } label: { MusicRow(item: item, trackNumber: isAlbum ? item.IndexNumber : nil) }
+                .modifier(MusicContentLinkStyle()).disabled(store.startingPlayback)
+                .contextMenu { trackMenu(item) }
+        } else { missingSlot(page) }
+    }
+
+    @ViewBuilder private func collectionSlot(_ index: Int) -> some View {
+        if let page = model.window.page(containing: index) {
+            if model.window.isDuplicate(at: index) {
+                Color.clear.accessibilityHidden(true)
+            } else if let item = model.window.item(at: index) {
+                NavigationLink(destination: MusicCollection(title: item.title,
+                    type: item.Type == "MusicArtist" ? "MusicAlbum" : "Audio", parent: item)) {
+                    MusicShelfCard(item: item)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    RoundedRectangle(cornerRadius: 14).fill(.quaternary).aspectRatio(1, contentMode: .fit)
+                    missingSlot(page)
+                }
+            }
         }
     }
+
+    @ViewBuilder private func missingSlot(_ page: MediaPageWindow.Page) -> some View {
+        if let problem = model.failures[page.start] {
+            MediaLoadingRow(message: problem, retry: { model.retry(page.start) })
+        } else if page.items != nil {
+            Text("This music is no longer available.").font(.caption).foregroundStyle(.secondary)
+        } else { MediaLoadingRow() }
+    }
+
     private var cardWidth: CGFloat {
         #if os(tvOS)
-        return 240
+        240
         #else
-        return 140
+        140
         #endif
     }
     private func collectionHeader(_ item: MediaItem) -> some View {
@@ -244,14 +314,30 @@ struct MusicCollection: View {
         Button { store.enqueueMusic([item], next: false) } label: { Label("Add to queue", systemImage: "text.badge.plus") }
         Button { selectedTracks = [item]; playlistPicker = true } label: { Label("Add to playlist", systemImage: "music.note.list") }
         if isPlaylist, let parent, item.PlaylistItemId != nil {
-            Button(role: .destructive) { Task { do { try await store.removePlaylistItems(playlist: parent, entries: [item]); await load(start: model.start) } catch { store.error = error.localizedDescription } } } label: { Label("Remove from playlist", systemImage: "minus.circle") }
+            Button(role: .destructive) {
+                Task {
+                    do { try await store.removePlaylistItems(playlist: parent, entries: [item]); refresh = UUID() }
+                    catch { store.error = error.localizedDescription }
+                }
+            } label: { Label("Remove from playlist", systemImage: "minus.circle") }
         }
         if let session = store.session {
             Button { Task { await store.offline.download(item, session: session) } } label: { Label("Download", systemImage: "arrow.down.circle") }
         }
     }
-    private func load(start: Int = 0) async {
-        await model.load(store: store, type: type, parent: parent, start: start, query: isPlaylist ? "" : query, sort: sort, favorites: isPlaylist ? false : favorites, fromLetter: isPlaylist || isAlbum || sort != .name ? "" : fromLetter, genre: genre)
+    private func load(key: String) async {
+        let context = store.accountContext
+        let term = isPlaylist ? "" : query
+        let onlyFavorites = isPlaylist ? false : favorites
+        let letter = isPlaylist || isAlbum || sort != .name ? "" : fromLetter
+        let sortKey = isAlbum ? "IndexNumber" : sort.key
+        let descending = isAlbum ? false : sort != .name
+        await model.start(identity: key) { start, limit in
+            guard store.accountContext == context else { throw CancellationError() }
+            return try await store.musicItems(type: type, parent: parent, start: start, query: term,
+                sort: sortKey, descending: descending, favorites: onlyFavorites,
+                fromLetter: letter, genre: genre, limit: limit)
+        }
     }
 }
 

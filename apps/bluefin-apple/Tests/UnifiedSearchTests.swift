@@ -119,4 +119,12 @@ import XCTest
         XCTAssertNotEqual(request, .init(identity: identity, account: account, country: "US", attempt: 0))
     }
 
+    func testBroadSearchDefaultsAndExplicitLibraryRefinementsStayDistinct() {
+        XCTAssertFalse(UnifiedSearchFilters().libraryOnly)
+        XCTAssertTrue(UnifiedSearchFilters(source: .library).libraryOnly)
+        XCTAssertTrue(UnifiedSearchFilters(scope: .libraryOnly).libraryOnly)
+        XCTAssertTrue(UnifiedSearchFilters(tag: "My collection").libraryOnly)
+        XCTAssertTrue(UnifiedSearchFilters(sort: .recentlyAdded).libraryOnly)
+    }
+
 }
