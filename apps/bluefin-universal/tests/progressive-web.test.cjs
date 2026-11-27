@@ -794,32 +794,209 @@ test('public music uses the specialist catalog without a library and opens credi
  assert.equal(t.ui.state.session,null);
  assert(t.requests.filter(request=>new URL(request.url).pathname.startsWith('/Bluefin/Catalog')).every(request=>request.options.credentials==='omit'));
 });
-test('a specialist title requests independent country offers and uses the direct provider player',async()=>{
+test('typed regional offers use real countries, dynamic services, evidence and exact destinations',async()=>{
  const movie={id:{kind:'tmdbMovie',value:597},title:'Film Fixture',summary:'Plot',imdbId:'tt0120338'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]};
+ const service=(id,name)=>({source:'tmdb',id,name,homeUrl:null,logoUrl:null});
+ const observation={source:'tmdb-watch-page',status:'partial',observedAt:1700000000,scope:'regionalAvailability',
+  coverage:'partial',catalogUrl:'https://www.themoviedb.org/movie/597/watch?locale=US',
+  attributions:[{name:'JustWatch',url:'https://www.justwatch.com/us/movie/titanic'},{name:'TMDB',url:'https://www.themoviedb.org/movie/597'}]};
+ const offer=(id,provider,accessType,destinations,extra={})=>({id,identity,country:'US',service:provider,accessType,
+  rawAccessType:accessType,addon:null,destinations,price:null,quality:null,
+  evidence:{source:'tmdb-watch-page',observedAt:1700000000,availableSince:null,expiresAt:null,expiresSoon:false,regionVerified:true},...extra});
+ const netflix=offer('netflix',service('8','Netflix'),'subscription',[
+  {kind:'title',url:'https://www.netflix.com/title/12345678'},{kind:'player',url:'https://www.netflix.com/watch/12345678'}]);
+ netflix.price={amount:null,currency:'USD',formatted:null};
+ const independent=offer('independent',service('new-provider','Independent Fixture'),'rent',[
+  {kind:'player',url:'https://@'},{kind:'title',url:'https://independent.example/title/597'}],
+  {price:{amount:'4.99',currency:'USD',formatted:null},quality:'4K'});
+ const expired=offer('expired',service('expired','Expired Fixture'),'free',[{kind:'title',url:'https://independent.example/title/old'}],
+  {evidence:{...netflix.evidence,expiresAt:1}});
+ const unavailable=offer('summary',service('summary','Availability without link'),'free',[]);
+ const future=offer('new',service('future','Future Service Fixture'),'other',[{kind:'title',url:'https://future.example/title/597'}],
+  {rawAccessType:'membership-pass'});
+ const countries=[{code:'US',name:'United States',services:[]},{code:'GB',name:'United Kingdom',services:[]}];
  const t=setup({apiResponse:url=>{
   if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
   if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
-  if(url.pathname==='/Bluefin/Catalog/Offers/movie/597'){
+  if(url.pathname==='/Bluefin/Catalog/Providers'){
+   assert.equal(url.searchParams.get('kind'),'movie');assert.equal(url.searchParams.get('source'),'tmdb');
+   assert.equal(url.searchParams.get('id'),'movie/597');
    const country=url.searchParams.get('country');
-   return jsonReply({country,offers:country==='gb'?[]:[{provider:'Netflix',access:'subscription',
-    titleUrl:'https://www.netflix.com/title/12345678',playerUrl:'https://www.netflix.com/watch/12345678'},
-   {provider:'Independent Fixture',access:'rent',status:'available',platform:'Web',price:'4.99',currency:'USD',
-    quality:'4K',playerUrl:'https://@',titleUrl:'https://independent.example/title/597'},
-   {provider:'Expired Fixture',access:'free',status:'expired',titleUrl:'https://independent.example/title/old'}]});
+   return jsonReply({schemaVersion:1,countries:country?[{code:country,name:country==='US'?'United States':'United Kingdom',
+    services:[{service:service('registry-new','New Registry Service'),accessTypes:[],addons:[]}]}]:countries,sources:[]});
+  }
+  if(url.pathname==='/Bluefin/Catalog/Offers'){
+   assert.equal(url.searchParams.get('kind'),'movie');assert.equal(url.searchParams.get('source'),'tmdb');
+   assert.equal(url.searchParams.get('id'),'movie/597');
+   const country=url.searchParams.get('country');
+   const offers=country==='GB'?[]:country===null?[netflix,{...independent,id:'gb',country:'GB'}]:
+    [netflix,independent,expired,unavailable,future,{...netflix,id:'wrong-country',country:'GB'},
+     {...netflix,id:'wrong-title',identity:{kind:'movie',ids:[{source:'tmdb',id:'movie/598'}]}}];
+   return jsonReply({schemaVersion:1,identity,country,offers,sources:[{...observation,status:country==='GB'?'noOffers':'partial'}]});
   }
  }});
  await t.ui.openSearch();await t.ui.startSearch('Film Fixture',{scope:'movies'});
  await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ assert.equal(t.ui.state.session,null);
  assert(findElement(t.root,e=>e.href==='https://www.netflix.com/watch/12345678'));
  assert(!findElement(t.root,e=>e.href==='https://www.netflix.com/title/12345678'));
  assert(findElement(t.root,e=>e.href==='https://independent.example/title/597'));
- assert(t.root.textContent.includes('Rent · Web · 4K · 4.99 · USD'));
- assert(t.root.textContent.includes('Expired'));
+ assert(t.root.textContent.includes('Rent · 4K · 4.99 USD'));
+ assert(!t.root.textContent.includes('Subscription · USD'));
+ assert(t.root.textContent.includes('Checked '));assert(t.root.textContent.includes('Expired'));
  assert(!findElement(t.root,e=>e.href==='https://independent.example/title/old'));
- const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
- country.value='gb';await country.onchange();
- assert(t.root.textContent.includes('No offers were returned for this country.'));
+ assert(t.root.textContent.includes('Availability without link'));
+ assert(t.root.textContent.includes('Direct title link unavailable'));
+ assert(t.root.textContent.includes('Future Service Fixture'));assert(t.root.textContent.includes('membership-pass'));
+ assert(t.root.textContent.includes('Coverage is limited'));
+ assert(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='JustWatch'));
+ assert(t.root.textContent.includes('Offers with a different title or country were excluded.'));
+ let country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ assert.deepEqual(country.children.map(option=>option.value).sort(),['','GB','US']);
+ const services=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-service');
+ assert(services.children.some(option=>option.textContent==='New Registry Service'));
+ services.value='tmdb:new-provider';await services.onchange();
+ assert(findElement(t.root,e=>e.href==='https://independent.example/title/597'));
  assert(!findElement(t.root,e=>e.href==='https://www.netflix.com/watch/12345678'));
+ country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ country.value='GB';await country.onchange();
+ assert(t.root.textContent.includes('No offers were returned by these sources for this request.'));
+ assert(!findElement(t.root,e=>e.href==='https://www.netflix.com/watch/12345678'));
+ country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ country.value='';await country.onchange();
+ const requested=t.requests.filter(row=>new URL(row.url).pathname==='/Bluefin/Catalog/Offers').map(row=>new URL(row.url));
+ assert(requested.some(url=>!url.searchParams.has('country')));
+ assert.equal(requested.at(-1).searchParams.get('country'),'GB');
+ assert(t.root.textContent.includes('Checked 2 of 2 regions'));
+ assert(t.root.textContent.includes('All reported regions.'));
+ assert(t.root.textContent.includes('United States'));assert(t.root.textContent.includes('United Kingdom'));
+ assert.equal(findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country').value,'');
+ assert(t.requests.filter(row=>new URL(row.url).pathname.startsWith('/Bluefin/Catalog')).every(row=>row.options.credentials==='omit'));
+});
+test('failed regional sources do not claim there are no offers',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Film Fixture'};
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,countries:[],sources:[]});
+  if(url.pathname==='/Bluefin/Catalog/Offers')return jsonReply({schemaVersion:1,
+   identity:{kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]},country:'US',offers:[],
+   sources:[{source:'tmdb-watch-page',status:'unavailable',observedAt:1700000000,scope:'regionalAvailability',
+    coverage:'unknown',catalogUrl:null,attributions:[]}]});
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('Film Fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ assert(t.root.textContent.includes('Availability could not be checked.'));
+ assert(t.root.textContent.includes('This source is temporarily unavailable.'));
+ assert(!t.root.textContent.includes('No offers were returned'));
+});
+test('MusicBrainz artists, release groups and recordings show linked access before pairing',async()=>{
+ const cases=[['artist','musicBrainzArtist','artist'],['album','musicBrainzReleaseGroup','releaseGroup'],
+  ['recording','musicBrainzRecording','recording']];
+ for(const [detailKind,recordKind,offerKind]of cases){
+  const id='a74b1b7f-71a5-4011-9441-d0b5e4122711',record={id:{kind:recordKind,value:id},title:'Music Fixture'};
+  const destination='https://new-music.example/'+detailKind+'/'+id;
+  const t=setup({apiResponse:url=>{
+   if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:url.searchParams.get('kind')===detailKind?[record]:[]});
+   if(url.pathname==='/Bluefin/Catalog/Details/'+detailKind+'/'+id)return jsonReply(record);
+   if(url.pathname==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,countries:[{code:'US',name:'United States',services:[]}],sources:[]});
+   if(url.pathname==='/Bluefin/Catalog/Offers'){
+    assert.equal(url.searchParams.get('kind'),offerKind);assert.equal(url.searchParams.get('source'),'musicbrainz');
+    assert.equal(url.searchParams.get('id'),id);
+    const identity={kind:offerKind,ids:[{source:'musicbrainz',id}]};
+    return jsonReply({schemaVersion:1,identity,country:url.searchParams.get('country'),offers:[{
+     id:'music-link',identity,country:null,service:{source:'musicbrainz-url',id:'future-service',name:'New Music Service',homeUrl:null,logoUrl:null},
+     accessType:'free',rawAccessType:'free streaming',addon:null,destinations:[{kind:'title',url:destination}],price:null,quality:null,
+     evidence:{source:'musicbrainz',observedAt:1700000000,availableSince:null,expiresAt:null,expiresSoon:false,regionVerified:false}}],
+     sources:[{source:'musicbrainz',status:'complete',scope:'linkedAccess',coverage:'partial',observedAt:1700000000,
+      catalogUrl:null,attributions:[{name:'MusicBrainz',url:'https://musicbrainz.org/'+detailKind+'/'+id}]}]});
+   }
+  }});
+  await t.ui.openSearch();await t.ui.startSearch('Music Fixture',{scope:'music'});
+  await findElement(t.root,e=>String(e.dataset.focusKey).includes(recordKind+':'+id)).listeners.click();
+  assert.equal(t.ui.state.session,null);
+  assert(t.root.textContent.includes('Where to listen'));
+  assert(findElement(t.root,e=>e.href===destination));
+  assert(t.root.textContent.includes('Region not verified'));
+  assert(t.root.textContent.includes('These catalog links do not establish regional availability.'));
+ }
+});
+test('all-region enrichment has at most three requests and cancels when the country changes',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Film Fixture'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]};
+ const names={US:'United States',GB:'United Kingdom',CA:'Canada',FR:'France',DE:'Germany',NZ:'New Zealand'};
+ let hold=false,active=0,maximum=0;
+ const pending=[];
+ const response=country=>({schemaVersion:1,identity,country,offers:country?[{
+  id:country,identity,country,service:{source:'tmdb',id:'regional',name:'Regional Fixture'},
+  accessType:'ads',rawAccessType:'ads',addon:null,price:null,quality:null,
+  destinations:[{kind:'title',url:'https://regional.example/title/597?country='+country}],
+  evidence:{source:'tmdb-watch-page',observedAt:1700000000,regionVerified:true,availableSince:null,expiresAt:null,expiresSoon:false}}]:[],
+  sources:[{source:'tmdb-watch-page',status:country?'complete':'partial',scope:'regionalAvailability',coverage:'partial',
+   observedAt:1700000000,attributions:[]}]});
+ const t=setup({apiResponse:(url,options)=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,
+   countries:Object.entries(names).map(([code,name])=>({code,name,services:[]})),sources:[]});
+  if(url.pathname==='/Bluefin/Catalog/Offers'){
+   const country=url.searchParams.get('country');
+   if(!hold||!country)return jsonReply(response(country));
+   active++;maximum=Math.max(maximum,active);
+   return new Promise((resolve,reject)=>{
+    let settled=false;
+    const finish=error=>{if(settled)return;settled=true;active--;options.signal.removeEventListener('abort',abort);
+     if(error)reject(error);else resolve(jsonReply(response(country)));};
+    const abort=()=>finish(Error('Cancelled fixture request'));
+    options.signal.addEventListener('abort',abort,{once:true});
+    pending.push({country,finish});
+   });
+  }
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('Film Fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ hold=true;
+ let country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ country.value='';const all=country.onchange();
+ await until(()=>pending.length===3);
+ assert.equal(maximum,3);
+ assert(t.root.textContent.includes('Checked 0 of 6 regions'));
+ hold=false;const before=t.requests.length;
+ country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ country.value='NZ';await country.onchange();await all;
+ for(const item of pending)item.finish();
+ assert.equal(active,0);
+ const later=t.requests.slice(before).filter(row=>new URL(row.url).pathname==='/Bluefin/Catalog/Offers');
+ assert.deepEqual(later.map(row=>new URL(row.url).searchParams.get('country')),['NZ']);
+ assert(findElement(t.root,e=>e.href==='https://regional.example/title/597?country=NZ'));
+ assert(!findElement(t.root,e=>e.href==='https://regional.example/title/597?country=US'));
+});
+test('all-region lookups back off an HTTP 429 before retrying',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Film Fixture'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]};
+ let allRequested=false,attempts=0;
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,
+   countries:[{code:'US',name:'United States',services:[]}],sources:[]});
+  if(url.pathname==='/Bluefin/Catalog/Offers'){
+   const country=url.searchParams.get('country');
+   if(!country)allRequested=true;
+   else if(allRequested&&++attempts===1)return new Response('{}',{status:429,headers:{'Retry-After':'0'}});
+   return jsonReply({schemaVersion:1,identity,country,offers:[],
+    sources:[{source:'tmdb-watch-page',status:'noOffers',scope:'regionalAvailability',coverage:'partial',attributions:[]}]});
+  }
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('Film Fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ const started=Date.now();country.value='';const all=country.onchange();
+ await until(()=>attempts===1);
+ assert.equal(attempts,1);await all;
+ assert.equal(attempts,2);assert(Date.now()-started>=1000);
+ assert(t.root.textContent.includes('Checked 1 of 1 regions'));
 });
 test('a film result displays a licensed Commons poster and exact watch links before opening details',async()=>{
  const t=setup({apiResponse:u=>{
