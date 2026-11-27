@@ -696,3 +696,6 @@ async fn mesh_invalid_web_launch_cannot_retire_the_live_issuer() {
         assert!(f.service.live().await.is_ok());
     }
 }
+
+#[path = "bluefin_mesh_admin_devices_tests.rs"]
+mod admin_device_tests;

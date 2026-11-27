@@ -48,13 +48,69 @@ impl Service {
             .bind(session_id).bind(peer).execute(&mut *tx).await.map_err(storage)?;
         tx.commit().await.map_err(storage)?;
         // Cleanup retries need no duplicate bearer in the receipt.
-        for session in state.sessions.get_sessions(user, Some(&device_id), None, None, true).await? {
-            if session.user_id == user && session.device_id.as_deref() == Some(device_id.as_str()) {
+        self.close_device_sessions(state, user, &device_id).await?;
+        Ok(response)
+    }
+
+    /// Administrator removal addresses the durable grant, including a device
+    /// that has not minted an HTTP bearer yet or whose cleanup needs a retry.
+    /// It does not impersonate the device or manufacture a self-revoke receipt.
+    pub(crate) async fn revoke_devices_by_admin(
+        &self,
+        state: &AppState,
+        _admin: &RequireAdmin,
+        device_ids: &[&str],
+    ) -> Result<(), ApiError> {
+        let _gate = self.gate.lock().await;
+        let mut tx = self.db.writer().begin_with("BEGIN IMMEDIATE").await.map_err(storage)?;
+        self.live_tx(&mut tx).await?;
+        let mut targets = Vec::new();
+        let mut bearers = Vec::new();
+        // Admit the entire batch before changing any grant. Already revoked
+        // grants remain addressable so interrupted cleanup can finish.
+        for device_id in device_ids.iter().copied().collect::<std::collections::BTreeSet<_>>() {
+            let valid = device_id.strip_prefix("bluefin-mesh:").is_some_and(id_valid);
+            let row = if valid {
+                sqlx::query("SELECT UserId FROM BluefinMeshSessions WHERE DeviceId=?")
+                    .bind(device_id).fetch_optional(&mut *tx).await.map_err(storage)?
+            } else {
+                None
+            };
+            let row = row.ok_or_else(|| ApiError::BadRequest(format!("unknown device {device_id}")))?;
+            let user = Uuid::parse_str(&row.get::<String, _>("UserId")).map_err(storage)?;
+            targets.push((user, device_id));
+            // The terminal-grant trigger removes these rows on commit. Retain
+            // them only until the existing device owner invalidates its cache.
+            bearers.extend(sqlx::query_as::<_, ferrofin_db::entities::security::DeviceEntity>(
+                "SELECT * FROM Devices WHERE DeviceId=?"
+            ).bind(device_id).fetch_all(&mut *tx).await.map_err(storage)?);
+        }
+        for (_, device_id) in &targets {
+            sqlx::query("UPDATE BluefinMeshSessions SET Revoked=1 WHERE DeviceId=?")
+                .bind(device_id).execute(&mut *tx).await.map_err(storage)?;
+        }
+        tx.commit().await.map_err(storage)?;
+        // Security state is terminal before any fallible playback cleanup.
+        // The owner gate prevents an authorization request racing a remint.
+        for bearer in &bearers {
+            state.devices.delete_device(bearer).await?;
+        }
+        for (user, device_id) in targets {
+            self.close_device_sessions(state, user, device_id).await?;
+        }
+        Ok(())
+    }
+
+    async fn close_device_sessions(
+        &self, state: &AppState, user: Uuid, device_id: &str,
+    ) -> Result<(), ApiError> {
+        for session in state.sessions.get_sessions(user, Some(device_id), None, None, true).await? {
+            if session.user_id == user && session.device_id.as_deref() == Some(device_id) {
                 if let Some(id) = session.id {
                     state.sessions.close_if_needed(&id).await?;
                 }
             }
         }
-        Ok(response)
+        Ok(())
     }
 }

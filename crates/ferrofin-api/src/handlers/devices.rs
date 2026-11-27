@@ -181,9 +181,9 @@ async fn update_device_options(
 
 /// `DELETE /Devices` — delete one or more devices and log out their sessions.
 ///
-/// Port of `DevicesController.DeleteDevice`: every requested id must resolve to
-/// an existing device (`400` otherwise); each device's active sessions are then
-/// logged out. Returns `204 No Content`.
+/// Ordinary ids must resolve to an existing device (`400` otherwise). Mesh
+/// ids resolve to the durable grant, so removal also works before its first
+/// bearer mint and can retry cleanup after revocation. Returns `204 No Content`.
 #[utoipa::path(
     delete,
     path = "/Devices",
@@ -196,7 +196,7 @@ async fn update_device_options(
 )]
 async fn delete_devices(
     State(state): State<AppState>,
-    RequireAdmin(_auth): RequireAdmin,
+    admin: RequireAdmin,
     Query(query): Query<DeleteDevicesQuery>,
 ) -> Result<axum::http::StatusCode, ApiError> {
     // Comma-delimited id list (Jellyfin's `string[]` query binding).
@@ -211,14 +211,25 @@ async fn delete_devices(
         })
         .unwrap_or_default();
 
-    // Resolve every id first; a single unknown device fails the whole request
-    // (C# returns `BadRequest` when `devices.Any(f => f is null)`).
+    // Resolve ordinary devices before any mutation. The mesh owner admits its
+    // complete batch in one transaction, including already revoked grants.
     let mut resolved = Vec::with_capacity(ids.len());
+    let mut mesh_device_ids = Vec::new();
     for id in ids {
+        if id.starts_with("bluefin-mesh:") {
+            mesh_device_ids.push(id);
+            continue;
+        }
         match state.devices.get_device(id).await? {
             Some(info) => resolved.push(info),
             None => return Err(ApiError::BadRequest(format!("unknown device {id}"))),
         }
+    }
+    if !mesh_device_ids.is_empty() {
+        let owner = state.mesh_accounts.as_ref().ok_or_else(|| ApiError::ServiceUnavailable(
+            "Mesh connections are not enabled on this server.".into()
+        ))?;
+        owner.revoke_devices_by_admin(&state, &admin, &mesh_device_ids).await?;
     }
 
     for info in resolved {

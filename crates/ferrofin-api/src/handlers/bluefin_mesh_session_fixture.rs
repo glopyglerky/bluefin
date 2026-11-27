@@ -21,6 +21,7 @@ struct State {
     sessions: Vec<SessionInfoDto>,
     close_attempts: Vec<String>,
     fail_next_close: bool,
+    mint_attempts: usize,
 }
 impl Sessions {
     pub(super) fn add(&self, id: &str, user_id: Uuid, device_id: &str) {
@@ -39,9 +40,18 @@ impl Sessions {
     pub(super) fn close_attempts(&self) -> Vec<String> {
         self.state.lock().unwrap().close_attempts.clone()
     }
+    pub(super) fn mint_attempts(&self) -> usize {
+        self.state.lock().unwrap().mint_attempts
+    }
 }
 #[async_trait]
 impl SessionManager for Sessions {
+    async fn authenticate_mesh(
+        &self, _request: &AuthenticationRequest,
+    ) -> Result<AuthenticationResultData, ServiceError> {
+        self.state.lock().unwrap().mint_attempts += 1;
+        Err(ServiceError::Unavailable("No test bearer was provisioned".into()))
+    }
     async fn log_session_activity(
         &self,
         _app_name: &str,
