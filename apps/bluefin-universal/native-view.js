@@ -474,7 +474,12 @@ async function publicCatalogJson(url,signal,limit=1024*1024,headers,timeoutMs=60
  try{
   if(signal.aborted)throw aborted();
   const response=await fetch(url,{credentials:'omit',redirect:'error',referrerPolicy:'no-referrer',signal:controller.signal,headers});
-  if(!response.ok)throw Error('Catalog unavailable');
+  if(!response.ok){
+   const failure=Error('Catalog unavailable');failure.status=response.status;
+   const after=response.headers.get('Retry-After'),seconds=Number(after);
+   failure.retryAfterMs=after?Math.min(30000,Math.max(0,Number.isFinite(seconds)?seconds*1000:Date.parse(after)-Date.now())):0;
+   throw failure;
+  }
   return await readJson(response,limit);
  }finally{clearTimeout(timeout);signal.removeEventListener('abort',stop);}
 }
@@ -866,7 +871,7 @@ async function loadRoute(){
   await loadPublicDetail(route,controller.signal,current);
  }else if(route.kind==='detail'){
    const value=await get('Users/'+user+'/Items/'+id(route.item.Id));current();if(!uuid(value.Id))throw Error('The item is no longer available.');route.item=value;route.offerRef=libraryOfferReference(value);
-   const availability=route.offerRef?loadTitleAvailability(route,controller.signal):null;
+   const availability=route.offerRef?loadRegionalOffers(route,route.offerCountry??'',controller.signal):null;
    if(route.fromSearch){
     const key=value.Type==='MusicArtist'?'ArtistIds':value.Type==='Person'?'PersonIds':'ParentId';
     const type=({MusicArtist:'MusicAlbum,Audio',Person:'Movie,Series,Episode',MusicAlbum:'Audio',Series:'Episode',Season:'Episode',Playlist:'Audio'})[value.Type];
@@ -1193,7 +1198,7 @@ async function loadPublicDetail(route,signal,current){
     return related?[{...related,role:catalogText(credit.role,120)}]:[];
    });
   }catch{current();route.detailUnavailable=true;}
-  if(item.offerRef)await loadTitleAvailability(route,signal);
+  if(catalogOfferIdentity(item))await loadRegionalOffers(route,route.offerCountry??'',signal);
   return;
  }
  const jobs=[];
@@ -1259,45 +1264,137 @@ async function loadPublicDetail(route,signal,current){
  const results=await Promise.allSettled(jobs);current();
  if(results.length&&results.every(result=>result.status==='rejected'))route.detailUnavailable=true;
  if(!item.offerRef&&item.kind&&filmId.test(item.imdbId||''))item.offerRef={kind:item.kind,source:'imdb',id:item.imdbId};
- if(item.offerRef)await loadTitleAvailability(route,signal);
+ if(catalogOfferIdentity(item))await loadRegionalOffers(route,route.offerCountry??'',signal);
 }
-async function loadTitleAvailability(route,signal){
- await Promise.all([
-  (async()=>{
-   try{
-    const url=new URL('/Bluefin/Catalog/Providers',document.baseURI);
-    const data=await publicCatalogJson(url,signal,8*1024*1024,undefined,24000);
-    if(state.route!==route||signal.aborted||data.schemaVersion!==1||!Array.isArray(data.countries))return;
-    route.offerCountries=data.countries.filter(country=>/^[A-Z]{2}$/.test(country?.code));
-    render();
-   }catch{}
-  })(),
-  loadRegionalOffers(route,route.offerCountry||'',signal),
- ]);
+function catalogOfferIdentity(item){
+ const ref=item?.catalogRef;if(!ref)return item?.offerRef||null;
+ const video={movie:'movie',series:'tv'}[ref.kind];
+ if(video)return {kind:ref.kind,source:'tmdb',id:video+'/'+ref.value};
+ const music={artist:'artist',album:'releaseGroup',release:'release',recording:'recording'}[ref.kind];
+ return music?{kind:music,source:'musicbrainz',id:String(ref.value)}:null;
 }
-async function loadRegionalOffers(route,country,signal=routeController?.signal){
- const reference=route.offerRef??route.item.offerRef;
- if(!signal||signal.aborted||country&&!/^[A-Z]{2}$/.test(country)||!reference)return;
- route.offerCountry=country;
- const request=route.offers={loading:true};
- const {kind,source,id}=reference;
- const url=new URL('/Bluefin/Catalog/Offers',document.baseURI);
- for(const [field,value] of Object.entries({kind,source,id}))url.searchParams.set(field,value);
+const providerRegistryCache=new Map();
+async function providerRegistry(country,signal,identity){
+ const key=JSON.stringify([country||'*',identity]),cached=providerRegistryCache.get(key);
+ if(cached&&cached.expires>Date.now())return cached.value;
+ const url=new URL('/Bluefin/Catalog/Providers',document.baseURI);
+ for(const [key,value]of Object.entries(identity||{}))url.searchParams.set(key,value);
  if(country)url.searchParams.set('country',country);
- render();
- try{
-  const result=await publicCatalogJson(url,signal,8*1024*1024,undefined,24000);
-  if(state.route!==route||request!==route.offers||signal.aborted)return;
-  if(result.schemaVersion!==1||(result.country??'')!==country||result.identity?.kind!==kind||
-   !Array.isArray(result.identity.ids)||result.identity.ids.length!==1||
-   result.identity.ids[0]?.source!==source||result.identity.ids[0]?.id!==id||
-   !Array.isArray(result.offers)||!Array.isArray(result.sources))throw Error('Invalid availability response');
-  route.offers=result;
- }catch{
-  if(state.route!==route||request!==route.offers||signal.aborted)return;
-  route.offers={unavailable:true};
+ const value=await publicCatalogJson(url,signal,4*1024*1024,undefined,25000);
+ if(value.schemaVersion!==1||!Array.isArray(value.countries))throw Error('Invalid provider registry');
+ const clean={...value,countries:value.countries.filter(row=>/^[A-Z]{2}$/.test(row?.code)&&typeof row.name==='string')};
+ if(clean.countries.length){
+  if(providerRegistryCache.size>=160)providerRegistryCache.delete(providerRegistryCache.keys().next().value);
+  providerRegistryCache.set(key,{value:clean,expires:Date.now()+300000});
  }
- render();
+ return clean;
+}
+function matchesOfferIdentity(value,identity){
+ return value?.kind===identity.kind&&Array.isArray(value.ids)&&value.ids.some(id=>
+  typeof id?.source==='string'&&id.source.toLowerCase()===identity.source&&id.id===identity.id);
+}
+function validateOfferResponse(value,identity,country){
+ if(value?.schemaVersion!==1||value.country!==(country||null)||!matchesOfferIdentity(value.identity,identity)||
+    !Array.isArray(value.offers)||!Array.isArray(value.sources))throw Error('Invalid availability response');
+ const offers=value.offers.filter(row=>matchesOfferIdentity(row?.identity,identity)&&
+  (row.country===null||/^[A-Z]{2}$/.test(row.country))&&
+  (!country||row.country===country||row.country===null&&row.evidence?.regionVerified===false));
+ return {...value,offers,filtered:offers.length!==value.offers.length};
+}
+async function fetchCatalogOffers(identity,country,signal){
+ const url=new URL('/Bluefin/Catalog/Offers',document.baseURI);
+ for(const [key,value]of Object.entries(identity))url.searchParams.set(key,value);
+ if(country)url.searchParams.set('country',country);
+ return validateOfferResponse(await publicCatalogJson(url,signal,4*1024*1024,undefined,25000),identity,country);
+}
+function offerWait(delay,signal){
+ if(signal.aborted)return Promise.reject(aborted());
+ return new Promise((resolve,reject)=>{
+  const stop=()=>{clearTimeout(timer);signal.removeEventListener('abort',stop);reject(aborted());};
+  const timer=setTimeout(()=>{signal.removeEventListener('abort',stop);resolve();},Math.max(0,delay));
+  signal.addEventListener('abort',stop,{once:true});
+ });
+}
+async function enrichAllOfferRegions(route,identity,signal,current){
+ const codes=[...new Set((route.offerCountries||[]).map(row=>row.code).filter(code=>/^[A-Z]{2}$/.test(code)))];
+ if(!codes.length){
+  route.offerProgress={completed:0,total:0,failed:0,registryUnavailable:true};render();return;
+ }
+ const progress=route.offerProgress={completed:0,total:codes.length,failed:0,stopped:false};
+ const baseSources=route.offers.sources||[],sourcesByCountry=new Map();
+ let next=0,pauseUntil=0;
+ const transient=new Set(['denied','rateLimited','unavailable','invalidResponse','identityMismatch']);
+ async function worker(){
+  while(current()){
+   const code=codes[next++];if(!code)return;
+   let value=null,error=null;
+   for(let attempt=0;attempt<3&&current();attempt++){
+    while(pauseUntil>Date.now())await offerWait(pauseUntil-Date.now(),signal);
+    try{
+     value=await fetchCatalogOffers(identity,code,signal);error=null;
+     if(!value.sources.some(source=>source?.status==='rateLimited')||attempt===2)break;
+    }catch(cause){
+     if(signal.aborted)return;
+     error=cause;if(cause?.status!==429||attempt===2)break;
+    }
+    const backoff=Math.min(30000,Math.max(error?.retryAfterMs||0,1500*2**attempt));
+    pauseUntil=Math.max(pauseUntil,Date.now()+backoff);
+   }
+   if(!current())return;
+   if(value){
+    const failed=value.filtered||value.sources.some(source=>transient.has(source?.status));
+    if(!failed)route.offers.offers=route.offers.offers.filter(offer=>offer.country!==code);
+    const merged=new Map(route.offers.offers.map(offer=>[offer.id,offer]));
+    for(const offer of value.offers)merged.set(offer.id,offer);
+    route.offers.offers=[...merged.values()];
+    route.offers.filtered||=value.filtered;
+    sourcesByCountry.set(code,value.sources.map(source=>({...source,uiCountry:code})));
+    if(failed)progress.failed++;
+   }else{
+    progress.failed++;
+    sourcesByCountry.set(code,[{source:'catalog',status:error?.status===429?'rateLimited':'unavailable',
+     scope:'regionalAvailability',coverage:'unknown',observedAt:Math.floor(Date.now()/1000),attributions:[],uiCountry:code}]);
+   }
+   progress.completed++;
+   route.offers.sources=[...(progress.completed<progress.total||progress.failed?baseSources:[]),...[...sourcesByCountry.values()].flat()];
+   render();
+  }
+ }
+ await Promise.allSettled(Array.from({length:Math.min(3,codes.length)},()=>worker()));
+ if(current())render();
+}
+function routeOfferIdentity(route){return route.offerRef||catalogOfferIdentity(route.item);}
+async function loadRegionalOffers(route,country,parentSignal=routeController?.signal,scanRegions=false){
+ const identity=routeOfferIdentity(route);
+ country=typeof country==='string'?country.toUpperCase():'';
+ if(!identity||!parentSignal||parentSignal.aborted||(country&&!/^[A-Z]{2}$/.test(country)))return;
+ route.offerController?.abort();
+ const controller=new AbortController(),signal=controller.signal,request={};
+ const stop=()=>controller.abort();parentSignal.addEventListener('abort',stop,{once:true});
+ route.offerController=controller;route.offerRequest=request;route.offerProgress=null;
+ const current=()=>state.route===route&&route.offerRequest===request&&!signal.aborted;
+ if(route.offerCountry!==country)route.offerService='';
+ route.offerCountry=country;route.offers={loading:true};render();
+ try{
+  const [offers,countries,providers]=await Promise.allSettled([
+   fetchCatalogOffers(identity,country,signal),providerRegistry('',signal,identity),
+   country?providerRegistry(country,signal,identity):Promise.resolve(null),
+  ]);
+  if(!current())return;
+  if(countries.status==='fulfilled'){route.offerCountries=countries.value.countries;route.offerRegistryUnavailable=false;}
+  else route.offerRegistryUnavailable=true;
+  route.offerProviders=providers.status==='fulfilled'?providers.value?.countries||[]:[];
+  if(offers.status==='fulfilled')route.offers=offers.value;
+  else route.offers={unavailable:true};
+  // Full regional video lookups run only after the user explicitly selects All.
+  // Music's all-region result retains source links with unknown territory.
+  if(scanRegions&&!country&&identity.source==='tmdb'){
+   if(route.offers.unavailable)route.offers={schemaVersion:1,identity:{kind:identity.kind,ids:[{source:identity.source,id:identity.id}]},
+    country:null,offers:[],sources:[{source:'catalog',status:'unavailable',scope:'regionalAvailability',coverage:'unknown',attributions:[]}]};
+   render();await enrichAllOfferRegions(route,identity,signal,current);
+  }
+  if(current())render();
+ }finally{parentSignal.removeEventListener('abort',stop);}
 }
 const offerAccessLabels=new Map([['free','Free'],['ads','With ads'],['subscription','Subscription'],
  ['rent','Rent'],['buy','Buy'],['download','Download'],['addon','Add-on']]);
@@ -1306,84 +1403,183 @@ function offerMarketName(country){
  if(!/^[A-Z]{2}$/.test(code))return '';
  return typeof Intl.DisplayNames==='function'?new Intl.DisplayNames(undefined,{type:'region',fallback:'code'}).of(code):code;
 }
-function offerTarget(value){
- if(typeof value!=='string'||!/^https:\/\//.test(value))return null;
+function publicOfferUrl(value){
+ if(typeof value!=='string'||value.length>8192||/[\s\u0000-\u001f\u007f]/.test(value))return null;
  try{
-  const target=new URL(value);
-  return target.username||target.password?null:target.href;
+  const target=new URL(value),host=target.hostname.toLowerCase().replace(/\.$/,'');
+  if(target.protocol!=='https:'||target.username||target.password||(target.port&&target.port!=='443')||
+     !host.includes('.')||/(^|\.)(localhost|local|internal|home|lan|invalid)$/.test(host)||
+     /^(?:0|10|127)\./.test(host)||/^192\.168\./.test(host)||/^169\.254\./.test(host)||
+     /^172\.(?:1[6-9]|2[0-9]|3[01])\./.test(host)||host.startsWith('['))return null;
+  target.hash='';return target.href;
  }catch{return null;}
 }
+function offerTarget(value,provider=''){
+ const safe=publicOfferUrl(value);if(!safe)return null;
+ const target=new URL(safe),host=target.hostname.toLowerCase().replace(/\.$/,'');
+ if(/(^|\.)(justwatch\.com|themoviedb\.org)$/.test(host))return null;
+ if(host==='tv.apple.com'&&!provider.toLowerCase().includes('apple'))return null;
+ let parts;
+ try{parts=target.pathname.split('/').filter(Boolean).map(part=>decodeURIComponent(part).toLowerCase());}catch{return null;}
+ if(!parts.length||parts.some(part=>['search','results','login','signin','sign-in','signup','sign-up','redirect','click','subscribe','register'].includes(part)))return null;
+ if([...target.searchParams.keys()].some(key=>['search','search_query','searchquery','searchterm','search_term','query','keyword','keywords','q'].includes(key.toLowerCase())))return null;
+ const meaningful=parts.filter(part=>!/^[a-z]{2}(?:-[a-z]{2})?$/.test(part));
+ if(!meaningful.length||meaningful.length===1&&['home','browse','movies','movie','tv','shows','series','watch','welcome','stream','all','account'].includes(meaningful[0]))return null;
+ return safe;
+}
+function serviceKey(service){
+ return typeof service?.source==='string'&&typeof service?.id==='string'&&service.source&&service.id?
+  encodeURIComponent(service.source)+':'+encodeURIComponent(service.id):null;
+}
+function offerDate(seconds){
+ if(!Number.isSafeInteger(seconds)||seconds<=0)return null;
+ const date=new Date(seconds*1000);return Number.isNaN(date.valueOf())?null:date;
+}
 function offerRow(row){
- const provider=catalogText(row?.service?.name,120),access=row?.accessType;
- if(!provider)return null;
- const entry=node('div',undefined,'offer-row');
- const price=catalogText(row.price?.formatted,64)||
-  [catalogText(row.price?.amount,48),catalogText(row.price?.currency,12)].filter(Boolean).join(' ');
- const facts=[offerAccessLabels.get(access)||catalogText(row.rawAccessType,60)||'Other access',
-  catalogText(row.addon?.name,120),catalogText(row.quality,60),price];
- const evidence=row.evidence;
- const date=Number.isSafeInteger(evidence?.observedAt)&&evidence.observedAt>0?new Date(evidence.observedAt*1000):null;
- if(date&&!Number.isNaN(date.valueOf()))facts.push('Checked '+date.toLocaleString());
- if(!evidence?.regionVerified)facts.push('Region unverified');
- if(evidence?.source)facts.push(catalogText(evidence.source,96));
- const expired=Number.isSafeInteger(evidence?.expiresAt)&&evidence.expiresAt*1000<=Date.now();
- if(expired)facts.push('Expired');
+ const provider=catalogText(row?.service?.name,160);
+ if(!provider||!serviceKey(row.service))return null;
+ const entry=node('div',undefined,'offer-row'),evidence=row.evidence||{},now=Date.now()/1000;
+ const access=offerAccessLabels.get(row.accessType)||catalogText(row.rawAccessType||row.accessType,80);
+ const amount=catalogText(row.price?.amount,64),validAmount=amount&&Number.isFinite(Number(amount))&&Number(amount)>=0;
+ const price=row.price&&typeof row.price==='object'?
+  catalogText(row.price.formatted,120)||(validAmount?[amount,catalogText(row.price.currency,12)].filter(Boolean).join(' '):''):'';
+ const facts=[access,row.addon?.name?'Requires '+catalogText(row.addon.name,120):'',catalogText(row.quality,60),price];
+ const checked=offerDate(evidence.observedAt);
+ if(checked)facts.push('Checked '+checked.toLocaleString());
+ const expired=Number.isFinite(evidence.expiresAt)&&evidence.expiresAt>0&&evidence.expiresAt<=now;
+ const future=Number.isFinite(evidence.availableSince)&&evidence.availableSince>now;
+ if(expired)facts.push('Expired');else if(future)facts.push('Not yet available');else if(evidence.expiresSoon)facts.push('Leaving soon');
+ if(row.country===null||evidence.regionVerified!==true)facts.push('Region not verified');
+ const priority=row.accessType==='download'?['download','title','player']:['player','title','download'];
  const destinations=Array.isArray(row.destinations)?row.destinations:[];
- const preference=access==='download'?['download','title']:['player','title','download'];
- const destination=expired?null:preference.flatMap(kind=>destinations.filter(entry=>entry?.kind===kind))
-  .find(entry=>offerTarget(entry.url));
- const target=destination&&offerTarget(destination.url);
- const verb=['buy','rent','download'].includes(access)?offerAccessLabels.get(access):
-  destination?.kind==='player'?'Play':destination?.kind==='download'?'Download':'Open';
- if(target){
+ let destination=null;
+ if(!expired&&!future)for(const kind of priority){
+  for(const item of destinations)if(item?.kind===kind){
+   const url=offerTarget(item.url,provider);if(url){destination={kind,url};break;}
+  }
+  if(destination)break;
+ }
+ if(destination){
+  const verb=['buy','rent','download'].includes(row.accessType)?offerAccessLabels.get(row.accessType):destination.kind==='player'?'Play':'Open';
   const link=node('a',verb+' on '+provider);
-  link.href=target;link.rel='noopener noreferrer';entry.append(link);
- }else entry.append(node('strong',provider));
+  link.href=destination.url;link.rel='noopener noreferrer';entry.append(link);
+ }else{
+  entry.append(node('strong',provider));
+  if(!expired&&!future)facts.push('Direct title link unavailable');
+ }
  if(facts.some(Boolean))entry.append(node('small',facts.filter(Boolean).join(' · '),'secondary'));
  return entry;
 }
-function offersView(route){
- const content=node('div',undefined,'provider-actions');
- const result=route.offers;
- const countries=new Map((route.offerCountries||[]).map(country=>[country.code,catalogText(country.name,120)||offerMarketName(country.code)]));
- const markets=new Map();
- for(const row of result?.offers||[]){
-  if(!row||typeof row!=='object')continue;
-  const country=row.evidence?.regionVerified&&/^[A-Z]{2}$/.test(row.country)?row.country:'';
-  if(country&&!countries.has(country))countries.set(country,offerMarketName(country));
-  if(route.offerCountry&&country&&country!==route.offerCountry)continue;
-  if(!markets.has(country))markets.set(country,[]);
-  markets.get(country).push(row);
- }
- const choices=[['','All regions'],...[...countries].sort((a,b)=>a[1].localeCompare(b[1]))];
- content.append(searchChoice('Country','offer-country',route.offerCountry||'',choices,
-  selected=>loadRegionalOffers(route,selected)));
- if(result?.loading||!result){content.append(node('p','Checking availability…','loading'));return content;}
- if(result.unavailable){content.append(node('p','Regional availability is unavailable.','secondary'),
-  button('Retry availability',()=>loadRegionalOffers(route,route.offerCountry||'')));return content;}
- if(!markets.size)content.append(node('p',result.sources.some(source=>source?.scope==='regionalAvailability'&&['complete','noOffers'].includes(source.status))?
-  'No offers were reported for this selection.':'Availability is unknown.','secondary'));
- for(const [country,rows] of [...markets].sort((a,b)=>a[0].localeCompare(b[0]))){
-  const group=node('details',undefined,'offer-market');
-  group.open=markets.size===1||route.offerCountry===country;
-  group.append(node('summary',country?offerMarketName(country):'Region unverified'));
-  group.append(...rows.map(offerRow).filter(Boolean));
-  content.append(group);
- }
- const sourceStatuses={complete:'Reported coverage',partial:'Partial coverage',noOffers:'No offers reported',
-  missingCredentials:'Source not configured',denied:'Access denied',rateLimited:'Rate limited',
-  unavailable:'Unavailable',notFound:'Title not found',identityMismatch:'Title could not be confirmed',
-  invalidResponse:'Invalid response',unsupportedIdentity:'Title type unsupported',unsupportedCountry:'Country unsupported'};
- for(const source of result.sources){
+function offerSourceNotes(content,sources){
+ const statuses={
+  partial:'Some details or direct title links are unavailable.',
+  noOffers:'This source returned no offers for this request.',
+  missingCredentials:'This source is not configured.',
+  denied:'This source could not be accessed.',
+  rateLimited:'This source is temporarily busy.',
+  unavailable:'This source is temporarily unavailable.',
+  notFound:'This source did not find this title.',
+  identityMismatch:'This source returned a different title; its offers are hidden.',
+  invalidResponse:'This source returned an unreadable response.',
+  unsupportedIdentity:'This source does not cover this media type.',
+  unsupportedCountry:'This source does not cover this country.',
+ };
+ const groups=new Map();
+ for(const source of sources||[]){
   if(!source||typeof source!=='object')continue;
-  const name=catalogText(source.attributions?.[0]?.name||source.source,96);
-  const detail=Object.hasOwn(sourceStatuses,source.status)?sourceStatuses[source.status]:'Coverage unknown';
-  if(name)content.append(node('small',name+' · '+detail,'secondary'));
-  for(const attribution of Array.isArray(source.attributions)?source.attributions:[]){
-   const target=offerTarget(attribution?.url),label=catalogText(attribution?.name,96);
-   if(target&&label){const link=node('a',label,'secondary');link.href=target;link.rel='noopener noreferrer';content.append(link);}
-  }
+  const credits=Array.isArray(source.attributions)?source.attributions:[];
+  const key=JSON.stringify([source.source,source.status,source.scope,source.coverage,credits.map(credit=>credit?.name)]);
+  const group=groups.get(key)||{source,credits,regions:new Set()};
+  if(/^[A-Z]{2}$/.test(source.uiCountry))group.regions.add(source.uiCountry);
+  groups.set(key,group);
  }
+ for(const {source,credits,regions}of groups.values()){
+  const line=node('p',undefined,'secondary');
+  let credited=false;
+  for(const credit of credits){
+   const label=catalogText(credit?.name,120),url=publicOfferUrl(credit?.url);if(!label||!url)continue;
+   if(credited)line.append(node('span',' · '));
+   const link=node('a',label);link.href=url;link.rel='noopener noreferrer';line.append(link);credited=true;
+  }
+  if(!credited){
+   const names={'tmdb':'TMDB','tmdb-watch-page':'TMDB / JustWatch','musicbrainz':'MusicBrainz',
+    'movie-of-the-night':'Streaming Availability','catalog':'Catalog'};
+   line.append(node('strong',names[source.source]||catalogText(source.source,120)||'Catalog source'));
+   credited=true;
+  }
+  if(regions.size)line.append(node('span',' · '+(regions.size<=3?[...regions].map(offerMarketName).join(', '):regions.size+' regions')));
+  const note=statuses[source.status]||(source.status==='complete'?'':'Source status is unavailable.');
+  const coverage=source.scope==='linkedAccess'?'These catalog links do not establish regional availability.':
+   source.coverage==='partial'?'Coverage is limited to what this source reports.':
+   source.coverage==='unknown'?'Coverage is not established.':'';
+  if(note||coverage)line.append(node('span',(credited?' — ':'')+[note,coverage].filter(Boolean).join(' ')));
+  if(line.children.length)content.append(line);
+ }
+}
+function offersView(route){
+ const content=node('div',undefined,'provider-actions'),result=route.offers;
+ const country=route.offerCountry??'',countries=new Map();
+ const video=routeOfferIdentity(route)?.source==='tmdb';
+ for(const row of route.offerCountries||[])countries.set(row.code,catalogText(row.name,120)||offerMarketName(row.code));
+ for(const offer of result?.offers||[])if(offer.country&&offer.evidence?.regionVerified===true)
+  countries.set(offer.country,countries.get(offer.country)||offerMarketName(offer.country));
+ if(country&&!countries.has(country))countries.set(country,offerMarketName(country));
+ const choices=[['','All reported regions'],...[...countries].sort((a,b)=>a[1].localeCompare(b[1]))];
+ content.append(searchChoice('Country','offer-country',country,choices,selected=>loadRegionalOffers(route,selected,undefined,!selected)));
+ if(!country)content.append(node('p',video?
+  'All reported regions. Select a country or check each region for more direct links.':
+  'All reported access links. Regional availability may be unverified.','secondary'));
+ const progress=route.offerProgress;
+ if(video&&!country&&(!progress||progress.stopped||progress.registryUnavailable)&&!result?.loading){
+  const scan=button(progress?.stopped?'Check regions again':'Check each region',()=>loadRegionalOffers(route,'',undefined,true));
+  content.append(scan);
+ }
+ if(progress){
+  const text=progress.registryUnavailable?'The country list is unavailable; this remains a partial summary.':
+   (progress.stopped?'Stopped after ':'Checked ')+progress.completed+' of '+progress.total+' regions'+
+   (progress.failed?' · Some sources could not be checked in '+progress.failed+' regions':'')+'.';
+  content.append(node('p',text,'secondary'));
+  if(!progress.registryUnavailable&&!progress.stopped&&progress.completed<progress.total)content.append(action('Stop checking regions',()=>{
+   route.offerController?.abort();progress.stopped=true;render();
+  }));
+ }
+ if(route.offerRegistryUnavailable)content.append(node('p','The country registry is temporarily unavailable.','secondary'));
+ if(result?.loading||!result){content.append(node('p','Checking availability…','loading'));return content;}
+ if(result.unavailable){
+  content.append(node('p','Regional availability is unavailable.','secondary'),
+   button('Retry availability',()=>loadRegionalOffers(route,country)));
+  return content;
+ }
+ const services=new Map();
+ for(const offer of result.offers){const key=serviceKey(offer.service);if(key)services.set(key,catalogText(offer.service.name,160));}
+ for(const region of route.offerProviders||[])for(const record of Array.isArray(region.services)?region.services:[]){
+  const key=serviceKey(record.service),name=catalogText(record.service?.name,160);
+  if(key&&name&&!services.has(key))services.set(key,name);
+ }
+ if(services.size)content.append(searchChoice('Service','offer-service',route.offerService||'',
+  [['','All services'],...[...services].sort((a,b)=>a[1].localeCompare(b[1]))],
+  selected=>{route.offerService=selected;render();}));
+ const markets=new Map();
+ for(const offer of result.offers){
+  if(route.offerService&&serviceKey(offer.service)!==route.offerService)continue;
+  const key=offer.evidence?.regionVerified===true?offer.country||'':'';
+  const rows=markets.get(key)||[];rows.push(offer);markets.set(key,rows);
+ }
+ let shown=0;
+ for(const [market,offers] of [...markets].sort((a,b)=>(offerMarketName(a[0])||'~').localeCompare(offerMarketName(b[0])||'~'))){
+  const group=node('section',undefined,'offer-market'),rows=offers.map(offerRow).filter(Boolean);
+  if(!rows.length)continue;
+  shown+=rows.length;
+  group.append(node('h3',market?countries.get(market)||offerMarketName(market):'Region not verified'),...rows);content.append(group);
+ }
+ if(!shown){
+  const known=result.sources.some(source=>source?.scope==='regionalAvailability'&&
+   ['complete','noOffers'].includes(source.status));
+  content.append(node('p',route.offerService?'No offers match this service filter.':
+   known?'No offers were returned by these sources for this request.':'Availability could not be checked.','secondary'));
+ }
+ if(result.filtered)content.append(node('p','Offers with a different title or country were excluded.','secondary'));
+ offerSourceNotes(content,result.sources);
  return content;
 }
 async function openPublicTitle(item){
@@ -1459,11 +1655,11 @@ function publicTitleDetail(main,route){
  if(item.description)info.append(node('p',item.description));
  if(item.fact)info.append(node('p',item.fact,'secondary'));
  header.append(picture,info);main.append(header);
- if(item.offerRef||item.kind||item.firstLinks?.length){
+ if(catalogOfferIdentity(item)||item.kind||item.firstLinks?.length){
   const availability=node('section',undefined,'detail-availability');
   availability.append(node('h2',item.category==='music'?'Where to listen':'Where to watch'),
    publicTitleActions(item,route.owned,false));
-  if(item.offerRef)availability.append(offersView(route));
+  if(catalogOfferIdentity(item))availability.append(offersView(route));
   else availability.append(node('p','Regional availability is unknown for this title.','secondary'));
   main.append(availability);
   const links=mergeProviderLinks(item.sources?.links||[],item.firstLinks||[]);
