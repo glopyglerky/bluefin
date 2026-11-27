@@ -228,7 +228,12 @@ fn add_commons_artwork(titles: &mut [Value]) {
     let artwork: HashMap<_, _> = pages.filter_map(|page| {
         let name = key(page["title"].as_str()?.strip_prefix("File:")?);
         let info = page["imageinfo"].as_array()?.first()?;
-        let image = info["thumburl"].as_str()?.strip_prefix("https://upload.wikimedia.org/wikipedia/commons/")?;
+        let mut image = Url::parse(info["thumburl"].as_str()?).ok()?;
+        if image.scheme() != "https" || !matches!(image.host_str(), Some("upload.wikimedia.org" | "thumb.wikimedia.org"))
+            || image.port().is_some() || !image.username().is_empty() || image.password().is_some()
+            || !image.path().starts_with("/wikipedia/commons/") { return None; }
+        image.set_query(None);
+        image.set_fragment(None);
         let source = info["descriptionurl"].as_str()?.strip_prefix("https://commons.wikimedia.org/wiki/File:")?;
         let metadata = &info["extmetadata"];
         let author = metadata["Attribution"]["value"].as_str().or_else(|| metadata["Artist"]["value"].as_str());
@@ -240,7 +245,7 @@ fn add_commons_artwork(titles: &mut [Value]) {
         });
         let credit = author.map(strip_markup).filter(|credit| !credit.is_empty());
         if !matches!(license, "Public domain" | "CC0") && (credit.is_none() || license_url.is_none()) { return None; }
-        Some((name, json!({"image": format!("https://upload.wikimedia.org/wikipedia/commons/{image}"),
+        Some((name, json!({"image": image.as_str(),
             "url": format!("https://commons.wikimedia.org/wiki/File:{source}"),
             "author": credit.unwrap_or_else(|| license.to_owned()), "license": license, "licenseUrl": license_url})))
     }).collect();

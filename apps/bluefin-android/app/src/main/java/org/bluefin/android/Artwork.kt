@@ -87,7 +87,7 @@ object Artwork {
     }
 
     suspend fun publicPortrait(url: String?): Bitmap? {
-        if (url == null || !PublicTvTitle.isPortrait(url) && !url.startsWith("https://upload.wikimedia.org/wikipedia/commons/")) return null
+        if (url == null || !PublicTvTitle.isPortrait(url) && !isCommonsArtwork(url)) return null
         return slots.withPermit {
             withContext(Dispatchers.IO) {
                 runCatching {
