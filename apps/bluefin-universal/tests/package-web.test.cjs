@@ -5,9 +5,13 @@ const {packageWeb,MAX_ASSET_BYTES}=require('../../../scripts/package-bluefin-web
 function fixture(t){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'bluefin-package-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const source=path.join(root,'source'),app=path.join(source,'apps/bluefin-universal'),engine=path.join(root,'engine'),output=path.join(root,'bundle');
+ fs.mkdirSync(path.join(app,'assets'),{recursive:true});
+ const installMetadata='<link rel="manifest" href="./manifest.webmanifest"><link rel="apple-touch-icon" href="./assets/bluefin-app-512.png">';
+ fs.copyFileSync(path.join(__dirname,'../manifest.webmanifest'),path.join(app,'manifest.webmanifest'));
+ fs.copyFileSync(path.join(__dirname,'../assets/bluefin-app-512.png'),path.join(app,'assets/bluefin-app-512.png'));
  fs.mkdirSync(path.join(app,'vendor'),{recursive:true});fs.mkdirSync(path.join(engine,'snippets/bridge'),{recursive:true});
- fs.writeFileSync(path.join(app,'index.html'),'<link href="./bluefin.css"><script src="./bootstrap.js"></script><script src="./native-view.js"></script>');
- fs.writeFileSync(path.join(app,'install.html'),'<meta name="referrer" content="no-referrer"><link href="./bluefin.css"><!-- Bluefin installation channels --><a href="./">Continue in the browser</a>');
+ fs.writeFileSync(path.join(app,'index.html'),installMetadata+'<link href="./bluefin.css"><script src="./bootstrap.js"></script><script src="./native-view.js"></script>');
+ fs.writeFileSync(path.join(app,'install.html'),installMetadata+'<meta name="referrer" content="no-referrer"><link href="./bluefin.css"><!-- Bluefin installation channels --><a href="./">Continue in the browser</a>');
  fs.writeFileSync(path.join(app,'install-channels.json'),'{}');
  fs.writeFileSync(path.join(app,'bluefin.css'),'body{color:#006e91}');
  fs.writeFileSync(path.join(app,'bootstrap.js'),"import('./bluefin_universal.js');new URL('./media-worker.js',document.baseURI);");
@@ -88,5 +92,35 @@ test('packaging rejects off-platform destinations and invitation data in an inst
   fs.writeFileSync(path.join(f.app,'install-channels.json'),JSON.stringify(channels));
   assert.throws(()=>packageWeb(f.engine,f.output,f.source),/Invalid Bluefin installation channel/);
   assert(!fs.existsSync(f.output));
+ }
+});
+test('installed web launches use the application root without carrying an invitation',t=>{
+ const f=fixture(t),assets=packageWeb(f.engine,f.output,f.source).assets;
+ const entry=assets.find(file=>/^manifest-[a-f0-9]{64}\.webmanifest$/.test(file.path));
+ assert(entry);
+ const manifest=JSON.parse(fs.readFileSync(path.join(f.output,entry.path),'utf8'));
+ const base=new URL(entry.path,'https://bluefin.test/web/bluefin/');
+ assert.equal(manifest.name,'Bluefin');
+ assert.equal(manifest.display,'standalone');
+ // An omitted id defaults to the resolved start URL. A relative id would
+ // instead resolve against the origin and collide with other installed apps.
+ assert(!Object.hasOwn(manifest,'id'));
+ for(const field of ['start_url','scope']){
+  assert.equal(new URL(manifest[field],base).href,'https://bluefin.test/web/bluefin/');
+ }
+ assert.equal(manifest.icons.length,1);
+ const icon=manifest.icons[0],iconPath=new URL(icon.src,base).pathname.split('/').pop();
+ assert.equal(icon.sizes,'512x512');
+ assert.equal(icon.type,'image/png');
+ assert.equal(icon.purpose,'any');
+ const png=fs.readFileSync(path.join(f.output,iconPath));
+ assert(png.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])));
+ assert.equal(png.readUInt32BE(16),512);assert.equal(png.readUInt32BE(20),512);
+ assert(assets.some(file=>file.path===iconPath));
+ for(const file of ['index.html','install.html']){
+  const html=fs.readFileSync(path.join(f.output,file),'utf8');
+  assert(html.includes('href="./'+entry.path+'"'));
+  assert(html.includes('href="./'+iconPath+'"'));
+  assert(!html.includes('href="./assets/bluefin-app-512.png"'));
  }
 });
