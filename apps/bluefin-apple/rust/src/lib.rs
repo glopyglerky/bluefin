@@ -28,6 +28,8 @@ mod owned_music;
 mod playback_resources;
 mod premium;
 mod public_catalog;
+mod public_access;
+mod public_music;
 #[cfg(feature = "iroh-probe")]
 mod probe;
 mod sports;
@@ -545,11 +547,12 @@ pub fn call(v: &Value) -> Result<Value> {
     if op == "publicFilmSearch" {
         return public_catalog::public_film_search(v);
     }
+    if op == "publicCatalogOffers" { return public_access::offers(v); }
+    if op == "publicCatalogCountries" { return public_access::countries(v); }
+    if op == "publicMusicSearch" { return public_music::search(v); }
+    if op == "publicMusicDetail" { return public_music::detail(v); }
     if op == "publicTitleSources" {
         return public_catalog::public_title_sources(v);
-    }
-    if matches!(op, "publicCatalogOffers" | "publicCatalogProviders") {
-        return public_catalog::regional_access(v, op == "publicCatalogOffers");
     }
     if matches!(op, "ownedLibraryList" | "ownedLibraryImport" | "ownedLibraryRemove" | "ownedLibraryQueue"
         | "ownedLibrarySelect" | "ownedLibraryAdvance" | "ownedLibraryPlay" | "ownedLibrarySearch") {

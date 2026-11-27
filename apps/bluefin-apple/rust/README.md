@@ -282,3 +282,36 @@ commands and preserves inherited native flag arguments, including target-specifi
 flags. SDK selection and minimum OS 15 remain explicit. Inspect delivered static
 archives with matching Rust LLVM tools; a bounded marker scan is not a universal
 privacy or linked-app acceptance claim.
+
+## Public music and regional access
+
+Public search is available before pairing. The native Rust dispatcher owns
+`publicMusicSearch`, `publicMusicDetail`, `publicCatalogOffers`, and
+`publicCatalogCountries`. Apple and Android pass the same typed catalog identities;
+they do not need a private Bluefin server for these operations.
+
+MusicBrainz supplies artist, release-group, release and recording identities,
+descriptive metadata, related entities and actual service URL relationships. The
+shared `MusicBrainzClient` uses one process-wide acquisition gate and bounded cache
+for search, metadata and access. Search terms are escaped as literal text. Source
+failures preserve their state and older cached observation time. Cover Art Archive
+paths use real release IDs and may have no artwork. Artist photographs require a
+matching MusicBrainz ID in Wikidata and credited Commons metadata.
+
+Movie and TV access starts from unique, typed Wikidata TMDB cross-references.
+Series cross-references are checked against the actual TVmaze or IMDb identity.
+An external provider URL never supplies a Bluefin playback entitlement. Existing
+authorized library playback stays ahead of external provider destinations.
+
+The region picker starts with a valid device-region code, with no US fallback.
+For video, the explicit all-regions view reads the upstream country dataset and
+schedules at most three regional requests at a time. Changing region or leaving
+the view cancels further scheduling. Progress, partial coverage and interrupted
+sources remain visible. MusicBrainz links have unknown region; an explicitly
+selected storefront can add exact-ID iTunes purchase/catalog listings. New provider
+names and URLs are rendered from source evidence, including query-bearing links.
+
+Qualification requires the existing Forge/native-owner pipeline. Refresh both
+standalone native Cargo lockfiles under an admitted offline Forge job, retain those
+files and freeze the source again before locked release qualification. No compile,
+device or public-service success is implied by authored fixture tests.
