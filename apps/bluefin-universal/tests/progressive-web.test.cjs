@@ -73,7 +73,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  Object.defineProperty(context,'localStorage',{get(){throw Error('Default view touched localStorage');}});
  Object.defineProperty(context,'sessionStorage',{get(){throw Error('Default view touched sessionStorage');}});
  vm.runInContext(source('local-music.js'),context);
- const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={lookupSearchFacet,artworkSource,artKey,validateSingManifest,singPcm,singLyrics,prepareSing,activateSing,retireSing,runSing,seekLyric,sportsLogo,followSportsTeam,loadLyrics,pumpArtwork,clearImages,state,connect,signIn,navigate,openItem,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,startSearch,openSearch,searchCall,loadMoreSearch,loadSearchFacets,recordHomeSearch,clearHomeSearchHistory,importInvitationImage:readInvitationImage};})();');
+ const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={perform,lookupSearchFacet,artworkSource,artKey,validateSingManifest,singPcm,singLyrics,prepareSing,activateSing,retireSing,runSing,seekLyric,sportsLogo,followSportsTeam,loadLyrics,pumpArtwork,clearImages,state,connect,signIn,navigate,openItem,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,startSearch,openSearch,searchCall,loadMoreSearch,loadSearchFacets,recordHomeSearch,clearHomeSearchHistory,importInvitationImage:readInvitationImage};})();');
  vm.runInContext(script,context);
  return {context,ui:context.contract,root,video,requests,events,item,pending};
 }
@@ -605,6 +605,7 @@ test('moonlit home uses genuine recommendation rows and only 404 selects legacy 
    if(u.pathname==='/Movies/Recommendations')return jsonReply([{RecommendationType:'SimilarToLikedItem',BaselineItemName:'Favorite movie',Items:[title]}]);
   }});
   await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+  await until(()=>!t.ui.state.route.loading);
   const legacy=t.requests.filter(r=>new URL(r.url).pathname==='/Movies/Recommendations');
   assert.equal(legacy.length,status===404?1:0);
   assert.equal(t.ui.state.shelves.some(s=>s.items.some(i=>i.Id===title.Id)),status!==403);
@@ -1302,4 +1303,50 @@ test('a custom service tag beyond initial suggestions can be applied exactly wit
  const apply=findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent==='Apply');apply.listeners.click();await until(()=>t.ui.state.route.filters.tag==='Service 699'&&!t.ui.state.route.loading);
  const request=t.requests.map(r=>new URL(r.url)).find(u=>u.searchParams.get('Tags')==='Service 699');assert(request);assert.equal(request.origin,'https://bluefin.test');
  assert(!t.requests.some(r=>new URL(r.url).hostname==='api.tvmaze.com'));await t.ui.signOut();
+});
+
+
+test('sign-in enables usable Home controls before a slow recommendation response completes',async()=>{
+ let release,finished=false;const privatePick={Id:'66666666666646668666666666666666',Name:'Late account pick',Type:'Movie'};
+ const t=setup({apiResponse:async u=>{
+  if(u.pathname==='/Bluefin/Home/Recommendations'){await new Promise(resolve=>release=resolve);return jsonReply({recommendations:[{title:'Account picks',items:[privatePick]}]});}
+ }});
+ await t.ui.connect('https://bluefin.test');
+ const signing=t.ui.perform(()=>t.ui.signIn('Listener','example-password',false)).then(()=>finished=true);
+ try{
+  await until(()=>release&&finished);
+  assert.equal(t.ui.state.busy,false);assert.equal(t.ui.state.route.loading,true);
+  const music=findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.trim()==='Music');assert.equal(music.disabled,false);
+  await t.ui.navigate('Music');release();await new Promise(setImmediate);
+  assert.equal(t.ui.state.route.kind,'music');assert(!t.root.textContent.includes('Late account pick'));assert.equal(t.ui.state.error,'');
+ }finally{release?.();await signing;await t.ui.signOut();}
+});
+test('an empty Home still finishes sign-in without waiting for an impossible first shelf',async()=>{
+ const t=setup({apiResponse:u=>{
+  if(u.pathname==='/Bluefin/Home/Recommendations')return jsonReply({recommendations:[]});
+  if(u.pathname.endsWith('/Latest'))return jsonReply([]);
+  if(u.pathname.endsWith('/Resume')||u.pathname==='/Shows/NextUp')return jsonReply({Items:[]});
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.perform(()=>t.ui.signIn('Listener','example-password',false));
+ assert(t.ui.state.session);assert.equal(t.ui.state.busy,false);assert.equal(t.ui.state.route.loading,false);assert.equal(t.ui.state.shelves.length,0);
+ await t.ui.signOut();
+});
+test('Sing preparation is discarded if the player reports a different source during the download',async()=>{
+ const releases=[],t=singFixture({onRequest:async(u,_o,{bytes})=>{
+  if(u.pathname.includes('/Stems/')){await new Promise(resolve=>releases.push(resolve));return new Response(bytes);}
+ }}),p=await playSingFixture(t);
+ const loading=t.ui.prepareSing(p);await until(()=>releases.length===2);
+ p.lease.mediaSourceId='88888888888848888888888888888888';releases.forEach(resolve=>resolve());await loading;
+ assert.equal(p.sing.status,'error');assert.match(p.sing.message,/playing version changed/);
+ assert.equal(p.sing.active,false);assert.equal(t.contexts[0].state,'closed');assert.equal(t.contexts[0].sources.length,0);assert.equal(t.video.paused,false);
+ await t.ui.signOut();
+});
+test('an active Sing session stops without automatic replay if its negotiated source changes',async()=>{
+ const t=singFixture(),p=await playSingFixture(t);await t.ui.prepareSing(p);
+ const callbacks=[];t.context.setInterval=callback=>{callbacks.push(callback);return 1;};
+ await t.ui.activateSing(p);const plays=t.video.playCalls;
+ p.lease.mediaSourceId='88888888888848888888888888888888';callbacks.at(-1)();
+ await until(()=>t.ui.state.player===null&&t.contexts[0].state==='closed');
+ assert.equal(t.video.playCalls,plays);assert.match(t.ui.state.error,/playing version changed/);
+ await t.ui.signOut();
 });

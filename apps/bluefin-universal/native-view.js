@@ -251,7 +251,14 @@ async function accept(value,mode='https',epoch=state.epoch){
  state.featured=null;state.homeHistory=null;clearSearchFacets();state.search=null;state.session=value;state.mode=mode;state.phase='library';state.sheet=null;state.capability=null;state.device=null;
  state.pairing=null;state.invitation=null;state.code='';state.tab='Home';state.back=[];state.route={kind:'home'};
  const capabilities=await api('Bluefin/Capabilities').catch(()=>null);assertLive(accepted,value);
- state.capabilities=capabilities;await loadRoute();assertLive(accepted,value);
+ state.capabilities=capabilities;
+ const route=state.route;let markUsable;
+ const usable=new Promise(resolve=>{markUsable=resolve;});
+ const loading=loadRoute(markUsable);
+ loading.catch(error=>{
+  if(!pageRetired&&accepted===state.epoch&&value===state.session&&route===state.route&&error.name!=='AbortError'){state.error=String(error.message||error);render();}
+ });
+ await Promise.race([usable,loading]);assertLive(accepted,value);
 }
 async function signIn(name,password,create){
  const epoch=state.epoch,base=state.base;assertLive(epoch);authTask=true;
@@ -759,7 +766,7 @@ async function clearHomeSearchHistory(){
  state.featured=state.shelves.find(shelf=>shelf.items.length)?.items[0]||null;
  state.notice='Search history cleared for this account.';
 }
-async function loadRoute(){
+async function loadRoute(onUsable){
  const epoch=state.epoch,session=state.session,route=state.route,user=session?.user;assertLive(epoch,session);
  clearTimeout(sportsRefreshTimer);routeController?.abort();const controller=routeController=new AbortController();
  const current=()=>{if(pageRetired||epoch!==state.epoch||session!==state.session||route!==state.route||controller!==routeController||controller.signal.aborted)throw aborted();};
@@ -768,7 +775,7 @@ async function loadRoute(){
  if(!user&&route.kind!=='search')return;
  state.rows=[];state.shelves=[];state.featured=null;state.error='';route.loading=true;
  if(route.kind!=='search')state.search=null;
- const publish=()=>{current();render();};
+ const publish=()=>{current();render();if(typeof onUsable==='function'&&(state.featured||state.rows.length||state.shelves.some(shelf=>shelf.items.length)))onUsable();};
  try{
   if(route.kind==='home'){
    const values=[null,null,null,null];
@@ -1948,7 +1955,11 @@ async function prepareSing(player){
  if(!Context||!crypto.subtle){state.error='This browser cannot start the Sing audio engine.';render();return;}
  const epoch=state.epoch,session=state.session,generation=playbackGeneration;
  const sing=player.sing={status:'loading',active:false,paused:true,position:0,vocalLevel:.15,controller:new AbortController(),context:new Context({latencyHint:'interactive'}),base:state.base,requestId:null,transportRevision:0,buffers:null};
- sing.current=()=>{if(pageRetired||state.player!==player||player.sing!==sing||epoch!==state.epoch||session!==state.session||generation!==playbackGeneration||sing.controller.signal.aborted)throw aborted();};
+ sing.current=()=>{
+  if(pageRetired||state.player!==player||player.sing!==sing||epoch!==state.epoch||session!==state.session||generation!==playbackGeneration||sing.controller.signal.aborted)throw aborted();
+  const activeSource=player.mode==='mesh'?player.snapshot?.mediaSourceId:player.lease?.mediaSourceId;
+  if(!uuid(activeSource)||id(activeSource)!==id(selection))throw Error('The playing version changed. Start Sing again.');
+ };
  render();
  try{
   await sing.context.resume();sing.current();await sing.context.suspend();sing.current();
@@ -2007,8 +2018,17 @@ async function activateSing(player){
  const position=playbackTimeline().position;sing.current();
  if(player.mode==='mesh')runtime().ready().webMeshControl(player.handle,'pause',1);else media.pause();
  sing.active=true;sing.originalLyrics=player.lyrics;if(sing.preparedLyrics)player.lyrics=sing.preparedLyrics;
- state.nowPanel='lyrics';state.expanded=true;await runSing(player,position);sing.current();
- sing.timer=setInterval(()=>{if(state.player===player&&player.sing===sing&&!document.hidden)updatePlayback();},250);render();
+ state.nowPanel='lyrics';state.expanded=true;
+ try{await runSing(player,position);sing.current();}
+ catch(error){
+  if(state.player===player&&player.sing===sing){sing.active=false;player.lyrics=sing.originalLyrics;sing.status='error';sing.message=String(error.message||error);await disposeSingAudio(sing);render();}
+  throw error;
+ }
+ sing.timer=setInterval(()=>{
+  if(state.player!==player||player.sing!==sing)return;
+  try{sing.current();if(!document.hidden)updatePlayback();}
+  catch(error){stopPlayback().catch(()=>{});state.error=String(error.message||error);render();}
+ },250);render();
 }
 async function disposeSingAudio(sing){stopSingNodes(sing);clearInterval(sing.timer);sing.gains?.forEach(gain=>gain.disconnect());sing.gains=[];sing.buffers=null;try{await sing.context.close();}catch(_){}}
 async function cancelSingPreparation(player,sing){
