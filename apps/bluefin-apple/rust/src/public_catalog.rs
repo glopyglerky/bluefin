@@ -1,7 +1,7 @@
 //! Read-only public metadata fetched by this Bluefin instance.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use super::{Client, Duration, OnceLock, Read, Result, Url, Value, err, json, text};
+use super::{err, json, text, Client, Duration, OnceLock, Read, Result, Url, Value};
 
 const CATALOG_LIMIT: u64 = 1024 * 1024;
 
@@ -132,16 +132,17 @@ pub(super) fn public_film_search(input: &Value) -> Result<Value> {
     let detail = wikidata(&[
         ("action", "wbgetentities"),
         ("ids", &ids.join("|")),
-        ("props", "labels|descriptions"),
+        ("props", "labels|descriptions|claims"),
         ("languages", &languages),
     ])?;
     let entities = detail["entities"]
         .as_object()
         .ok_or_else(|| err("Invalid public film catalog response"))?;
-    let results: Vec<_> = ids
+    let mut results: Vec<_> = ids
         .into_iter()
         .filter_map(|id| public_film_title(id, entities.get(id)?, language))
         .collect();
+    add_commons_artwork(&mut results);
     Ok(json!({"results": results}))
 }
 
@@ -164,44 +165,184 @@ fn public_film_title(id: &str, entity: &Value, language: &str) -> Option<Value> 
             .take(180)
             .collect::<String>()
     });
+    let claims = &entity["claims"];
+    let artwork_file = ["P3383", "P18"].into_iter().find_map(|property| {
+        claim_values(claims, property, commons_filename)
+            .into_iter()
+            .next()
+    });
     Some(json!({
         "id": id,
         "title": title,
         "description": description,
+        "artworkFile": artwork_file,
+        "links": direct_provider_links(claims, true),
+        "imdbId": claim_values(claims, "P345", imdb_id).into_iter().next(),
         "sourceUrl": format!("https://www.wikidata.org/wiki/{id}")
     }))
+}
+
+fn commons_filename(name: &str) -> bool {
+    name.len() <= 224
+        && !name
+            .chars()
+            .any(|ch| ch.is_control() || "|:/\\#<>[]{}".contains(ch))
+        && name.rsplit_once('.').is_some_and(|(_, extension)| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "jpg" | "jpeg" | "png" | "webp"
+            )
+        })
+}
+
+fn add_commons_artwork(titles: &mut [Value]) {
+    let files = titles
+        .iter()
+        .filter_map(|title| title["artworkFile"].as_str())
+        .map(|name| format!("File:{name}"))
+        .collect::<Vec<_>>()
+        .join("|");
+    if files.is_empty() {
+        return;
+    }
+    let Ok(response) = read_catalog(
+        "https://commons.wikimedia.org/w/api.php",
+        &[
+            ("action", "query"),
+            ("format", "json"),
+            ("formatversion", "2"),
+            ("prop", "imageinfo"),
+            ("iiprop", "url|extmetadata"),
+            ("iiurlwidth", "240"),
+            (
+                "iiextmetadatafilter",
+                "Artist|LicenseShortName|LicenseUrl|Attribution",
+            ),
+            ("titles", &files),
+        ],
+    ) else {
+        return;
+    };
+    let key = |name: &str| name.replace('_', " ").to_lowercase();
+    let pages = response["query"]["pages"].as_array().into_iter().flatten();
+    let artwork: HashMap<_, _> = pages.filter_map(|page| {
+        let name = key(page["title"].as_str()?.strip_prefix("File:")?);
+        let info = page["imageinfo"].as_array()?.first()?;
+        let image = info["thumburl"].as_str()?.strip_prefix("https://upload.wikimedia.org/wikipedia/commons/")?;
+        let source = info["descriptionurl"].as_str()?.strip_prefix("https://commons.wikimedia.org/wiki/File:")?;
+        let metadata = &info["extmetadata"];
+        let author = metadata["Attribution"]["value"].as_str().or_else(|| metadata["Artist"]["value"].as_str());
+        let license = metadata["LicenseShortName"]["value"].as_str()?;
+        let license_url = metadata["LicenseUrl"]["value"].as_str().filter(|url| {
+            url.strip_prefix("https://creativecommons.org/licenses/").is_some_and(|path|
+                ["1.0/", "2.0/", "3.0/", "4.0/"].iter().any(|version|
+                    path == format!("by/{version}") || path == format!("by-sa/{version}")))
+        });
+        let credit = author.map(strip_markup).filter(|credit| !credit.is_empty());
+        if !matches!(license, "Public domain" | "CC0") && (credit.is_none() || license_url.is_none()) { return None; }
+        Some((name, json!({"image": format!("https://upload.wikimedia.org/wikipedia/commons/{image}"),
+            "url": format!("https://commons.wikimedia.org/wiki/File:{source}"),
+            "author": credit.unwrap_or_else(|| license.to_owned()), "license": license, "licenseUrl": license_url})))
+    }).collect();
+    for title in titles {
+        let Some(asset) = title["artworkFile"]
+            .as_str()
+            .and_then(|name| artwork.get(&key(name)))
+        else {
+            continue;
+        };
+        title["artwork"] = asset["image"].clone();
+        title["artworkCredit"] = asset.clone();
+    }
+}
+
+fn strip_markup(value: &str) -> String {
+    let mut tag = false;
+    value
+        .chars()
+        .filter(|ch| {
+            match ch {
+                '<' => tag = true,
+                '>' => {
+                    tag = false;
+                    return false;
+                }
+                _ => {}
+            }
+            !tag && !ch.is_control()
+        })
+        .take(1800)
+        .collect::<String>()
+        .trim()
+        .to_owned()
 }
 
 pub(super) fn public_title_sources(input: &Value) -> Result<Value> {
     let id = text(input, "id")?;
     let kind = text(input, "kind")?;
+    let mut links = Vec::new();
+    let mut description = None;
+    let mut credits = Vec::new();
     let entity = match kind {
         "movie" if wikidata_id(id) => Some(id.to_owned()),
-        "series" if decimal(id, 1, 12) => match find_wikidata_id("P8600", id)? {
-            Some(entity) => Some(entity),
-            None => match input["imdbId"].as_str().filter(|value| imdb_id(value)) {
-                Some(imdb) => find_wikidata_id("P345", imdb)?,
-                None => None,
-            },
-        },
+        "series" if decimal(id, 1, 12) => {
+            if let Some(tv) = read_catalog(
+                &format!("https://api.tvmaze.com/shows/{id}"),
+                &[("embed", "cast")],
+            )
+            .ok()
+            .filter(|tv| {
+                tv["id"]
+                    .as_u64()
+                    .is_some_and(|value| value.to_string() == id)
+            }) {
+                links.extend(tv["officialSite"].as_str().and_then(official_provider_site));
+                description = tv["summary"].as_str().map(strip_markup);
+                credits.extend(tv["_embedded"]["cast"].as_array().into_iter().flatten().take(20).filter_map(|credit| {
+                    Some(json!({"name": credit["person"]["name"].as_str()?, "role": credit["character"]["name"].as_str().unwrap_or("Cast")}))
+                }));
+            }
+            find_wikidata_id("P8600", id).ok().flatten().or_else(|| {
+                let imdb = input["imdbId"].as_str().filter(|value| imdb_id(value))?;
+                find_wikidata_id("P345", imdb).ok().flatten()
+            })
+        }
         _ => return Err(err("Invalid public title identity")),
     };
     let Some(entity) = entity else {
-        return Ok(json!({"links": [], "imdbIds": []}));
+        return Ok(
+            json!({"links": links, "imdbIds": [], "description": description, "credits": credits}),
+        );
     };
-    let response = wikidata(&[
+    let response = match wikidata(&[
         ("action", "wbgetentities"),
         ("ids", &entity),
-        ("props", "claims"),
-    ])?;
+        ("props", "claims|descriptions"),
+        ("languages", "en"),
+    ]) {
+        Ok(value) => value,
+        Err(_) if kind == "series" => {
+            return Ok(
+                json!({"links": links, "imdbIds": [], "description": description, "credits": credits}),
+            )
+        }
+        Err(error) => return Err(error),
+    };
     let claims = &response["entities"][&entity]["claims"];
     if !claims.is_object() {
         return Err(err("Provider identities unavailable"));
     }
-    Ok(json!({
-        "links": direct_provider_links(claims, kind == "movie"),
-        "imdbIds": claim_values(claims, "P345", imdb_id),
-    }))
+    links.extend(direct_provider_links(claims, kind == "movie"));
+    let mut seen = HashSet::new();
+    links.retain(|link| seen.insert(link["url"].as_str().unwrap_or_default().to_owned()));
+    description = description.or_else(|| {
+        response["entities"][&entity]["descriptions"]["en"]["value"]
+            .as_str()
+            .map(strip_markup)
+    });
+    Ok(
+        json!({"links": links, "imdbIds": claim_values(claims, "P345", imdb_id), "description": description, "credits": credits}),
+    )
 }
 
 fn find_wikidata_id(property: &str, value: &str) -> Result<Option<String>> {
@@ -263,6 +404,74 @@ fn uuid_id(value: &str) -> bool {
                 byte.is_ascii_hexdigit()
             }
         })
+}
+
+fn official_provider_site(value: &str) -> Option<Value> {
+    if value.len() > 512
+        || !value.starts_with("https://")
+        || value.contains("..")
+        || !value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"./:_-".contains(&c))
+    {
+        return None;
+    }
+    let url = Url::parse(value).ok()?;
+    if url.port().is_some() || !url.username().is_empty() || url.password().is_some() {
+        return None;
+    }
+    let path = url.path().trim_matches('/').split('/').collect::<Vec<_>>();
+    let slug = |value: &str| {
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+    };
+    let (provider, player) = match (url.host_str()?, path.as_slice()) {
+        ("www.netflix.com", [path @ ("title" | "watch"), id]) if decimal(id, 6, 8) => {
+            ("Netflix", *path == "watch")
+        }
+        ("www.disneyplus.com", ["browse", entity])
+            if entity
+                .strip_prefix("entity-")
+                .or_else(|| entity.strip_prefix("page-"))
+                .is_some_and(uuid_id) =>
+        {
+            ("Disney+", false)
+        }
+        ("www.hulu.com", [path @ ("movie" | "series" | "watch"), entity])
+            if entity
+                .get(entity.len().saturating_sub(36)..)
+                .is_some_and(uuid_id) =>
+        {
+            ("Hulu", *path == "watch")
+        }
+        ("www.paramountplus.com", ["shows" | "movies", name]) if slug(name) => {
+            ("Paramount+", false)
+        }
+        ("www.peacocktv.com", ["stream-movies" | "stream-tv", name]) if slug(name) => {
+            ("Peacock", false)
+        }
+        ("www.amazon.com", ["gp", "video", "detail", id])
+            if id.starts_with('B') && id.len() == 10 && slug(id) =>
+        {
+            ("Prime Video", false)
+        }
+        ("www.hbomax.com", ["movie" | "show", id]) if uuid_id(id) => ("HBO Max", false),
+        ("tubitv.com", ["movies" | "series", id, ..]) if decimal(id, 1, 12) && path.len() <= 3 => {
+            ("Tubi", false)
+        }
+        ("www.espn.com", ["watch", "player", "_", "id", id]) if uuid_id(id) => ("ESPN", true),
+        ("www.crunchyroll.com", [path @ ("series" | "watch"), id, ..])
+            if id.len() == 9 && slug(id) && path.len() <= 3 =>
+        {
+            ("Crunchyroll", *path == "watch")
+        }
+        _ => return None,
+    };
+    Some(
+        json!({"provider": provider, "url": url.as_str(), "kind": if player {"player"} else {"title"}}),
+    )
 }
 
 fn direct_provider_links(claims: &Value, movie: bool) -> Vec<Value> {
@@ -385,24 +594,30 @@ fn direct_provider_links(claims: &Value, movie: bool) -> Vec<Value> {
             false,
         ),
     ];
-    let mut seen = HashSet::new();
-    rules
+    let mut links: Vec<_> = rules
         .into_iter()
-        .filter_map(|(provider, property, valid, prefix, suffix, player)| {
-            let id =
-                claim_values(claims, property, valid)
-                    .into_iter()
-                    .find(|id| match property {
-                        "P11815" => id.starts_with(if movie { "movies/" } else { "tv/" }),
-                        "P8298" => id.starts_with(if movie { "movie/" } else { "show/" }),
-                        _ => true,
-                    })?;
-            seen.insert(provider).then(|| {
-                json!({"provider": provider,
+        .flat_map(|(provider, property, valid, prefix, suffix, player)| {
+            claim_values(claims, property, valid)
+                .into_iter()
+                .filter(move |id| match property {
+                    "P11815" => id.starts_with(if movie { "movies/" } else { "tv/" }),
+                    "P8298" => id.starts_with(if movie { "movie/" } else { "show/" }),
+                    _ => true,
+                })
+                .map(move |id| {
+                    json!({"provider": provider,
             "url": format!("{prefix}{id}{suffix}"), "kind": if player {"player"} else {"title"}})
-            })
+                })
         })
-        .collect()
+        .collect();
+    links.extend(
+        claim_values(claims, "P856", |_| true)
+            .into_iter()
+            .filter_map(official_provider_site),
+    );
+    let mut seen = HashSet::new();
+    links.retain(|link| seen.insert(link["url"].as_str().unwrap_or_default().to_owned()));
+    links
 }
 
 fn public_tv_title(row: &Value) -> Option<Value> {
@@ -437,6 +652,8 @@ fn public_tv_title(row: &Value) -> Option<Value> {
         "year": year,
         "imdbId": show["externals"]["imdb"].as_str().filter(|id| imdb_id(id)),
         "artwork": artwork,
+        "description": show["summary"].as_str().map(strip_markup),
+        "links": show["officialSite"].as_str().and_then(official_provider_site).into_iter().collect::<Vec<_>>(),
         "sourceUrl": format!("https://www.tvmaze.com/shows/{id}")
     }))
 }
@@ -469,6 +686,22 @@ mod public_catalog_tests {
         assert_eq!(title["description"], "1982 film");
         assert_eq!(title["sourceUrl"], "https://www.wikidata.org/wiki/Q184843");
         assert!(public_film_title("Q184843/extra", &entity, "fr").is_none());
+    }
+
+    #[test]
+    fn tvmaze_supplies_the_exact_official_provider_with_the_result() {
+        let result = public_tv_title(&json!({"show": {"id": 47, "name": "Series", "summary": "<p>The premise.</p>",
+            "officialSite": "https://www.netflix.com/title/80057281",
+            "image": {"medium": "https://static.tvmaze.com/uploads/images/medium_portrait/2/47.png"}}})).unwrap();
+        assert_eq!(result["description"], "The premise.");
+        assert_eq!(
+            result["links"][0]["url"],
+            "https://www.netflix.com/title/80057281"
+        );
+        assert!(result["artwork"].as_str().unwrap().ends_with("/47.png"));
+        assert!(
+            official_provider_site("https://www.netflix.com/title/80057281/redirect").is_none()
+        );
     }
 
     #[test]

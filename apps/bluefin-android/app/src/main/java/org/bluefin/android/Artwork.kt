@@ -86,9 +86,8 @@ object Artwork {
         }
     }
 
-    suspend fun publicTvPortrait(item: PublicTvTitle): Bitmap? {
-        val url = item.artwork ?: return null
-        if (!PublicTvTitle.isPortrait(url)) return null
+    suspend fun publicPortrait(url: String?): Bitmap? {
+        if (url == null || !PublicTvTitle.isPortrait(url) && !url.startsWith("https://upload.wikimedia.org/wikipedia/commons/")) return null
         return slots.withPermit {
             withContext(Dispatchers.IO) {
                 runCatching {
@@ -138,7 +137,11 @@ fun ItemArtwork(item: LibraryItem, model: LibraryModel, modifier: Modifier) {
 }
 
 @Composable fun PublicTvArtwork(item: PublicTvTitle, modifier: Modifier) {
-    var bitmap by remember(item) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(item) { bitmap = Artwork.publicTvPortrait(item) }
+    PublicCatalogArtwork(item.artwork, modifier)
+}
+
+@Composable fun PublicCatalogArtwork(artwork: String?, modifier: Modifier) {
+    var bitmap by remember(artwork) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(artwork) { bitmap = Artwork.publicPortrait(artwork) }
     bitmap?.let { Image(it.asImageBitmap(), contentDescription = null, modifier = modifier, contentScale = ContentScale.Crop) }
 }

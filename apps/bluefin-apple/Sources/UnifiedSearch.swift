@@ -429,8 +429,10 @@ private struct PublicTitleSearchSection: View {
         let year: String?
         let description: String?
         let artwork: URL?
+        let artworkCredit: PublicTitleProviderChoices.ArtworkCredit?
         let sourceUrl: URL
         let imdbId: String?
+        let links: [PublicTitleProviderChoices.Destination]?
     }
 
     let query: String
@@ -453,16 +455,32 @@ private struct PublicTitleSearchSection: View {
                         Text("No matches from \(catalog.provider).").foregroundStyle(.secondary)
                     } else if let page {
                         ForEach(page.results) { item in
-                            PublicTitleProviderChoices(
+                            NavigationLink {
+                                PublicTitleProviderChoices(
                                 catalogID: item.sourceUrl.lastPathComponent,
                                 kind: catalog == .film ? "movie" : "series",
                                 imdbId: item.imdbId,
                                 title: item.title,
                                 subtitle: [item.description ?? item.year, catalog.provider].compactMap { $0 }.joined(separator: " · "),
                                 artwork: item.artwork,
+                                artworkCredit: item.artworkCredit,
+                                overview: item.description,
+                                initialLinks: item.links ?? [],
                                 icon: catalog.icon,
                                 library: library
-                            )
+                                )
+                            } label: {
+                                HStack(spacing: 14) {
+                                    AsyncImage(url: item.artwork) { image in image.resizable().scaledToFill() }
+                                    placeholder: { Image(systemName: catalog.icon).foregroundStyle(.secondary) }
+                                        .frame(width: 46, height: 64).clipped().accessibilityHidden(true)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.title).font(.headline)
+                                        Text([item.year, catalog.provider].compactMap { $0 }.joined(separator: " · "))
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -491,7 +509,14 @@ private struct PublicTitleSearchSection: View {
 }
 
 private struct PublicTitleProviderChoices: View {
-    struct Result: Decodable, Sendable { let links: [Destination]; let imdbIds: [String] }
+    struct Result: Decodable, Sendable {
+        let links: [Destination]
+        let imdbIds: [String]
+        let description: String?
+        let credits: [Credit]?
+    }
+    struct Credit: Decodable, Sendable, Hashable { let name: String; let role: String }
+    struct ArtworkCredit: Decodable, Sendable { let author: String; let url: URL; let license: String; let licenseUrl: URL? }
     struct Destination: Decodable, Sendable, Identifiable {
         let provider: String
         let url: URL
@@ -506,51 +531,71 @@ private struct PublicTitleProviderChoices: View {
     let title: String
     let subtitle: String
     let artwork: URL?
+    let artworkCredit: ArtworkCredit?
+    let overview: String?
+    let initialLinks: [Destination]
     let icon: String
     let library: [MediaItem]
     @EnvironmentObject private var store: LibraryStore
-    @State private var attempt = 0
+    @State private var attempt = 1
     @State private var completed = 0
     @State private var result: Result?
+    private var destinations: [Destination] {
+        var seen = Set<URL>()
+        return ((result?.links ?? []) + initialLinks).filter { seen.insert($0.url).inserted }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button { if attempt == 0 { attempt = 1 } } label: {
+        List {
+            Section {
                 HStack(spacing: 14) {
                     AsyncImage(url: artwork) { image in
                         image.resizable().scaledToFill()
                     } placeholder: {
                         Image(systemName: icon).foregroundStyle(.secondary)
                     }
-                    .frame(width: 46, height: 64).clipped().accessibilityHidden(true)
+                    .frame(width: 100, height: 145).clipped().accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(title).font(.headline)
                         Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                        if let text = result?.description ?? overview, !text.isEmpty { Text(text) }
                     }
                 }
-            }.accessibilityHint("Show where to watch in Bluefin")
-            if attempt > completed {
-                ProgressView("Looking up providers")
-            } else if let result {
+                if let artworkCredit {
+                    Link(artworkCredit.author, destination: artworkCredit.url)
+                    if let license = artworkCredit.licenseUrl { Link(artworkCredit.license, destination: license) }
+                }
+            }
+            Section("Where to watch") {
                 ForEach(library.filter { media in
                     kind == "movie" && media.Type == "Movie" &&
-                    (media.ProviderIds?["Imdb"] ?? media.ProviderIds?["IMDb"]).map(result.imdbIds.contains) == true
+                    (media.ProviderIds?["Imdb"] ?? media.ProviderIds?["IMDb"]).map { id in
+                        id == imdbId || result?.imdbIds.contains(id) == true
+                    } == true
                 }) { media in
                     Button(media.resumeTicks > 0 ? "Resume in Bluefin" : "Play in Bluefin") {
                         Task { await store.play(media) }
                     }
                 }
-                ForEach(result.links) { destination in
+                ForEach(destinations) { destination in
                     Link(destination.action, destination: destination.url)
                 }
-                Text(result.links.isEmpty ? "No direct provider destinations found." :
-                    "The provider confirms streaming availability for your region and account.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else if completed > 0 {
-                Text("Provider lookup is temporarily unavailable.").font(.caption).foregroundStyle(.secondary)
-                Button("Retry provider lookup") { attempt += 1 }
+                if attempt > completed { ProgressView("Looking up providers") }
+                else if result == nil { Button("Retry provider lookup") { attempt += 1 } }
+                else if destinations.isEmpty { Text("No direct provider destinations found.").foregroundStyle(.secondary) }
+            }
+            if let credits = result?.credits, !credits.isEmpty {
+                Section("Credits") {
+                    ForEach(credits.indices, id: \.self) { index in
+                        VStack(alignment: .leading) {
+                            Text(credits[index].name)
+                            Text(credits[index].role).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
         }
+        .navigationTitle(title)
         .task(id: attempt) {
             let request = attempt
             guard request > 0 else { return }

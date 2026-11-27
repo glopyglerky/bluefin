@@ -16,6 +16,8 @@ import java.net.URI
 import java.util.UUID
 import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import android.app.UiModeManager
 import android.content.res.Configuration
 import android.os.Bundle
@@ -241,7 +243,8 @@ class MainActivity : ComponentActivity() {
         }
     }
     selected?.let { title ->
-        PublicProviderDialog(core, title.id.toString(), "series", title.name, title.imdbId, emptyList(), {}, { selected = null })
+        PublicMediaDetails(core, title.id.toString(), "series", title.name, title.imdbId, title.artwork,
+            null, title.details, emptyList(), {}, { selected = null })
     }
 }
 @Composable private fun PublicFilmResults(core: CoreClient, query: String, library: List<LibraryItem>, play: (LibraryItem) -> Unit) {
@@ -260,15 +263,22 @@ class MainActivity : ComponentActivity() {
         results == null -> Text("Searching film catalog…")
         results.isEmpty() -> Text("No matches from Wikidata.")
         else -> LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(results, key = { it.id }) { item -> Action(item.name) { selected = item } }
+            items(results, key = { it.id }) { item ->
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    PublicCatalogArtwork(item.artwork, Modifier.width(60.dp).height(84.dp))
+                    Action(item.name) { selected = item }
+                }
+            }
         }
     }
     selected?.let { title ->
-        PublicProviderDialog(core, title.id, "movie", title.name, null, library, play, { selected = null })
+        PublicMediaDetails(core, title.id, "movie", title.name, null, title.artwork,
+            title.artworkCredit, title.details, library, play, { selected = null })
     }
 }
-@Composable private fun PublicProviderDialog(
+@Composable private fun PublicMediaDetails(
     core: CoreClient, id: String, kind: String, name: String, imdbId: String?,
+    artwork: String?, credit: PublicArtworkCredit?, initial: PublicTitleSources?,
     library: List<LibraryItem>, play: (LibraryItem) -> Unit, dismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -279,31 +289,43 @@ class MainActivity : ComponentActivity() {
         catch (error: CancellationException) { throw error }
         catch (_: Exception) { failure = "Provider lookup is temporarily unavailable." }
     }
-    AlertDialog(
-        onDismissRequest = dismiss,
-        title = { Text(name) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
+    val destinations = (sources?.links.orEmpty() + initial?.links.orEmpty()).distinctBy { it.url }
+    val exactIds = sources?.imdbIds.orEmpty() + initial?.imdbIds.orEmpty()
+    val local = library.filter { it.type == "Movie" && it.imdbId?.let(exactIds::contains) == true }
+    val credits = sources?.credits.orEmpty()
+    val open: (String) -> Unit = { url ->
+        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            .onFailure { failure = "Could not open this destination." }
+    }
+    Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Action("Back", dismiss)
+                Text(name, style = MaterialTheme.typography.headlineLarge)
+                PublicCatalogArtwork(artwork, Modifier.width(130.dp).height(182.dp))
+                credit?.let {
+                    TextButton(onClick = { open(it.url) }) { Text(it.author) }
+                    it.licenseUrl?.let { license -> TextButton(onClick = { open(license) }) { Text(it.license) } }
+                }
+                (sources?.description ?: initial?.description)?.let { Text(it) }
+                Text("Where to watch", style = MaterialTheme.typography.titleLarge)
+                local.forEach { item ->
+                    Action(if (item.ticks > 0) "Resume in Bluefin" else "Play in Bluefin") { dismiss(); play(item) }
+                }
+                destinations.forEach { link ->
+                    Action((if (link.player) "Watch on " else "Open on ") + link.provider) { open(link.url) }
+                }
                 failure?.let { Text(it) }
-                val result = sources
-                if (result == null && failure == null) Text("Looking up providers…")
-                if (result != null) {
-                    library.filter { it.type == "Movie" && it.imdbId?.let(result.imdbIds::contains) == true }.forEach { item ->
-                        Action(if (item.ticks > 0) "Resume in Bluefin" else "Play in Bluefin") { dismiss(); play(item) }
-                    }
-                    result.links.forEach { link ->
-                        Action((if (link.player) "Watch on " else "Open on ") + link.provider) {
-                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.url))) }
-                                .onFailure { failure = "Could not open " + link.provider + "." }
-                        }
-                    }
-                    Text(if (result.links.isEmpty()) "No direct provider destinations found." else
-                        "The provider confirms streaming availability for your region and account.")
+                if (sources == null && failure == null) Text("Looking up providers…")
+                if (sources != null && destinations.isEmpty() && local.isEmpty()) Text("No direct provider destinations found.")
+                if (credits.isNotEmpty()) {
+                    Text("Credits", style = MaterialTheme.typography.titleLarge)
+                    credits.forEach { Text(it.name + " · " + it.role) }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = dismiss) { Text("Done") } }
-    )
+        }
+    }
 }
 @Composable private fun SearchRefinements(model: LibraryModel) {
     val filters = model.searchFilters
