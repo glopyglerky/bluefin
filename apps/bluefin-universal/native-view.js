@@ -500,7 +500,7 @@ async function publicTVSearch(term,signal){
 }
 function wikidataJSON(params,signal){
  const url=new URL('https://www.wikidata.org/w/api.php');
- for(const [key,value] of Object.entries({format:'json',formatversion:'2',origin:'*',maxlag:'5',...params}))url.searchParams.set(key,value);
+ for(const [key,value] of Object.entries({format:'json',formatversion:'2',origin:'*',...params}))url.searchParams.set(key,value);
  return publicCatalogJSON(url,signal,{'Api-User-Agent':'Bluefin (https://github.com/glopyglerky/bluefin)'});
 }
 async function publicFilmSearch(term,signal){
@@ -523,7 +523,7 @@ async function publicFilmSearch(term,signal){
   const label=field=>entity?.[field]?.[primary]?.value||entity?.[field]?.en?.value;
   const name=label('labels'),description=label('descriptions');
   if(typeof name!=='string'||!name.trim()||name.length>256)continue;
-  titles.push({name,description:typeof description==='string'?description.slice(0,180):'',url:'https://www.wikidata.org/wiki/'+id});
+  titles.push({id,name,description:typeof description==='string'?description.slice(0,180):'',url:'https://www.wikidata.org/wiki/'+id});
  }
  return titles;
 }
@@ -855,6 +855,43 @@ function searchPoster(item){
  card.append(playResult);
  return card;
 }
+async function findFilmProviders(item){
+ const signal=routeController?.signal;
+ if(!signal||signal.aborted||item.links?.loading)return;
+ item.links={loading:true};render();
+ try{
+  const response=await wikidataJSON({action:'wbgetclaims',entity:item.id,property:'P9586'},signal);
+  if(signal.aborted)return;
+  if(response?.error)throw Error('Provider links unavailable');
+  const rows=response?.claims?.P9586;
+  const ids=new Set((Array.isArray(rows)?rows:[]).filter(row=>row?.rank!=='deprecated')
+   .map(row=>row?.mainsnak?.datavalue?.value).filter(id=>typeof id==='string'&&/^umc\.cmc\.[a-z0-9]{22,25}$/.test(id)));
+  item.links={ids:Array.from(ids).slice(0,3)};
+ }catch{
+  if(signal.aborted)return;
+  item.links={error:true};
+ }
+ render();
+}
+function filmProviderActions(item){
+ const actions=node('div'),status=item.links;
+ if(status?.loading)actions.append(node('p','Finding provider links…','loading'));
+ else if(status?.ids?.length){
+  for(const id of status.ids){
+   const link=node('a','Open title in Apple TV');
+   link.href='https://tv.apple.com/movie/'+id;link.rel='noopener noreferrer';link.target='_blank';
+   actions.append(link);
+  }
+  actions.append(node('p','Apple TV checks regional availability and account access.','secondary'));
+ }else if(status?.ids)actions.append(node('p','No provider links found.','secondary'));
+ else{
+  if(status?.error)actions.append(node('p','Could not load provider links.','secondary'));
+  const find=button(status?.error?'Retry provider links':'Find provider links',()=>findFilmProviders(item),'plain');
+  find.dataset.focusKey='film-providers|'+item.id;
+  actions.append(find);
+ }
+ return actions;
+}
 function publicCatalogResults(catalog){
  const {label,source,icon:category}=catalog.provider;
  const section=node('section',undefined,'search-results');
@@ -870,7 +907,10 @@ function publicCatalogResults(catalog){
    if(item.art){const image=node('img');image.alt='';image.loading='lazy';image.referrerPolicy='no-referrer';image.onerror=()=>art.replaceChildren(icon(category));image.src=item.art;art.append(image);}
    else art.append(icon(category));
    link.append(art,node('strong',item.name),node('small',[item.description||item.year,source].filter(Boolean).join(' · ')));
-   grid.append(link);
+   if(catalog.provider.scope==='movies'){
+    const card=node('div',undefined,'public-title');
+    card.append(link,filmProviderActions(item));grid.append(card);
+   }else grid.append(link);
   }
   section.append(grid,node('p','Streaming availability for these results is unverified.','secondary'));
  }
