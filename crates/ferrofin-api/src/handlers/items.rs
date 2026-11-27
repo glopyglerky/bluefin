@@ -309,6 +309,13 @@ pub(crate) async fn resolve_user_opt(
     Ok(state.users.get_user_by_id(effective).await?.map(Arc::new))
 }
 
+/// Bluefin's optional search-order extension. Omission keeps Jellyfin behavior.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+enum SearchResultOrder {
+    #[serde(rename = "SortBy", alias = "sortBy", alias = "sortby")]
+    SortBy,
+}
+
 /// The query parameters honoured by `GET /Items`.
 ///
 /// Every field is optional. Comma/pipe-delimited multi-value parameters arrive as
@@ -360,6 +367,9 @@ struct ItemsQuery {
     /// Comma-delimited [`SortOrder`](ferrofin_model::dto::SortOrder) directions.
     #[serde(default)]
     sort_order: Option<String>,
+    /// Bluefin extension: SortBy makes the requested order lead over relevance.
+    #[serde(default)]
+    search_order: Option<SearchResultOrder>,
     /// Comma-delimited [`ItemFilter`](ferrofin_model::querying::ItemFilter) flags.
     #[serde(default)]
     filters: Option<String>,
@@ -962,6 +972,9 @@ fn apply_albums_by_artist_order(internal: &mut InternalItemsQuery) {
 pub(crate) fn order_search_by_sort_name(internal: &mut InternalItemsQuery) {
     use ferrofin_model::dto::SortOrder;
     use ferrofin_model::live_tv::ItemSortBy;
+    if internal.search_order_by_requested {
+        return;
+    }
     if internal
         .search_term
         .as_deref()
@@ -1038,6 +1051,24 @@ fn items_query_options(
     query: &ItemsQuery,
     user: Option<Arc<UserEntity>>,
 ) -> Result<InternalItemsQuery, ApiError> {
+    let search_order_by_requested = query.search_order.is_some();
+    if search_order_by_requested {
+        let allowed_sort = query.sort_by.as_deref().is_some_and(|keys| {
+            !keys.trim().is_empty() && keys.split(',').all(|key| {
+                ["SortName", "Name", "DateCreated", "PremiereDate", "ProductionYear"]
+                    .iter().any(|allowed| key.trim().eq_ignore_ascii_case(allowed))
+            })
+        });
+        let allowed_order = query.sort_order.as_deref().is_none_or(|orders| {
+            !orders.trim().is_empty() && orders.split(',').all(|order| {
+                order.trim().eq_ignore_ascii_case("Ascending") ||
+                order.trim().eq_ignore_ascii_case("Descending")
+            })
+        });
+        if !allowed_sort || !allowed_order {
+            return Err(ApiError::BadRequest("SearchOrder=SortBy requires a supported SortBy and SortOrder".into()));
+        }
+    }
     Ok(InternalItemsQuery {
         user,
         parent_id: query.parent_id.unwrap_or_default(),
@@ -1047,6 +1078,7 @@ fn items_query_options(
         collapse_box_set_items: query.collapse_box_set_items,
         apply_folder_display_options: true,
         search_term: query.search_term.clone(),
+        search_order_by_requested,
         include_item_types: parse_csv_enums_lenient(query.include_item_types.as_deref()),
         exclude_item_types: parse_csv_enums_lenient(query.exclude_item_types.as_deref()),
         media_types: parse_csv_enums_lenient(query.media_types.as_deref()),
@@ -2455,6 +2487,41 @@ crate::query::query_parameters! {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn bluefin_search_sort_is_opt_in_and_rejects_unsupported_orders() {
+        use ferrofin_model::dto::SortOrder;
+        use ferrofin_model::live_tv::ItemSortBy;
+        let query: super::ItemsQuery = serde_json::from_value(serde_json::json!({
+            "searchTerm": "blade", "searchOrder": "SortBy",
+            "sortBy": "DateCreated", "sortOrder": "Descending"
+        })).expect("valid Bluefin order");
+        let mut explicit = super::items_query_options(&query, None).expect("query");
+        super::order_search_by_sort_name(&mut explicit);
+        assert!(explicit.search_order_by_requested);
+        assert_eq!(explicit.order_by, [(ItemSortBy::DateCreated, SortOrder::Descending)]);
+
+        let legacy: super::ItemsQuery = serde_json::from_value(serde_json::json!({
+            "searchTerm": "blade", "sortBy": "DateCreated", "sortOrder": "Descending"
+        })).expect("legacy order");
+        let mut legacy = super::items_query_options(&legacy, None).expect("legacy query");
+        super::order_search_by_sort_name(&mut legacy);
+        assert!(!legacy.search_order_by_requested);
+        assert_eq!(legacy.order_by[0], (ItemSortBy::SortName, SortOrder::Ascending));
+
+        for value in [
+            serde_json::json!({"searchOrder":"SortBy"}),
+            serde_json::json!({"searchOrder":"SortBy","sortBy":"Random"}),
+            serde_json::json!({"searchOrder":"SortBy","sortBy":"SortName","sortOrder":"Unknown"})
+        ] {
+            let query: super::ItemsQuery = serde_json::from_value(value).expect("shape");
+            assert!(super::items_query_options(&query, None).is_err());
+        }
+        assert!(serde_json::from_value::<super::ItemsQuery>(
+            serde_json::json!({"searchOrder":"AnythingElse","sortBy":"SortName"})
+        ).is_err());
+    }
+
     use std::collections::BTreeSet;
 
     use super::*;

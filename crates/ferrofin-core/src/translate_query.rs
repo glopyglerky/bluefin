@@ -3281,6 +3281,14 @@ pub(crate) fn append_order_by(qb: &mut QueryBuilder<Sqlite>, filter: &InternalIt
             .push(" THEN 1 ELSE 0 END), ");
     }
 
+    if filter.search_order_by_requested && !ordered.is_empty() {
+        // Bluefin's explicit opt-in sorts the entire filtered result before
+        // LIMIT/OFFSET. The identity tie-break keeps adjacent pages disjoint.
+        push_caller_keys(qb, &ordered, filter, false);
+        qb.push(r#", bi."Id" ASC"#);
+        return;
+    }
+
     if let Some(term) = search_term {
         push_search_relevance(qb, term);
         // The relevance rank leads, so no index can serve what follows and
