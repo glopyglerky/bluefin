@@ -21,7 +21,7 @@ class Element{
  get textContent(){return this.text+this.children.map(c=>c.textContent||'').join(' ');}
 }
 function browserFailure(message){return Object.assign(Error(message),{bluefinBrowserCapability:true});}
-function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false,cookieStatus=200,cookieMalformed=false,cookieCreateStatus=200,tvAdvertisement=true,nativeHls=true,audioPlayable=true,launchCode='',engine,apiResponse}={}){
+function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false,cookieStatus=200,cookieMalformed=false,cookieCreateStatus=200,tvAdvertisement=true,nativeHls=true,audioPlayable=true,launchCode='',engine,apiResponse,language="en-US"}={}){
  const root=new Element('div'),video=new Element('video'),labels=new Map(),events={},requests=[],pending={};
  Object.assign(video,{paused:true,duration:60,currentTime:0,src:'',
   pause(){this.paused=true;},load(){},play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},canPlayType(type){return (type==='audio/mpeg'?audioPlayable:nativeHls)?'probably':'';}});
@@ -61,7 +61,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
   return new Response(JSON.stringify(body),{headers:{'Content-Type':'application/json'}});
  };
  const register=(name,fn)=>{const previous=events[name];events[name]=(...args)=>{previous?.(...args);fn(...args);};};
- const context=vm.createContext({document,location:new URL(document.baseURI),navigator:{},
+ const context=vm.createContext({document,location:new URL(document.baseURI),navigator:{language},
   crypto:webcrypto,URL,Uint8Array,Uint32Array,Blob,File,TextEncoder,TextDecoder,AbortController,Response,fetch,
   performance,setTimeout,clearTimeout,setInterval:()=>1,clearInterval(){},addEventListener:register,
   isSecureContext:true,WebAssembly:undefined});
@@ -73,7 +73,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  Object.defineProperty(context,'localStorage',{get(){throw Error('Default view touched localStorage');}});
  Object.defineProperty(context,'sessionStorage',{get(){throw Error('Default view touched sessionStorage');}});
  vm.runInContext(source('local-music.js'),context);
- const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={enterWatchRoom,leaveWatchRoom,perform,lookupSearchFacet,artworkSource,artKey,validateSingManifest,singPcm,singLyrics,prepareSing,activateSing,retireSing,runSing,seekLyric,sportsLogo,followSportsTeam,loadLyrics,pumpArtwork,clearImages,state,connect,signIn,navigate,openItem,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,startSearch,openSearch,searchCall,loadMoreSearch,loadSearchFacets,recordHomeSearch,clearHomeSearchHistory,importInvitationImage:readInvitationImage};})();');
+ const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={catalogRequest,providerRegistry,enterWatchRoom,leaveWatchRoom,perform,lookupSearchFacet,artworkSource,artKey,validateSingManifest,singPcm,singLyrics,prepareSing,activateSing,retireSing,runSing,seekLyric,sportsLogo,followSportsTeam,loadLyrics,pumpArtwork,clearImages,state,connect,signIn,navigate,openItem,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,startSearch,openSearch,searchCall,loadMoreSearch,loadSearchFacets,recordHomeSearch,clearHomeSearchHistory,importInvitationImage:readInvitationImage};})();');
  vm.runInContext(script,context);
  return {context,ui:context.contract,root,video,requests,events,item,pending};
 }
@@ -370,6 +370,8 @@ test('temporary local Files play and search without any account, storage, worker
  assert.equal(t.requests.length,0);
  await t.ui.navigate('Search');assert.equal(t.requests.length,0);
  t.ui.state.localQuery='private';await t.ui.loadRoute();assert.equal(t.ui.state.rows.length,1);assert.equal(t.requests.length,0);
+ await t.ui.startSearch('private',{scope:'music'});assert.equal(t.ui.state.route.kind,'local_search');
+ assert.equal(t.ui.state.rows.length,1);assert.equal(t.requests.length,0);
  t.ui.state.expanded=true;t.ui.render();assert.match(t.root.textContent,/Local file/);
  assert.equal(t.requests.length,0);
  await t.ui.signOut();assert.equal(t.video.src,'');assert.equal(t.ui.state.local,false);assert.equal(t.ui.localItems().length,0);
@@ -841,13 +843,6 @@ test('typed regional offers use real countries, dynamic services, evidence and e
  await t.ui.openSearch();await t.ui.startSearch('Film Fixture',{scope:'movies'});
  await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
  assert.equal(t.ui.state.session,null);
- const initial=t.requests.filter(row=>new URL(row.url).pathname==='/Bluefin/Catalog/Offers');
- assert.equal(initial.length,1);
- assert.equal(new URL(initial[0].url).searchParams.has('country'),false);
- let country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
- assert.equal(country.value,'');
- assert(findElement(t.root,e=>e.textContent==='Check each region'));
- country.value='US';await country.onchange();
  assert(findElement(t.root,e=>e.href==='https://www.netflix.com/watch/12345678'));
  assert(!findElement(t.root,e=>e.href==='https://www.netflix.com/title/12345678'));
  assert(findElement(t.root,e=>e.href==='https://independent.example/title/597'));
@@ -861,7 +856,7 @@ test('typed regional offers use real countries, dynamic services, evidence and e
  assert(t.root.textContent.includes('Coverage is limited'));
  assert(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='JustWatch'));
  assert(t.root.textContent.includes('Offers with a different title or country were excluded.'));
- country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ let country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
  assert.deepEqual(country.children.map(option=>option.value).sort(),['','GB','US']);
  const services=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-service');
  assert(services.children.some(option=>option.textContent==='New Registry Service'));
@@ -890,7 +885,7 @@ test('failed regional sources do not claim there are no offers',async()=>{
   if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
   if(url.pathname==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,countries:[],sources:[]});
   if(url.pathname==='/Bluefin/Catalog/Offers')return jsonReply({schemaVersion:1,
-   identity:{kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]},country:url.searchParams.get('country'),offers:[],
+   identity:{kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]},country:'US',offers:[],
    sources:[{source:'tmdb-watch-page',status:'unavailable',observedAt:1700000000,scope:'regionalAvailability',
     coverage:'unknown',catalogUrl:null,attributions:[]}]});
  }});
@@ -905,7 +900,7 @@ test('MusicBrainz artists, release groups and recordings show linked access befo
   ['recording','musicBrainzRecording','recording']];
  for(const [detailKind,recordKind,offerKind]of cases){
   const id='a74b1b7f-71a5-4011-9441-d0b5e4122711',record={id:{kind:recordKind,value:id},title:'Music Fixture'};
-  const destination='https://new-music.example/'+detailKind+'/'+id;
+  const destination=detailKind==='artist'?'https://artist-fixture.bandcamp.com/':detailKind==='recording'?'https://www.youtube.com/watch?v=exact-fixture':'https://new-music.example/'+detailKind+'/'+id;
   const t=setup({apiResponse:url=>{
    if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:url.searchParams.get('kind')===detailKind?[record]:[]});
    if(url.pathname==='/Bluefin/Catalog/Details/'+detailKind+'/'+id)return jsonReply(record);
@@ -966,12 +961,13 @@ test('all-region enrichment has at most three requests and cancels when the coun
  await t.ui.openSearch();await t.ui.startSearch('Film Fixture',{scope:'movies'});
  await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
  hold=true;
- const all=findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent==='Check each region').listeners.click();
+ let country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ country.value='';const all=country.onchange();
  await until(()=>pending.length===3);
  assert.equal(maximum,3);
  assert(t.root.textContent.includes('Checked 0 of 6 regions'));
  hold=false;const before=t.requests.length;
- const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
  country.value='NZ';await country.onchange();await all;
  for(const item of pending)item.finish();
  assert.equal(active,0);
@@ -999,8 +995,8 @@ test('all-region lookups back off an HTTP 429 before retrying',async()=>{
  }});
  await t.ui.openSearch();await t.ui.startSearch('Film Fixture',{scope:'movies'});
  await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
- const started=Date.now();
- const all=findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent==='Check each region').listeners.click();
+ const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ const started=Date.now();country.value='';const all=country.onchange();
  await until(()=>attempts===1);
  assert.equal(attempts,1);await all;
  assert.equal(attempts,2);assert(Date.now()-started>=1000);
@@ -1765,7 +1761,8 @@ test('connected Library only and custom refinements stay private while default s
  assert(publicRequests.every(r=>r.options.headers===undefined&&r.options.credentials==='omit'));
  const before=t.requests.length;await t.ui.startSearch('broad title');
  const broad=t.requests.slice(before),catalogs=broad.filter(r=>new URL(r.url).pathname==='/Bluefin/Catalog/Search');
- assert.equal(catalogs.length,6);assert(catalogs.every(r=>r.options.credentials==='omit'));
+ assert.equal(catalogs.length,6);assert(catalogs.every(r=>r.options.credentials==='same-origin'&&
+  r.options.headers.Authorization.includes('synthetic-private-bearer')));
  assert(broad.some(r=>new URL(r.url).hostname==='api.tvmaze.com'));
  assert(broad.some(r=>new URL(r.url).hostname==='www.wikidata.org'));
  assert(broad.filter(r=>new URL(r.url).hostname!=='bluefin.test').every(r=>r.options.credentials==='omit'&&
@@ -1794,4 +1791,332 @@ test('public film availability offers in-app playback only for the exact authori
  assert(!findElement(t.root,e=>e.dataset.focusKey==='film-play|77777777777747778777777777777777'));
  const search=t.requests.find(r=>new URL(r.url).searchParams.has('SearchTerm'));
  assert(new URL(search.url).searchParams.get('Fields').includes('ProviderIds'));
+});
+
+test('an unspecified device region does not invent US or start an all-region crawl',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'No-region Fixture'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]};
+ const t=setup({language:'en',apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,
+   countries:[{code:'GB',name:'United Kingdom',services:[]}],sources:[]});
+  if(url.pathname==='/Bluefin/Catalog/Offers')return jsonReply({schemaVersion:1,identity,
+   country:url.searchParams.get('country'),offers:[],sources:[{source:'tmdb',status:'noOffers',coverage:'partial',scope:'regionalAvailability',attributions:[]}]});
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('No-region Fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ assert(!t.requests.some(row=>new URL(row.url).pathname==='/Bluefin/Catalog/Offers'));
+ assert(t.root.textContent.includes('Choose a region to check availability.'));
+ const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ assert.equal(country.value,'choose');
+ country.value='GB';await country.onchange();
+ const lookups=t.requests.filter(row=>new URL(row.url).pathname==='/Bluefin/Catalog/Offers');
+ assert.deepEqual(lookups.map(row=>new URL(row.url).searchParams.get('country')),['GB']);
+});
+
+test('album offers preserve a verified edition identity and reject unrelated release offers',async()=>{
+ const group='b168aa16-81a2-43cb-99de-54d940ab4541',release='f26f9a18-5422-4ed5-9af3-d5880b85a0eb';
+ const record={id:{kind:'musicBrainzReleaseGroup',value:group},title:'Edition Fixture'};
+ const identity={kind:'releaseGroup',ids:[{source:'musicbrainz',id:group}]};
+ const edition=parent=>({kind:'release',ids:[{source:'musicbrainz',id:release},
+  {source:'musicbrainz-release-group',id:parent}]});
+ const row=(id,parent)=>({id,identity:edition(parent),country:null,service:{source:'musicbrainz-url',id:'bandcamp',name:'Bandcamp'},
+  accessType:'buy',destinations:[{kind:'title',url:'https://artist-fixture.bandcamp.com/album/'+id}],
+  evidence:{source:'musicbrainz',observedAt:1700000000,regionVerified:false}});
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:url.searchParams.get('kind')==='album'?[record]:[]});
+  if(url.pathname==='/Bluefin/Catalog/Details/album/'+group)return jsonReply(record);
+  if(url.pathname==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,countries:[],sources:[]});
+  if(url.pathname==='/Bluefin/Catalog/Offers')return jsonReply({schemaVersion:1,identity,country:url.searchParams.get('country'),
+   offers:[row('correct-edition',group),row('wrong-edition','11111111-1111-1111-1111-111111111111')],
+   sources:[{source:'musicbrainz',status:'partial',scope:'linkedAccess',coverage:'partial',attributions:[]}]});
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('Edition Fixture',{scope:'music'});
+ await findElement(t.root,e=>String(e.dataset.focusKey).includes('musicBrainzReleaseGroup:'+group)).listeners.click();
+ assert(findElement(t.root,e=>e.href==='https://artist-fixture.bandcamp.com/album/correct-edition'));
+ assert(!findElement(t.root,e=>e.href==='https://artist-fixture.bandcamp.com/album/wrong-edition'));
+ assert.equal(t.ui.state.route.offers.offers[0].identity.kind,'release');
+ assert.equal(t.ui.state.route.offers.offers[0].identity.ids[0].id,release);
+});
+
+test('a long Retry-After stops all-region scheduling without an early retry',async(testContext)=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Pause Fixture'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]};
+ let allRequested=false;const requested=[];
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,
+   countries:['US','GB','CA','AU','DE'].map(code=>({code,name:code,services:[]})),sources:[]});
+  if(url.pathname==='/Bluefin/Catalog/Offers'){
+   const country=url.searchParams.get('country');
+   if(!country)allRequested=true;
+   else if(allRequested){
+    requested.push(country);
+    if(country==='US')return new Response('{}',{status:429,headers:{'Retry-After':'120'}});
+   }
+   return jsonReply({schemaVersion:1,identity,country,offers:[],sources:[
+    {source:'tmdb-watch-page',status:'noOffers',scope:'regionalAvailability',coverage:'partial',attributions:[]}]});
+  }
+ }});
+ testContext.after(()=>t.ui.signOut());
+ await t.ui.openSearch();await t.ui.startSearch('Pause Fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ const started=Date.now();country.value='';await country.onchange();
+ assert.equal(requested.filter(code=>code==='US').length,1);
+ assert(requested.length<=3);
+ assert(!requested.includes('AU')&&!requested.includes('DE'));
+ assert(t.ui.state.route.offerProgress.retryAt>=started+119000);
+ assert(t.root.textContent.includes('The source requested a longer pause.'));
+ assert(t.root.textContent.includes('Retry after'));
+});
+
+test('a denied source stops scheduling remaining regions and does not report universal completion',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Denied Fixture'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]};
+ let allRequested=false;const requested=[];
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,
+   countries:['US','GB','CA','AU','DE'].map(code=>({code,name:code,services:[]})),sources:[]});
+  if(url.pathname==='/Bluefin/Catalog/Offers'){
+   const country=url.searchParams.get('country');if(!country)allRequested=true;
+   if(allRequested&&country)requested.push(country);
+   return jsonReply({schemaVersion:1,identity,country,offers:[],sources:[
+    {source:'tmdb-watch-page',status:allRequested&&country==='US'?'denied':'noOffers',
+     scope:'regionalAvailability',coverage:'partial',attributions:[]}]});
+  }
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('Denied Fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ country.value='';await country.onchange();
+ assert(requested.length<=3);
+ assert(!requested.includes('AU')&&!requested.includes('DE'));
+ assert(t.ui.state.route.offerProgress.stopped);
+ assert(t.root.textContent.includes('Remaining regions were not requested.'));
+ assert(!t.root.textContent.includes('Checked 5 of 5 regions'));
+});
+
+test('failed country registries are retried and their failure remains visible',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Registry Fixture'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]};
+ let countryLists=0;const lookups=[];
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Providers'){
+   if(!url.searchParams.has('country')&&++countryLists===1)return jsonReply({schemaVersion:1,countries:[],
+    sources:[{source:'tmdb',status:'unavailable',scope:'regionalAvailability',coverage:'unknown',attributions:[]}]});
+   return jsonReply({schemaVersion:1,countries:[{code:'GB',name:'United Kingdom',services:[]}],sources:[]});
+  }
+  if(url.pathname==='/Bluefin/Catalog/Offers'){
+   const country=url.searchParams.get('country');lookups.push(country);
+   return jsonReply({schemaVersion:1,identity,country,offers:[],sources:[
+    {source:'tmdb-watch-page',status:'noOffers',scope:'regionalAvailability',coverage:'partial',attributions:[]}]});
+  }
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('Registry Fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ assert(t.root.textContent.includes('The country registry is temporarily unavailable.'));
+ const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ country.value='';await country.onchange();
+ assert.equal(countryLists,2);
+ assert(lookups.includes('GB'));
+ assert(t.root.textContent.includes('Checked 1 of 1 regions'));
+});
+
+test('exact offers appear before slow country metadata, including an iTunes Apple title',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Fast Offers Fixture'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]};
+ const pending=[];
+ const destination='https://tv.apple.com/us/movie/fixture/umc.cmc.actualfixture';
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Providers')return new Promise(resolve=>pending.push(resolve));
+  if(url.pathname==='/Bluefin/Catalog/Offers')return jsonReply({schemaVersion:1,identity,country:'US',offers:[{
+   id:'itunes-title',identity,country:'US',service:{source:'tmdb',id:'2',name:'iTunes'},
+   accessType:'buy',destinations:[{kind:'title',url:destination}],
+   evidence:{source:'tmdb-watch-page',observedAt:1700000000,regionVerified:true}}],
+   sources:[{source:'tmdb-watch-page',status:'partial',scope:'regionalAvailability',coverage:'partial',attributions:[]}]});
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('Fast Offers Fixture',{scope:'movies'});
+ const opened=findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ await until(()=>!!findElement(t.root,e=>e.href===destination));
+ assert.equal(pending.length,2);
+ assert(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Buy on iTunes'));
+ for(const finish of pending)finish(jsonReply({schemaVersion:1,countries:[{code:'US',name:'United States',services:[]}],sources:[]}));
+ await opened;
+});
+
+
+test('signed-in catalog search details offers and providers use the authenticated server base',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Authenticated catalog fixture'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]};
+ const t=setup({apiResponse:(url,options)=>{
+  const route=url.pathname.replace(/^\/instance/,'');
+  if(url.hostname==='www.wikidata.org')return jsonReply({search:[],query:{search:[]},entities:{}});
+  if(route==='/System/Info/Public')return jsonReply({ServerName:'Fixture instance'});
+  if(route==='/Bluefin/Accounts/Options')return jsonReply({});
+  if(route==='/Users/AuthenticateByName')return jsonReply({AccessToken:'synthetic-private-bearer',
+   User:{Id:'11111111111141118111111111111111',Name:'Listener'}});
+  if(route==='/Bluefin/Home/Recommendations')return jsonReply({recommendations:[]});
+  if(route==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(route==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(route==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,
+   countries:[{code:'US',name:'United States',services:[]}],sources:[]});
+  if(route==='/Bluefin/Catalog/Offers')return jsonReply({schemaVersion:1,identity,country:url.searchParams.get('country'),
+   offers:[],sources:[{source:'tmdb',status:'noOffers',scope:'regionalAvailability',coverage:'partial',attributions:[]}]});
+ }});
+ await t.ui.connect('https://bluefin.test/instance/');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.startSearch('Authenticated catalog fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ const catalog=t.requests.filter(row=>new URL(row.url).pathname.includes('/Bluefin/Catalog/'));
+ assert.equal(catalog.length,5);
+ for(const row of catalog){
+  assert(new URL(row.url).pathname.startsWith('/instance/Bluefin/Catalog/'));
+  assert.equal(row.options.credentials,'same-origin');assert.equal(row.options.cache,'no-store');
+  assert(row.options.headers.Authorization.includes('synthetic-private-bearer'));
+  assert(!row.url.includes('synthetic-private-bearer'));
+ }
+ assert.equal(t.ui.state.route.item.name,movie.title);
+ await t.ui.catalogRequest('Bluefin/Catalog/Search',[['offset',0],['enabled',false],['groups',['US','GB']],['absent',null],['missing',undefined]],new AbortController().signal);
+ const query=new URL(t.requests.at(-1).url).searchParams;
+ assert.equal(query.get('offset'),'0');assert.equal(query.get('enabled'),'false');assert.equal(query.get('groups'),'US,GB');
+ assert.equal(query.has('absent'),false);assert.equal(query.has('missing'),false);
+ assert(t.requests.filter(row=>new URL(row.url).hostname!=='bluefin.test')
+  .every(row=>row.options.credentials==='omit'&&!row.options.headers?.Authorization));
+ await t.ui.signOut();
+});
+
+test('paired catalog search details offers and providers stay on the existing mesh transport',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Paired catalog fixture'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]},calls=[];
+ const handle='bluefin-mesh-v1:'+'c'.repeat(64);
+ const engine={webMeshRequest:async(received,method,path,query)=>{
+  calls.push({handle:received,method,path,query:JSON.parse(query)});
+  const pairs=JSON.parse(query);assert(pairs.every(([key,value])=>typeof key==='string'&&typeof value==='string'));
+  const values=new Map(pairs);let value={Items:[]};
+  if(path==='Bluefin/Catalog/Search')value={results:[movie]};
+  else if(path==='Bluefin/Catalog/Details/movie/597')value=movie;
+  else if(path==='Bluefin/Catalog/Providers')value={schemaVersion:1,countries:[{code:'US',name:'United States',services:[]}],sources:[]};
+  else if(path==='Bluefin/Catalog/Offers')value={schemaVersion:1,identity,country:values.get('country')||null,
+   offers:[],sources:[{source:'tmdb',status:'noOffers',scope:'regionalAvailability',coverage:'partial',attributions:[]}]};
+  else if(path==='Bluefin/Web/Discovery/Search')value={results:[]};
+  return JSON.stringify(value);
+ },webMeshLogout:async()=>{},webMeshStop:async()=>{}};
+ const t=setup({engine:async()=>engine,apiResponse:url=>url.hostname==='www.wikidata.org'
+  ?jsonReply({search:[],query:{search:[]},entities:{}}):undefined});
+ t.ui.state.session={handle,user:'11111111111141118111111111111111',name:'Paired owner'};
+ t.ui.state.mode='mesh';t.ui.state.base='https://paired-instance.test/';t.ui.state.phase='library';
+ await t.ui.startSearch('Paired catalog fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ const catalog=calls.filter(row=>row.path.startsWith('Bluefin/Catalog/'));
+ assert.equal(catalog.length,5);assert(catalog.every(row=>row.handle===handle&&row.method==='GET'));
+ assert.deepEqual([...new Set(catalog.map(row=>row.path))].sort(),
+  ['Bluefin/Catalog/Details/movie/597','Bluefin/Catalog/Offers','Bluefin/Catalog/Providers','Bluefin/Catalog/Search']);
+ assert(!t.requests.some(row=>new URL(row.url).pathname.includes('/Bluefin/Catalog/')));
+ assert(!t.requests.some(row=>new URL(row.url).hostname==='paired-instance.test'));
+ assert.equal(t.ui.state.route.item.name,movie.title);
+ await t.ui.catalogRequest('Bluefin/Catalog/Search',[['offset',0],['enabled',false],['groups',['US','GB']],['absent',null],['missing',undefined]],new AbortController().signal);
+ assert.deepEqual(calls.at(-1).query,[['offset','0'],['enabled','false'],['groups','US,GB']]);
+ await t.ui.signOut();
+});
+
+test('paired catalog failures never retry anonymously while unpaired discovery stays public',async()=>{
+ const routes=[
+  ['Bluefin/Catalog/Search',[['kind','movie'],['query','fixture']]],
+  ['Bluefin/Catalog/Details/movie/597',[]],
+  ['Bluefin/Catalog/Offers',[['kind','movie'],['source','tmdb'],['id','movie/597'],['country','US']]],
+  ['Bluefin/Catalog/Providers',[['country','US']]],
+ ];
+ for(const mode of ['https','mesh']){
+  const calls=[],engine={webMeshRequest:async(...args)=>{calls.push(args);throw Error('The peer returned HTTP 403.');}};
+  const t=setup({engine:async()=>engine,apiResponse:(_url,options)=>options.headers?.Authorization
+   ?new Response('{}',{status:403,headers:{'Retry-After':'120'}}):jsonReply({results:[]})});
+  t.ui.state.session={token:'synthetic-private-bearer',handle:'bluefin-mesh-v1:'+'d'.repeat(64),
+   user:'11111111111141118111111111111111'};
+  t.ui.state.mode=mode;
+  for(const [path,query] of routes)await assert.rejects(t.ui.catalogRequest(path,query,new AbortController().signal),error=>{
+   assert.match(error.message,/403|Account access was denied/);
+   if(mode==='https'){assert.equal(error.status,403);assert.equal(error.retryAfterMs,120000);}
+   return true;
+  });
+  if(mode==='mesh'){assert.equal(calls.length,4);assert.equal(t.requests.length,0);}
+  else{assert.equal(t.requests.length,4);assert(t.requests.every(row=>row.options.credentials==='same-origin'&&row.options.headers.Authorization));}
+  t.ui.state.session=null;t.ui.state.epoch++;t.ui.state.mode='https';
+  const value=await t.ui.catalogRequest(routes[0][0],routes[0][1],new AbortController().signal);
+  assert.deepEqual(Array.from(value.results),[]);
+  const request=t.requests.at(-1);assert.equal(new URL(request.url).origin,'https://bluefin.test');
+  assert.equal(request.options.credentials,'omit');assert.equal(request.options.headers,undefined);
+ }
+});
+
+test('catalog registry cache is bound to account server and epoch and discards late account replies',async()=>{
+ const identity={kind:'movie',source:'tmdb',id:'movie/597'},lateIdentity={...identity,id:'movie/598'};
+ const accountA={token:'fixture-account-A',user:'11111111111141118111111111111111'};
+ const accountB={token:'fixture-account-B',user:accountA.user};
+ let requests=0,release,held=false;
+ const t=setup({apiResponse:async(url,options)=>{
+  if(!url.pathname.endsWith('/Bluefin/Catalog/Providers'))return;
+  const serial=++requests,owner=options.headers.Authorization.includes('fixture-account-A')?'A':'B';
+  if(url.searchParams.get('id')==='movie/598'&&owner==='A'&&!held){
+   held=true;await new Promise(resolve=>release=resolve);
+  }
+  return jsonReply({schemaVersion:1,countries:[{code:'US',name:owner+' registry '+serial,services:[]}],sources:[]});
+ }});
+ const signal=new AbortController().signal;
+ t.ui.state.session=accountA;
+ const first=await t.ui.providerRegistry('',signal,identity);
+ assert.equal(first.countries[0].name,'A registry 1');
+ assert.equal(await t.ui.providerRegistry('',signal,identity),first);assert.equal(requests,1);
+ t.ui.state.session=accountB;
+ const second=await t.ui.providerRegistry('',signal,identity);
+ assert.equal(second.countries[0].name,'B registry 2');assert.equal(requests,2);
+ t.ui.state.base='https://bluefin.test/second/';
+ await t.ui.providerRegistry('',signal,identity);assert.equal(requests,3);
+ t.ui.state.epoch++;await t.ui.providerRegistry('',signal,identity);assert.equal(requests,4);
+ t.ui.state.base='https://bluefin.test/';t.ui.state.session=accountA;
+ const pending=t.ui.providerRegistry('',signal,lateIdentity);
+ const retired=assert.rejects(pending,{name:'AbortError'});await until(()=>release);
+ t.ui.state.session=accountB;
+ const current=await t.ui.providerRegistry('',signal,lateIdentity);assert.equal(current.countries[0].name,'B registry 6');
+ release();await retired;
+ assert.equal(await t.ui.providerRegistry('',signal,lateIdentity),current);assert.equal(requests,6);
+ t.ui.state.session=accountA;
+ const fresh=await t.ui.providerRegistry('',signal,lateIdentity);
+ assert.equal(fresh.countries[0].name,'A registry 7');assert.equal(requests,7);
+ await t.ui.signOut();
+});
+
+
+test('regional retry wakes after its deadline and ignores retired route or account callbacks',async()=>{
+ const t=setup(),wakes=[];let now=1700000000000;
+ t.context.Date=class extends Date{static now(){return now;}};
+ t.context.setTimeout=(callback,delay)=>{const timer={callback,delay};wakes.push(timer);return timer;};
+ t.context.clearTimeout=timer=>{if(timer)timer.cleared=true;};
+ const progress={stopped:true,completed:1,total:5,failed:1,retryAt:now+120000};
+ const route={kind:'public-detail',title:'Retry fixture',item:{id:'tmdbMovie:597',
+  catalogRef:{kind:'movie',value:'597'},kind:'movie',category:'movies',name:'Retry fixture',source:'TMDB'},
+  offerCountry:'',offerAllExplicit:true,offerRequest:{},offerProgress:progress,
+  offerCountries:[{code:'US',name:'United States'}],offers:{offers:[],sources:[]}};
+ t.ui.state.phase='public-search';t.ui.state.route=route;t.ui.render();
+ const retry=()=>findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent==='Check regions again');
+ assert.equal(retry().disabled,true);
+ const first=wakes.at(-1);assert(first.delay>0&&first.delay<=60000);
+ now=progress.retryAt+1;first.callback();assert.equal(retry().disabled,false);
+ progress.retryAt=now+120000;t.ui.render();
+ const formerRoute=wakes.at(-1),routeTree=t.root.children;
+ t.ui.state.route={kind:'search',title:'Search'};formerRoute.callback();
+ assert.equal(t.root.children,routeTree);
+ t.ui.state.route=route;t.ui.render();
+ const formerAccount=wakes.at(-1),accountTree=t.root.children;
+ t.ui.state.session={token:'new-owner',user:'44444444444444448444444444444444'};t.ui.state.epoch++;
+ formerAccount.callback();assert.equal(t.root.children,accountTree);
+ t.ui.state.session=null;t.ui.render();const retiring=wakes.at(-1);
+ await t.ui.signOut();assert.equal(retiring.cleared,true);
 });
