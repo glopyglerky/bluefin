@@ -59,19 +59,28 @@ pub enum RoomRequest {
     Join {
         group: Uuid,
     },
-    Leave,
-    Pause,
-    Resume,
+    Leave {
+        group: Uuid,
+    },
+    Pause {
+        group: Uuid,
+    },
+    Resume {
+        group: Uuid,
+    },
     Seek {
+        group: Uuid,
         position_ticks: u64,
     },
     Ready {
+        group: Uuid,
         playlist_item: Uuid,
         position_ticks: u64,
         when: String,
         playing: bool,
     },
     Buffering {
+        group: Uuid,
         playlist_item: Uuid,
         position_ticks: u64,
         when: String,
@@ -123,9 +132,26 @@ async fn post(send: &mut Requester, resource: &str, body: Option<Value>) -> Resu
     send("POST", format!("SyncPlay/{resource}"), body).await
 }
 
+async fn post_control(
+    send: &mut Requester,
+    group: Uuid,
+    action: &str,
+    data: Option<Value>,
+) -> Result<Value> {
+    if group.is_nil() {
+        return Err("Invalid room code.".into());
+    }
+    let mut body = json!({ "Action": action });
+    if let Some(data) = data {
+        body["Data"] = data;
+    }
+    send("POST", format!("Bluefin/SyncPlay/{group}/Control"), Some(body)).await
+}
+
 async fn report(
     send: &mut Requester,
     ready: bool,
+    group: Uuid,
     playlist_item: Uuid,
     position_ticks: u64,
     when: String,
@@ -141,7 +167,7 @@ async fn report(
         "When": when,
         "IsPlaying": playing,
     });
-    post(send, resource, Some(body)).await
+    post_control(send, group, resource, Some(body)).await
 }
 
 pub async fn request(session: &Session, operation: RoomRequest) -> Result<Value> {
@@ -193,8 +219,9 @@ pub async fn request_using(operation: RoomRequest, send: &mut Requester) -> Resu
             let group: RoomInfo =
                 serde_json::from_value(reply).map_err(|_| "Invalid room response.")?;
             let _ = joined(send, group.group_id).await?;
-            post(
+            post_control(
                 send,
+                group.group_id,
                 "SetNewQueue",
                 Some(json!({
                     "PlayingQueue": [item],
@@ -213,24 +240,29 @@ pub async fn request_using(operation: RoomRequest, send: &mut Requester) -> Resu
             }
             Ok(json!(room))
         }
-        RoomRequest::Pause => post(send, "Pause", None).await,
-        RoomRequest::Resume => post(send, "Unpause", None).await,
-        RoomRequest::Leave => post(send, "Leave", None).await,
-        RoomRequest::Seek { position_ticks } => {
+        RoomRequest::Pause { group } => post_control(send, group, "Pause", None).await,
+        RoomRequest::Resume { group } => post_control(send, group, "Unpause", None).await,
+        RoomRequest::Leave { group } => post_control(send, group, "Leave", None).await,
+        RoomRequest::Seek {
+            group,
+            position_ticks,
+        } => {
             let body = json!({ "PositionTicks": tick_range(position_ticks)? });
-            post(send, "Seek", Some(body)).await
+            post_control(send, group, "Seek", Some(body)).await
         }
         RoomRequest::Ready {
+            group,
             playlist_item,
             position_ticks,
             when,
             playing,
-        } => report(send, true, playlist_item, position_ticks, when, playing).await,
+        } => report(send, true, group, playlist_item, position_ticks, when, playing).await,
         RoomRequest::Buffering {
+            group,
             playlist_item,
             position_ticks,
             when,
             playing,
-        } => report(send, false, playlist_item, position_ticks, when, playing).await,
+        } => report(send, false, group, playlist_item, position_ticks, when, playing).await,
     }
 }

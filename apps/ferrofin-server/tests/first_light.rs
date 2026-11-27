@@ -1087,7 +1087,11 @@ async fn two_accounts_syncplay_requires_admission_and_current_media_visibility()
             .to_owned();
         assert!(!token.is_empty());
         let auth = format!("{identification}, Token=\"{token}\"");
-        step_users_me(&router, &auth, login["User"]["Id"].as_str().unwrap()).await;
+        let me = request(&router, "GET", "/Users/Me", Some(&auth), None).await;
+        assert_eq!(me.status(), StatusCode::OK);
+        let me = body_json(me).await;
+        assert_eq!(me["Id"], login["User"]["Id"]);
+        assert_eq!(me["Name"], name);
         tokens.push(token);
         accounts.push((id, auth));
     }
@@ -1181,7 +1185,31 @@ async fn two_accounts_syncplay_requires_admission_and_current_media_visibility()
             GroupStateType::Playing
         );
     }
-    command(&router, bob, "Pause", None).await;
+    let stale = format!("/Bluefin/SyncPlay/{}/Control", Uuid::new_v4());
+    for action in ["Pause", "Leave"] {
+        let reply = request(
+            &router,
+            "POST",
+            &stale,
+            Some(bob),
+            Some(serde_json::json!({ "Action": action })),
+        )
+        .await;
+        assert_eq!(reply.status(), StatusCode::CONFLICT);
+        let room = current(&router, bob).await.expect("still joined");
+        assert_eq!(room.group_id, group.group_id);
+        assert_eq!(room.state, GroupStateType::Playing);
+    }
+    let control = format!("/Bluefin/SyncPlay/{}/Control", group.group_id);
+    let reply = request(
+        &router,
+        "POST",
+        &control,
+        Some(bob),
+        Some(serde_json::json!({ "Action": "Pause" })),
+    )
+    .await;
+    assert_eq!(reply.status(), StatusCode::NO_CONTENT);
     for auth in [alice, bob] {
         assert_eq!(
             current(&router, auth).await.unwrap().state,

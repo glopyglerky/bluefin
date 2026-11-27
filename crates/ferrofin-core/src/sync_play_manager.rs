@@ -2475,6 +2475,48 @@ impl SyncPlayManager for FerrofinSyncPlayManager {
         session: &SyncPlaySession,
         request: PlaybackRequest,
     ) -> Result<(), ServiceError> {
+        self.apply_request(session, request, None).await
+    }
+
+    async fn handle_room_request(
+        &self,
+        session: &SyncPlaySession,
+        room: Uuid,
+        request: PlaybackRequest,
+    ) -> Result<(), ServiceError> {
+        self.apply_request(session, request, Some(room)).await
+    }
+
+    async fn leave_room(
+        &self,
+        session: &SyncPlaySession,
+        room: Uuid,
+    ) -> Result<(), ServiceError> {
+        let notices = {
+            let mut reg = self.lock();
+            if reg.session_to_group.get(&session.session_id) != Some(&room) {
+                return Err(ServiceError::conflict("Room membership changed."));
+            }
+            leave_locked_with_notices(&mut reg, session, Utc::now())
+        };
+        if let Some(notices) = notices {
+            self.deliver_leave(&session.session_id, notices);
+        }
+        Ok(())
+    }
+
+    async fn is_user_active(&self, user_id: Uuid) -> Result<bool, ServiceError> {
+        Ok(self.lock().active_users.get(&user_id).copied().unwrap_or(0) > 0)
+    }
+}
+
+impl FerrofinSyncPlayManager {
+    async fn apply_request(
+        &self,
+        session: &SyncPlaySession,
+        request: PlaybackRequest,
+        expected_room: Option<Uuid>,
+    ) -> Result<(), ServiceError> {
         let now = Utc::now();
         // A request that puts new items in the queue is refused unless *every*
         // member can see them (C# `SetPlayQueue`/`AddToPlayQueue` ->
@@ -2508,6 +2550,9 @@ impl SyncPlayManager for FerrofinSyncPlayManager {
                 let (group_id, unchecked) = {
                     let reg = self.lock();
                     let group_id = reg.session_to_group.get(&session.session_id).copied();
+                    if expected_room.is_some() && group_id != expected_room {
+                        return Err(ServiceError::conflict("Room membership changed."));
+                    }
                     let unchecked: Vec<Uuid> = if incoming.is_empty() {
                         Vec::new()
                     } else {
@@ -2600,10 +2645,6 @@ impl SyncPlayManager for FerrofinSyncPlayManager {
         let (targets, outbound) = plan;
         self.deliver(&targets, &session.session_id, &outbound);
         Ok(())
-    }
-
-    async fn is_user_active(&self, user_id: Uuid) -> Result<bool, ServiceError> {
-        Ok(self.lock().active_users.get(&user_id).copied().unwrap_or(0) > 0)
     }
 }
 

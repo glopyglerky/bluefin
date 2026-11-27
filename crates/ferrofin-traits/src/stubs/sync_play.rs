@@ -215,6 +215,25 @@ pub trait SyncPlayManager: Send + Sync {
         request: PlaybackRequest,
     ) -> Result<(), ServiceError>;
 
+    /// Leave only the named room, even if the same device has since joined another.
+    async fn leave_room(
+        &self,
+        _session: &SyncPlaySession,
+        _room: Uuid,
+    ) -> Result<(), ServiceError> {
+        Err(ServiceError::conflict("Room membership changed."))
+    }
+
+    /// Apply a command only if this device still belongs to the named room.
+    async fn handle_room_request(
+        &self,
+        _session: &SyncPlaySession,
+        _room: Uuid,
+        _request: PlaybackRequest,
+    ) -> Result<(), ServiceError> {
+        Err(ServiceError::conflict("Room membership changed."))
+    }
+
     /// Whether the user currently participates in any group.
     async fn is_user_active(&self, user_id: Uuid) -> Result<bool, ServiceError>;
 }

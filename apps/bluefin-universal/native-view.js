@@ -1506,7 +1506,7 @@ function retireWatchRoom(){
 }
 async function leaveWatchRoom(localOnly=false){
  const room=retireWatchRoom();if(!room)return;
- const remote=localOnly?Promise.resolve():roomRequest({kind:'leave'},room.session,room.epoch);
+ const remote=localOnly?Promise.resolve():roomRequest({kind:'leave',group:room.id},room.session,room.epoch);
  try{await Promise.all([stopPlayback(),remote]);}finally{render();}
 }
 function roomIsCurrent(room){return !!room&&watchRoom===room&&!pageRetired&&room.epoch===state.epoch&&room.session===state.session;}
@@ -1522,10 +1522,7 @@ async function enterWatchRoom(operation){
 }
 async function roomControl(operation){
  const room=watchRoom;if(!roomIsCurrent(room))return;
- const snapshot=await roomRequest({kind:'current'},room.session,room.epoch);
- if(!roomIsCurrent(room)||!uuid(snapshot?.GroupId)||id(snapshot.GroupId)!==room.id)
-  throw Error('This device is no longer in that room.');
- await roomRequest(operation,room.session,room.epoch);
+ await roomRequest({...operation,group:room.id},room.session,room.epoch);
 }
 function failWatchRoom(room){
  if(!roomIsCurrent(room))return;
@@ -1572,7 +1569,7 @@ async function followWatchRoom(room){
    await playRoomOutput(room);
   if(!roomIsCurrent(room))return;
   const ready=media.readyState>=3&&!media.seeking&&Math.abs(localPosition()-target.positionTicks/1e7)<0.45;
-  const report={playlistItem:occurrence,positionTicks:roomTicks(localPosition()),
+  const report={group:room.id,playlistItem:occurrence,positionTicks:roomTicks(localPosition()),
    when:new Date(target.serverNowMs).toISOString(),playing:!media.paused};
   const waiting=occurrence+'/'+timeline.AnchorTime+'/'+timeline.PositionTicks;
   if(timeline.State!=='Waiting')room.waiting=null;
