@@ -493,7 +493,7 @@ async function publicTVSearch(term,signal){
    const raw=show.image?.medium;
    const art=typeof raw==='string'&&raw.length<=1024&&/^https:\/\/static\.tvmaze\.com\/uploads\/images\/medium_portrait\/[0-9]+\/[0-9]+\.jpg$/.test(raw)?raw:null;
    const year=typeof show.premiered==='string'&&/^\d{4}-/.test(show.premiered)?show.premiered.slice(0,4):'';
-   titles.push({name:show.name,art,year,url:'https://www.tvmaze.com/shows/'+show.id});
+   titles.push({kind:'series',id:String(show.id),name:show.name,art,year,imdbId:show.externals?.imdb});
    if(titles.length===20)break;
   }
   return titles;
@@ -523,7 +523,7 @@ async function publicFilmSearch(term,signal){
   const label=field=>entity?.[field]?.[primary]?.value||entity?.[field]?.en?.value;
   const name=label('labels'),description=label('descriptions');
   if(typeof name!=='string'||!name.trim()||name.length>256)continue;
-  titles.push({id,name,description:typeof description==='string'?description.slice(0,180):'',url:'https://www.wikidata.org/wiki/'+id});
+  titles.push({kind:'movie',id,name,description:typeof description==='string'?description.slice(0,180):''});
  }
  return titles;
 }
@@ -855,108 +855,95 @@ function searchPoster(item){
  card.append(playResult);
  return card;
 }
-const regionNames=new Intl.DisplayNames(undefined,{type:'region',fallback:'none'});
-const storefrontRegions=Array.from({length:26*26},(_,index)=>String.fromCharCode(65+Math.floor(index/26),65+(index%26)))
- .map(code=>[code,regionNames.of(code)]).filter(([,name])=>name).sort((a,b)=>a[1].localeCompare(b[1]));
-function defaultStorefront(){
- try{return new Intl.Locale(globalThis.navigator?.language||'en-US').maximize().region||'US';}
- catch{return 'US';}
-}
-function storefrontPrice(amount,currency){
- return Number.isFinite(amount)&&amount>=0&&/^[A-Z]{3}$/.test(currency)?
-  new Intl.NumberFormat(undefined,{style:'currency',currency}).format(amount):null;
-}
-function statedIdentifiers(response,property,valid){
- if(response?.error)throw Error('Store identifiers unavailable');
- const rows=response?.claims?.[property];
+const filmId=/^tt[0-9]{7,12}$/;
+const entityId=/^Q[1-9][0-9]{0,14}$/;
+const uuidText=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+function statedIdentifiers(claims,property,valid){
+ const rows=claims?.[property];
  if(!Array.isArray(rows))return [];
- return [...new Set(rows.filter(row=>row?.rank!=='deprecated')
-  .map(row=>row?.mainsnak?.datavalue?.value).filter(id=>typeof id==='string'&&valid.test(id)))].slice(0,6);
+ return [...new Set(rows.filter(row=>row?.rank!=='deprecated'&&row?.mainsnak?.snaktype==='value')
+  .map(row=>row.mainsnak.datavalue?.value).filter(id=>typeof id==='string'&&valid.test(id)))].slice(0,6);
 }
-async function findFilmOffers(item,region){
- const signal=routeController?.signal;
- if(!signal||signal.aborted||item.offer?.region===region&&item.offer.loading)return;
- const current=item.offer={region,loading:true};render();
- if(state.session&&!item.imdbIds){
-  wikidataJSON({action:'wbgetclaims',entity:item.id,property:'P345'},signal).then(response=>{
-   if(!signal.aborted){
-    item.imdbIds=statedIdentifiers(response,'P345',/^tt[0-9]{7,12}$/);
-    render();
-   }
-  }).catch(()=>{});
+function directProviderLinks(claims,kind){
+ const movie=kind==='movie';
+ const rules=[
+  ['Netflix','P1874',/^[0-9]{6,8}$/,movie?'https://www.netflix.com/watch/':'https://www.netflix.com/title/',movie],
+  ['Disney+','P13902',/^(?:entity|page)-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i,'https://www.disneyplus.com/browse/'],
+  ['Disney+',movie?'P7595':'P7596',/^[0-9A-Za-z]{12}$/,movie?'https://www.disneyplus.com/movies/wd/':'https://www.disneyplus.com/series/wp/'],
+  ['Hulu',movie?'P6466':'P6467',uuidText,movie?'https://www.hulu.com/movie/':'https://www.hulu.com/series/'],
+  ['Paramount+','P13147',/^[A-Za-z0-9_-]{8,80}$/,'https://www.paramountplus.com/shows/video/',true],
+  ['Peacock','P11815',/^(?:movies|tv)\/[a-z0-9]+(?:-[a-z0-9]+)*$/,'https://www.peacocktv.com/stream-'],
+  ['Prime Video','P8055',/^B[0-9A-Z]{9}$/,'https://www.amazon.com/gp/video/detail/'],
+  ['HBO Max','P8298',/^(?:movie|show)\/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i,'https://www.hbomax.com/'],
+  ['Tubi',movie?'P7760':'P7761',/^[1-9][0-9]{0,11}$/,movie?'https://tubitv.com/movies/':'https://tubitv.com/series/'],
+ ];
+ const sources=[],seen=new Set();
+ for(const [provider,property,valid,prefix,player] of rules){
+  const id=statedIdentifiers(claims,property,valid).find(value=>
+   property==='P11815'?value.startsWith(movie?'movies/':'tv/'):
+   property==='P8298'?value.startsWith(movie?'movie/':'show/'):true);
+  if(!id||seen.has(provider))continue;
+  seen.add(provider);
+  const suffix=provider==='Paramount+'?'/':'';
+  sources.push({provider,url:prefix+id+suffix,kind:player?'player':'title'});
  }
+ return sources;
+}
+async function directCatalogIdentity(item,signal){
+ if(item.kind==='movie')return item.id;
+ const find=async(property,value)=>{
+  const data=await wikidataJSON({action:'query',list:'search',srnamespace:'0',srlimit:'3',srprop:'',
+   srsearch:'haswbstatement:'+property+'='+value},signal);
+  if(!Array.isArray(data?.query?.search))throw Error('Catalog identity unavailable');
+  const ids=[...new Set(data.query.search.map(row=>row?.title).filter(id=>typeof id==='string'&&entityId.test(id)))];
+  return ids.length===1?ids[0]:null;
+ };
+ const exact=await find('P8600',item.id);
+ if(exact||typeof item.imdbId!=='string'||!filmId.test(item.imdbId))return exact;
+ return find('P345',item.imdbId);
+}
+async function findTitleSources(item){
+ const signal=routeController?.signal;
+ if(!signal||signal.aborted||item.sources?.loading)return;
+ const request=item.sources={loading:true};render();
  try{
-  const claims=await wikidataJSON({action:'wbgetclaims',entity:item.id,property:'P6398'},signal);
-  const ids=statedIdentifiers(claims,'P6398',/^[1-9][0-9]{0,14}$/);
-  if(signal.aborted||item.offer!==current)return;
-  if(!ids.length){
-   const pages=await wikidataJSON({action:'wbgetclaims',entity:item.id,property:'P9586'},signal);
-   if(signal.aborted||item.offer!==current)return;
-   item.offer={region,checked:false,links:statedIdentifiers(pages,'P9586',/^umc\.cmc\.[a-z0-9]{22,25}$/)
-    .map(id=>'https://tv.apple.com/movie/'+id)};
-   render();return;
-  }
-  const endpoint=new URL('https://itunes.apple.com/lookup');
-  endpoint.searchParams.set('id',ids.join(','));endpoint.searchParams.set('country',region);
-  const response=await publicCatalogJSON(endpoint,signal);
-  if(signal.aborted||item.offer!==current)return;
-  if(!Array.isArray(response?.results))throw Error('Invalid storefront response');
-  const offers=[];
-  for(const row of response.results){
-   if(row?.kind!=='feature-movie'||!ids.includes(String(row.trackId))||typeof row.trackViewUrl!=='string')continue;
-   let destination;
-   try{destination=new URL(row.trackViewUrl);}catch{continue;}
-   if(destination.origin!=='https://itunes.apple.com'||destination.username||destination.password||
-      !destination.pathname.startsWith('/'+region.toLowerCase()+'/movie/')||
-      !destination.pathname.endsWith('/id'+row.trackId))continue;
-   const rent=storefrontPrice(row.trackRentalPrice,row.currency);
-   const buy=storefrontPrice(row.trackPrice,row.currency);
-   if(rent||buy)offers.push({rent,buy,destination:destination.origin+destination.pathname});
-  }
-  item.offer={region,checked:true,offers};
+  const key=await directCatalogIdentity(item,signal);
+  if(signal.aborted||item.sources!==request)return;
+  if(!key){item.sources={links:[],imdbIds:[]};render();return;}
+  const response=await wikidataJSON({action:'wbgetentities',ids:key,props:'claims'},signal);
+  if(signal.aborted||item.sources!==request)return;
+  const claims=response?.entities?.[key]?.claims;
+  if(!claims||response?.error)throw Error('Provider identities unavailable');
+  item.sources={links:directProviderLinks(claims,item.kind),imdbIds:statedIdentifiers(claims,'P345',filmId)};
  }catch{
-  if(signal.aborted||item.offer!==current)return;
-  item.offer={region,error:true};
+  if(signal.aborted||item.sources!==request)return;
+  item.sources={error:true};
  }
  render();
 }
-function filmProviderActions(item){
- const actions=node('div'),status=item.offer;
- if(!status){
-  const find=button('Where to watch',()=>findFilmOffers(item,defaultStorefront()),'plain');
-  find.dataset.focusKey='film-providers|'+item.id;
-  actions.append(find);
-  return actions;
- }
- const region=searchChoice('Storefront region','storefront-'+item.id,status.region,storefrontRegions,
-  selected=>findFilmOffers(item,selected),false);
+function publicTitleActions(item){
+ const actions=node('div',undefined,'provider-actions'),status=item.sources;
  const library=state.session&&state.search?.pages.find(page=>page.lane==='library');
- const owned=library?.items.filter(value=>value.Type==='Movie'&&
-  item.imdbIds?.includes(value.ProviderIds?.Imdb||value.ProviderIds?.IMDb));
+ const ids=status?.imdbIds||[];
+ const owned=library?.items.filter(value=>value.Type==='Movie'&&item.kind==='movie'&&
+  ids.includes(value.ProviderIds?.Imdb||value.ProviderIds?.IMDb));
  for(const media of owned||[]){
   const caption=resumeTicks(media)>0?'Resume in Bluefin':'Play in Bluefin';
   const start=action(caption,()=>play(media),'primary','play');
   start.dataset.focusKey='film-play|'+id(media.Id);
   actions.append(start);
  }
- actions.append(region);
- if(status.loading)actions.append(node('p','Checking availability…','loading'));
- else if(status.error){
-  actions.append(node('p','The Apple storefront could not be checked.','secondary'),
-   button('Retry',()=>findFilmOffers(item,status.region),'plain'));
- }else if(status.checked){
-  const regionName=regionNames.of(status.region)||status.region;
-  actions.append(node('p','Apple storefront · '+regionName));
-  if(!status.offers.length)actions.append(node('p','No rent or buy offer returned for this region.','secondary'));
-  for(const offer of status.offers){
-   actions.append(node('p',[offer.rent&&'Rent '+offer.rent,offer.buy&&'Buy '+offer.buy].filter(Boolean).join(' · ')));
-   const link=node('a','Continue to Apple TV');link.href=offer.destination;link.rel='noopener noreferrer';link.target='_blank';actions.append(link);
+ if(status?.loading)actions.append(node('p','Looking up providers…','loading'));
+ else if(status?.error){
+  actions.append(node('p','Provider lookup is temporarily unavailable.','secondary'),
+   button('Retry',()=>findTitleSources(item),'plain'));
+ }else if(status){
+  for(const source of status.links){
+   const link=node('a',source.kind==='player'?'Watch on '+source.provider:'Open on '+source.provider);
+   link.href=source.url;link.rel='noopener noreferrer';link.className='provider-link';actions.append(link);
   }
- }else{
-  actions.append(node('p','No regional offers could be verified for this film.','secondary'));
-  for(const destination of status.links||[]){
-   const link=node('a','Open title in Apple TV');link.href=destination;link.rel='noopener noreferrer';link.target='_blank';actions.append(link);
-  }
+  if(!status.links.length)actions.append(node('p','No direct provider destinations found.','secondary'));
+  else actions.append(node('p','The provider confirms streaming availability for your region and account.','secondary'));
  }
  return actions;
 }
@@ -970,17 +957,17 @@ function publicCatalogResults(catalog){
  else{
   const grid=node('div',undefined,'search-grid');
   for(const item of catalog.items){
-   const link=node('a',undefined,'public-title');link.href=item.url;link.rel='noopener noreferrer';link.target='_blank';
+   const card=node('div',undefined,'public-title');
    const art=node('div',undefined,'artwork');
    if(item.art){const image=node('img');image.alt='';image.loading='lazy';image.referrerPolicy='no-referrer';image.onerror=()=>art.replaceChildren(icon(category));image.src=item.art;art.append(image);}
    else art.append(icon(category));
-   link.append(art,node('strong',item.name),node('small',[item.description||item.year,source].filter(Boolean).join(' · ')));
-   if(catalog.provider.scope==='movies'){
-    const card=node('div',undefined,'public-title');
-    card.append(link,filmProviderActions(item));grid.append(card);
-   }else grid.append(link);
+   const open=button(item.name,()=>findTitleSources(item),'plain');
+   open.dataset.focusKey='public-title|'+item.kind+'|'+item.id;
+   open.setAttribute('aria-label','Where to watch '+item.name);
+   card.append(art,open,node('small',[item.description||item.year,source].filter(Boolean).join(' · ')),publicTitleActions(item));
+   grid.append(card);
   }
-  section.append(grid,node('p','Streaming availability for these results is unverified.','secondary'));
+  section.append(grid);
  }
  return section;
 }
