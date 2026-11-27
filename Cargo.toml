@@ -4,6 +4,7 @@ members = [
     "crates/local-assist",
     "crates/mesh-connect",
     "crates/bluefin-contract",
+    "crates/bluefin-sync-play",
     "crates/bluefin-iroh-server",
     "crates/bluefin-discovery",
     "crates/bluefin-karaoke",
