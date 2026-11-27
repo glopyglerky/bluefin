@@ -72,6 +72,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  Object.defineProperty(context,'localStorage',{get(){throw Error('Default view touched localStorage');}});
  Object.defineProperty(context,'sessionStorage',{get(){throw Error('Default view touched sessionStorage');}});
  vm.runInContext(source('local-music.js'),context);
+ vm.runInContext(source('browse-window.js'),context);
  const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={loadLyrics,pumpArtwork,clearImages,state,connect,signIn,navigate,openItem,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,startSearch,openSearch,searchCall,loadMoreSearch,loadSearchFacets,recordHomeSearch,clearHomeSearchHistory,importInvitationImage:readInvitationImage};})();');
  vm.runInContext(script,context);
  return {context,ui:context.contract,root,video,requests,events,item,pending};
@@ -920,10 +921,10 @@ test('moonlit explicit search history uses the current account revision and surv
 });
 
 test('artist results browse credited media and preserve the credit filter when paging',async()=>{
- const artist='77777777777747778777777777777777',t=setup();
+ const artist='77777777777747778777777777777777',t=setup({apiResponse:u=>u.searchParams.get('ArtistIds')===artist?jsonReply({Items:[{Id:'66666666666646668666666666666666',Type:'MusicAlbum',Name:'Credited album'}],TotalRecordCount:150}):undefined});
  await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
  await t.ui.openItem({Id:artist,Name:'Account artist',Type:'MusicArtist'});
- t.ui.state.route.start=100;await t.ui.loadRoute();
+ await t.ui.state.route.window.request(100);
  const requests=t.requests.map(request=>new URL(request.url)).filter(url=>url.searchParams.get('ArtistIds')===artist);
  assert.equal(requests.length,2);
  assert.equal(requests[0].searchParams.get('StartIndex'),'0');assert.equal(requests[1].searchParams.get('StartIndex'),'100');
@@ -1153,4 +1154,27 @@ test('lyrics use the authenticated mesh request and its owned audio clock withou
  assert.equal(lyricLine(t.root,1).getAttribute('aria-current'),'true');assert.equal(lyricLine(t.root,2).getAttribute('aria-current'),null);
  missing=true;await t.ui.loadLyrics(player,true);assert.equal(player.lyrics.status,'missing');assert.equal(t.requests.length,0);
  await t.ui.signOut();
+});
+
+test('library alternate sort and watch filters reach every server range',async()=>{
+ const t=setup({apiResponse:u=>u.pathname.endsWith('/Items')&&u.searchParams.has('SearchTerm')?jsonReply({Items:[{Id:'66666666666646668666666666666666',Type:'Movie',Name:'A movie'}],TotalRecordCount:120}):undefined});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.startSearch('ocean',{scope:'library',sort:'newest',played:'false',favorite:true,year:'2026'});
+ await t.ui.loadMoreSearch('library');
+ for(const r of t.requests.filter(r=>new URL(r.url).searchParams.has('SearchTerm'))){const q=new URL(r.url).searchParams;assert.equal(q.get('SearchOrder'),'SortBy');assert.equal(q.get('SortBy'),'PremiereDate');assert.equal(q.get('SortOrder'),'Descending');assert.equal(q.get('IsPlayed'),'false');assert.equal(q.get('IsFavorite'),'true');assert.equal(q.get('Years'),'2026');}
+ await t.ui.startSearch('ocean',{scope:'library'});
+ const q=new URL(t.requests.at(-1).url).searchParams;assert.equal(q.has('SortBy'),false);assert.equal(q.has('SearchOrder'),false);
+});
+test('home cards show series titles and series art without changing episode playback',async()=>{
+ const episode={Id:'66666666666646668666666666666666',Type:'Episode',Name:'The Big Quiet',SeriesName:'The Adventures of Pete & Pete',SeriesId:'77777777777747778777777777777777',ParentIndexNumber:2,IndexNumber:4};
+ const t=setup({apiResponse:u=>u.pathname.endsWith('/Resume')?jsonReply({Items:[episode]}):undefined});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);t.ui.render();
+ const heading=findElement(t.root,e=>e.tagName==='H2'&&e.textContent==='The Adventures of Pete & Pete');assert(heading);
+ assert.match(t.root.textContent,/S2 E4 · The Big Quiet/);
+ const artwork=findElement(t.root,e=>e.dataset.artSources?.includes(episode.SeriesId));assert(artwork);assert(!artwork.dataset.artSources.includes(episode.Id));
+ assert.equal(t.ui.state.featured.Id,episode.Id);
+});
+test('collections expose a bounded scroll region without page buttons',async()=>{
+ const t=setup();await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);await t.ui.navigate('Movies');t.ui.render();
+ assert(findElement(t.root,e=>e.className.includes('virtual-list')));assert(!t.root.textContent.includes('Next page'));assert(!t.root.textContent.includes('Previous page'));
 });

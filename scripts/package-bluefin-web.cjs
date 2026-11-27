@@ -100,6 +100,7 @@ function packageWeb(engineInput,output,sourceRoot){
  index=replace(index,'./bluefin.css','./'+cssName,'stylesheet');
  const scripts=['bootstrap.js','native-view.js'];
  if(fs.existsSync(path.join(app,'local-music.js')))scripts.push('local-music.js');
+ if(fs.existsSync(path.join(app,'browse-window.js')))scripts.push('browse-window.js');
  for(const name of scripts){
   let text=read(app,name).toString('utf8');
   if(name==='bootstrap.js'){

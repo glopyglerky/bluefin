@@ -273,3 +273,52 @@ button.lyric-line{cursor:pointer}
 @media (forced-colors: active) {
   .search-scopes button[aria-pressed=true] { border-bottom: 3px solid Highlight; }
 }
+
+/* Cards keep the title's artwork and put episode details below the series. */
+.artwork.landscape{aspect-ratio:16/9}
+.shelf-track .poster.landscape-card{width:min(76vw,340px);min-width:min(76vw,340px)}
+.poster.landscape-card .poster-copy{position:static;padding:10px 0 0;background:transparent;display:block}
+.poster.landscape-card .poster-copy strong{color:var(--text);font-size:17px}
+.poster.landscape-card .poster-copy small{color:var(--muted);font-size:14px}
+.poster-copy strong,.poster-copy small{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.virtual-list{position:relative;min-width:0;overflow-anchor:none}
+.virtual-list.local-scroll{height:min(65svh,660px);min-height:260px;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-gutter:stable;border-radius:12px}
+.virtual-canvas{position:relative;min-height:1px}
+.virtual-cell{min-width:0;contain:layout style}
+.virtual-cell>.poster,.virtual-cell .search-poster .poster{width:100%;min-width:0}
+.virtual-cell>.poster{height:100%;display:flex;flex-direction:column;justify-content:flex-start}
+.virtual-cell .poster-copy{position:static;padding:9px 0;background:transparent}
+.virtual-cell .poster .artwork{width:100%;flex:none}
+.virtual-cell .poster strong,.virtual-cell .poster small{color:inherit}
+.virtual-cell .poster small{color:var(--muted)}
+.virtual-cell .search-poster{height:100%;overflow:hidden}
+.virtual-cell .public-title{height:100%;overflow:hidden}
+.virtual-cell .public-title strong,.virtual-cell .public-title small{-webkit-line-clamp:2;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden}
+.virtual-cell .list-row{height:82px;border-bottom:1px solid var(--line)}
+.virtual-cell .list-row strong,.virtual-cell .list-row small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.virtual-status{position:sticky;bottom:0;z-index:4;background:var(--bg);font-size:14px}
+.virtual-status:empty{display:none}
+.virtual-status button{margin:8px}
+.result-placeholder{display:flex;align-items:center;justify-content:center;height:100%;background:var(--secondary);color:var(--muted);border-radius:10px}
+.library-sort{display:flex;align-items:end;gap:16px;margin:16px 0;flex-wrap:wrap}
+.library-sort>div{max-width:280px;flex:1}
+.search-refinements{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px}
+.guide-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}
+.guide-controls input{width:auto}
+.guide-scroll{border:1px solid var(--line);background:var(--secondary)}
+.guide-time-header{position:sticky;top:0;height:44px;z-index:7;background:var(--bg);border-bottom:1px solid var(--line);font-size:14px;font-variant-numeric:tabular-nums}
+.guide-time-header>span{position:absolute;top:0;height:44px;padding:10px 8px;border-left:1px solid var(--line)}
+.guide-channel-heading{display:block;position:sticky;left:0;top:0;height:44px;padding:10px 8px;background:var(--bg);z-index:8}
+.guide-channel-row{position:relative;height:84px;border-bottom:1px solid var(--line)}
+.guide-channel{position:sticky;left:0;z-index:5;height:84px;padding:8px;border:0;border-right:1px solid var(--line);border-radius:0;background:var(--bg);display:flex;align-items:center;gap:8px;text-align:left}
+.guide-channel .artwork{width:46px;min-width:46px;height:46px;border:0;border-radius:5px}
+.guide-channel .artwork img{object-fit:contain}
+.guide-channel>span{font-size:12px;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3}
+.guide-program-track{position:absolute;top:0;height:84px;background:repeating-linear-gradient(to right,transparent,transparent 119px,var(--line) 120px)}
+.guide-program{position:absolute;top:0;height:84px;min-height:84px;border:0;border-right:1px solid var(--line);border-radius:0;padding:10px 12px;text-align:left;background:var(--secondary);display:flex;flex-direction:column;justify-content:center;overflow:hidden}
+.guide-program.on-now{background:var(--hover);box-shadow:inset 3px 0 var(--accent)}
+.guide-program strong,.guide-program small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%;font-size:14px}
+.guide-program small{font-size:12px;margin-top:4px;color:var(--muted)}
+.guide-unavailable{display:block;padding:26px 14px;font-size:14px;color:var(--muted)}
+@media(prefers-reduced-motion:reduce){.virtual-list{scroll-behavior:auto}}
+@media(forced-colors:active){.guide-program.on-now{outline:2px solid Highlight}.guide-time-header,.guide-channel,.virtual-status{background:Canvas}}
