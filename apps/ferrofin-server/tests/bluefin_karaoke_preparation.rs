@@ -510,7 +510,11 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
     let lyrics_path = format!("/Audio/{}/Lyrics", f.item);
     let (status, lyrics_before) = call(&f.app, "GET", &lyrics_path, &f.token, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{lyrics_before}");
-    assert_eq!(lyrics_before["Metadata"]["IsSynced"], true);
+    // Ordinary LRC leaves optional IsSynced metadata unset; line starts carry
+    // its actual precision. Do not require or invent a word timing contract.
+    assert_eq!(lyrics_before["Lyrics"].as_array().map(Vec::len), Some(2));
+    assert_eq!(lyrics_before["Lyrics"][0]["Text"], "Original fixture line");
+    assert_eq!(lyrics_before["Lyrics"][1]["Text"], "Another fixture line");
     assert_eq!(lyrics_before["Lyrics"][0]["Start"], 1_000_000);
     assert_eq!(lyrics_before["Lyrics"][1]["Start"], 11_000_000);
     assert!(
