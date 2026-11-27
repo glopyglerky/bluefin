@@ -13,3 +13,5 @@ SearchOrder accepts SortBy. The allowed sort columns for this extension are Sort
 StudioIds, Tags, Genres, Years, IsPlayed, IsFavorite, ParentId and IncludeItemTypes remain ordinary server filters. Every subsequent page and page rehydration must retain the same filters and ordering. Clients reset their scroll/request generation when any query or filter changes.
 
 This extension does not establish support in other Jellyfin-compatible servers. Clients must not describe an ignored extension or a local sort of one fetched page as a complete-library ordering. Public catalogs and provider discovery keep their own ordering and are presented separately.
+
+Servers advertise support in the existing authenticated Bluefin/Capabilities response as librarySearch.version = 1, librarySearch.explicitSort = true, with the accepted sortBy and sortOrder arrays. Clients check this advertisement before offering explicit ordering of text-search matches. Missing, unknown or malformed advertisements keep relevance-only search. Normal browsing without SearchTerm can use standard SortBy independently.
