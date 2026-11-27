@@ -873,7 +873,7 @@ function artworkSource(item,backdrop=false){
  // Some older servers omit image tags. Keep their authenticated image lookup.
  return {item:own,backdrop,tag:''};
 }
-function artKey(item,backdrop=false){const source=artworkSource(item,backdrop);return (backdrop?'b:':'p:')+source.item+(source.tag?':'+source.tag:'');}
+function artKey(item,backdrop=false){const source=artworkSource(item,backdrop);return (source.backdrop?'b:':'p:')+source.item+(source.tag?':'+source.tag:'');}
 function applyArtwork(element,url,backdrop=false){
  if(backdrop){
   const classes=element.className.split(/\s+/),overlay=classes.includes('hero')?'linear-gradient(180deg,rgba(6,23,39,0),rgba(6,23,39,.15) 35%,rgba(6,23,39,.94)),':classes.includes('browse-tile')?'linear-gradient(transparent,rgba(6,23,39,.65)),':'';

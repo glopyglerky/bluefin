@@ -1497,8 +1497,9 @@ fn mount_web(
         .nest_service("/web", ServeDir::new(web_dir))
         .route("/", get(|| async { Redirect::permanent("/web/") }))
         .layer(axum::middleware::from_fn(redirect_bare_web))
+        .layer(axum::middleware::from_fn(cache_content_hashed_web_assets))
         .layer(transform_layer)
-        .layer(axum::middleware::from_fn(no_cache_web_index))
+        .layer(axum::middleware::from_fn(revalidate_mutable_web_assets))
         // Jellyfin's `UseResponseCompression()` sits above BOTH its API and its
         // static-file middleware, and jellyfin-web's bundles are the payloads
         // that gain most from it. `nest_service` mounts a service the API
@@ -1570,22 +1571,119 @@ fn web_file_mime(path: &str) -> &'static str {
     }
 }
 
-/// Sends `/web`'s `index.html` with `Cache-Control: no-cache`, as Jellyfin's
+fn content_hashed_web_types(path: &str) -> Option<&'static [&'static str]> {
+    let relative = path.strip_prefix("/web/")?;
+    let relative = relative.strip_prefix("bluefin/").unwrap_or(relative);
+    if relative.split('/').any(|part| {
+        part.is_empty()
+            || matches!(part, "." | "..")
+            || !part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+    }) {
+        return None;
+    }
+    let hash = |value: &str| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    };
+    let named = |prefix: &str, suffix: &str| {
+        relative
+            .strip_prefix(prefix)
+            .and_then(|value| value.strip_suffix(suffix))
+            .is_some_and(hash)
+    };
+    if let Some((directory, file)) = relative.split_once('/')
+        && directory.strip_prefix("engine-").is_some_and(hash)
+    {
+        return if file.ends_with(".wasm") {
+            Some(&["application/wasm"])
+        } else if file.ends_with(".js") {
+            Some(&["application/javascript", "text/javascript"])
+        } else {
+            None
+        };
+    }
+    if named("bluefin-", ".css") {
+        Some(&["text/css"])
+    } else if named("bootstrap-", ".js")
+        || named("native-view-", ".js")
+        || named("local-music-", ".js")
+        || named("vendor/hls.light-", ".min.js")
+    {
+        Some(&["application/javascript", "text/javascript"])
+    } else if named("bluefin-app-512-", ".png") {
+        Some(&["image/png"])
+    } else if named("manifest-", ".webmanifest") {
+        Some(&["application/manifest+json"])
+    } else {
+        None
+    }
+}
+
+/// The packager changes these URLs whenever their contents change. This layer
+/// sits inside File Transformation, so rewritten responses never pass through
+/// it. Mutable documents, private API responses and HTML fallbacks are excluded.
+async fn cache_content_hashed_web_assets(req: Request, next: Next) -> Response {
+    let types = content_hashed_web_types(req.uri().path());
+    let mut response = next.run(req).await;
+    let typed = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| {
+            types.is_some_and(|types| {
+                types
+                    .iter()
+                    .any(|expected| value.trim().eq_ignore_ascii_case(expected))
+            })
+        });
+    if typed
+        && matches!(
+            response.status(),
+            axum::http::StatusCode::OK | axum::http::StatusCode::PARTIAL_CONTENT
+        )
+        && !response
+            .headers()
+            .contains_key(axum::http::header::CACHE_CONTROL)
+        && !response
+            .headers()
+            .contains_key(axum::http::header::SET_COOKIE)
+    {
+        response.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
+    }
+    response
+}
+
+/// Sends `/web`'s mutable entrypoints with `Cache-Control: no-cache`, as Jellyfin's
 /// static-file `OnPrepareResponse` does (`Jellyfin.Server/Startup.cs`), so a
 /// browser revalidates the page instead of running a heuristically cached copy
 /// after an upgrade. A directory request is an `index.html` request.
 ///
 /// Upstream sets it on every status its static-file middleware answers with
 /// (`200`, `206`, `304`, `412`, `416`), never on a miss that falls through.
-async fn no_cache_web_index(req: Request, next: Next) -> Response {
-    let index = req
+async fn revalidate_mutable_web_assets(req: Request, next: Next) -> Response {
+    let mutable = req
         .uri()
         .path()
         .strip_prefix("/web/")
-        .is_some_and(|rel| matches!(rel.rsplit('/').next(), Some("" | "index.html")));
+        .is_some_and(|relative| {
+            let bluefin = relative.strip_prefix("bluefin/").unwrap_or(relative);
+            matches!(relative.rsplit('/').next(), Some("" | "index.html"))
+                || matches!(
+                    bluefin,
+                    "install.html" | "mesh-policy.json" | "media-worker.js" | "asset-manifest.json"
+                )
+        });
     let mut response = next.run(req).await;
     let status = response.status();
-    if index
+    if mutable
         && (status.is_success()
             || matches!(
                 status,
@@ -2029,6 +2127,214 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn content_hashed_web_assets_are_immutable_with_their_served_mime() {
+        use sha2::{Digest as _, Sha256};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<!doctype html>").unwrap();
+        let hash = format!("{:x}", Sha256::digest(b"export const value=1;"));
+        let files = [
+            (format!("native-view-{hash}.js"), "text/javascript"),
+            (format!("bluefin/bluefin-{hash}.css"), "text/css"),
+            (
+                format!("bluefin/manifest-{hash}.webmanifest"),
+                "application/manifest+json",
+            ),
+            (format!("bluefin/bluefin-app-512-{hash}.png"), "image/png"),
+            (
+                format!("bluefin/vendor/hls.light-{hash}.min.js"),
+                "text/javascript",
+            ),
+            (
+                format!("bluefin/engine-{hash}/bluefin_universal_bg.wasm"),
+                "application/wasm",
+            ),
+            (
+                format!("bluefin/engine-{hash}/snippets/client/bridge.js"),
+                "text/javascript",
+            ),
+        ];
+        for (file, _) in &files {
+            let target = dir.path().join(file);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(target, b"export const value=1;").unwrap();
+        }
+        let app = mount_web(Router::new(), dir.path(), transformations(dir.path()));
+        for (file, mime) in files {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/web/{file}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()["content-type"], mime, "{file}");
+            assert_eq!(
+                response.headers()["cache-control"],
+                "public, max-age=31536000, immutable"
+            );
+        }
+        let range = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/web/native-view-{hash}.js"))
+                    .header("range", "bytes=0-3")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(range.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            range.headers()["cache-control"],
+            "public, max-age=31536000, immutable"
+        );
+        let missing = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/web/bootstrap-{hash}.js"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert!(missing.headers().get("cache-control").is_none());
+    }
+
+    #[tokio::test]
+    async fn hashed_web_cache_refuses_html_errors_private_policy_and_cookies() {
+        let hash = "a".repeat(64);
+        let known = format!("/web/bluefin/native-view-{hash}.js");
+        let private = format!("/Items/{hash}/Images/Primary");
+        for (path, status, mime, policy, cookie) in [
+            (known.as_str(), StatusCode::OK, "text/html", None, false),
+            (
+                known.as_str(),
+                StatusCode::UNAUTHORIZED,
+                "text/javascript",
+                None,
+                false,
+            ),
+            (
+                known.as_str(),
+                StatusCode::NOT_FOUND,
+                "text/javascript",
+                None,
+                false,
+            ),
+            (
+                known.as_str(),
+                StatusCode::OK,
+                "application/octet-stream",
+                None,
+                false,
+            ),
+            (
+                known.as_str(),
+                StatusCode::OK,
+                "text/javascript",
+                Some("private, no-store"),
+                false,
+            ),
+            (
+                known.as_str(),
+                StatusCode::OK,
+                "text/javascript",
+                None,
+                true,
+            ),
+            (private.as_str(), StatusCode::OK, "image/png", None, false),
+            (
+                "/web/bluefin/native-view.js",
+                StatusCode::OK,
+                "text/javascript",
+                None,
+                false,
+            ),
+            (
+                "/web/bluefin/engine-short/bluefin_universal_bg.wasm",
+                StatusCode::OK,
+                "application/wasm",
+                None,
+                false,
+            ),
+        ] {
+            let app = Router::new()
+                .fallback(axum::routing::get(move || async move {
+                    let mut answer = axum::response::Response::builder()
+                        .status(status)
+                        .header("content-type", mime);
+                    if let Some(policy) = policy {
+                        answer = answer.header("cache-control", policy);
+                    }
+                    if cookie {
+                        answer = answer.header("set-cookie", "synthetic=fixture; HttpOnly");
+                    }
+                    answer.body(Body::from("<html>fixture</html>")).unwrap()
+                }))
+                .layer(axum::middleware::from_fn(
+                    super::cache_content_hashed_web_assets,
+                ));
+            let response = app
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response
+                    .headers()
+                    .get("cache-control")
+                    .and_then(|value| value.to_str().ok()),
+                policy,
+                "{path}"
+            );
+        }
+        assert!(
+            super::content_hashed_web_types(&format!("/web/engine-{hash}/../private.js")).is_none()
+        );
+        assert!(
+            super::content_hashed_web_types(&format!("/web/engine-{hash}/%2e%2e/private.js"))
+                .is_none()
+        );
+        assert!(
+            super::content_hashed_web_types(&format!("/web/engine-{hash}/index.html")).is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn transformed_content_hashed_web_assets_are_not_immutable() {
+        use sha2::{Digest as _, Sha256};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<!doctype html>").unwrap();
+        let file = format!("native-view-{:x}.js", Sha256::digest(b"hello"));
+        std::fs::write(dir.path().join(&file), b"hello").unwrap();
+        let service = transformations(dir.path());
+        service
+            .add_transformation(uuid::Uuid::from_u128(13), &file, Arc::new(Upper))
+            .await;
+        let app = mount_web(Router::new(), dir.path(), service);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/web/{file}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get("cache-control").is_none());
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"HELLO");
+    }
+
     /// `index.html` goes out with `Cache-Control: no-cache` on every status
     /// Jellyfin's static-file middleware answers it with (measured on 12.4), so
     /// a browser revalidates the page after an upgrade instead of running a
@@ -2051,6 +2357,11 @@ mod tests {
         true
     )]
     #[case::asset("/web/bundle.js", None, StatusCode::OK, false)]
+    #[case::policy("/web/mesh-policy.json", None, StatusCode::OK, true)]
+    #[case::worker("/web/media-worker.js?release=fixture", None, StatusCode::OK, true)]
+    #[case::manifest("/web/asset-manifest.json", None, StatusCode::OK, true)]
+    #[case::install("/web/install.html", None, StatusCode::OK, true)]
+    #[case::bluefin_worker("/web/bluefin/media-worker.js", None, StatusCode::OK, true)]
     #[case::nested("/web/sub/index.html", None, StatusCode::OK, true)]
     #[case::missing("/web/nope/index.html", None, StatusCode::NOT_FOUND, false)]
     #[tokio::test]
@@ -2065,6 +2376,16 @@ mod tests {
         std::fs::write(dir.path().join("bundle.js"), "//js").unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("sub/index.html"), "<!doctype html>").unwrap();
+        std::fs::create_dir(dir.path().join("bluefin")).unwrap();
+        for file in [
+            "mesh-policy.json",
+            "media-worker.js",
+            "asset-manifest.json",
+            "install.html",
+            "bluefin/media-worker.js",
+        ] {
+            std::fs::write(dir.path().join(file), "fixture").unwrap();
+        }
         let app = mount_web(Router::new(), dir.path(), transformations(dir.path()));
 
         let mut request = Request::builder().uri(uri);

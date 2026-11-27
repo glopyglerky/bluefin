@@ -1256,12 +1256,31 @@ test('Sports logos accept only the authenticated server asset path',()=>{
  assert.equal(t.ui.sportsLogo({logo:'/sports/api/v1/logos/'+hash+'?token=secret'}).dataset.artKey,undefined);
  assert.equal(t.ui.sportsLogo({logo:'/sports/api/v1/logos/'+hash}).dataset.artKey,'sports:'+hash);
 });
-test('track artwork uses the authorized album identity and changes cache key when its art revision changes',()=>{
- const t=setup(),album='77777777777747778777777777777777',track={...t.item,AlbumId:album,AlbumPrimaryImageTag:'revision-one'};
+test('track artwork shares one authenticated Primary fetch across its poster and background',async()=>{
+ const bytes=Uint8Array.from([255,216,255,217]);
+ const t=setup({apiResponse:u=>u.pathname.includes('/Images/')?new Response(bytes,{headers:{'Content-Type':'image/jpeg'}}):undefined});
+ const album='77777777777747778777777777777777',track={...t.item,AlbumId:album,AlbumPrimaryImageTag:'revision-one'};
  assert.equal(t.ui.artworkSource(track).item,album);assert.equal(t.ui.artworkSource(track).backdrop,false);
  assert.equal(t.ui.artKey(track),t.ui.artKey({...track,Id:'88888888888848888888888888888888'}));
  assert.notEqual(t.ui.artKey(track),t.ui.artKey({...track,AlbumPrimaryImageTag:'revision-two'}));
  assert.equal(t.ui.artworkSource({...track,ImageTags:{Primary:'track-art'}}).item,t.item.Id);
+ assert.equal(t.ui.artKey(track,true),t.ui.artKey(track));
+ assert.notEqual(t.ui.artKey({...track,BackdropImageTags:['revision-one']},true),t.ui.artKey(track));
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const targets=[false,true].map(backdrop=>{
+  const element=new Element('div'),source=t.ui.artworkSource(track,backdrop);
+  element.dataset.artKey=t.ui.artKey(track,backdrop);element.dataset.artId=source.item;
+  element.dataset.artBackdrop=String(source.backdrop);if(backdrop)element.dataset.backdrop='true';
+  return element;
+ });
+ t.context.document.querySelectorAll=selector=>selector==='[data-art-key]'?targets:[];
+ t.ui.pumpArtwork();await until(()=>t.ui.state.images.has(t.ui.artKey(track)));
+ const requests=t.requests.filter(request=>new URL(request.url).pathname.includes('/Images/'));
+ assert.equal(requests.length,1);assert.equal(new URL(requests[0].url).pathname,'/Items/'+album+'/Images/Primary');
+ assert(requests[0].options.headers.Authorization.includes('synthetic-private-bearer'));
+ assert.equal(targets[0].children[0].tagName,'IMG');
+ assert(targets[1].style.backgroundImage.includes(targets[0].children[0].src));
+ t.context.document.querySelectorAll=()=>[];t.ui.clearImages();await t.ui.signOut();
 });
 
 
