@@ -749,7 +749,7 @@ pub fn call(v: &Value) -> Result<Value> {
                 ),
                 ("Limit", count(v, "limit", 50, 200)?.to_string()),
                 ("Recursive", "true".into()),
-                ("Fields", "PrimaryImageAspectRatio,Overview".into()),
+                ("Fields", "PrimaryImageAspectRatio,Overview,Genres,DateCreated".into()),
             ];
             for (key, out) in [
                 ("parentId", "ParentId"),

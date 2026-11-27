@@ -516,6 +516,9 @@ pub struct InternalItemsQuery {
     // --- misc ---
     /// A free-text search term.
     pub search_term: Option<String>,
+    /// Bluefin opt-in: apply the requested sort to the complete search match set.
+    /// False retains Jellyfin's relevance-first search ordering.
+    pub search_order_by_requested: bool,
     /// A series-timer id filter.
     pub series_timer_id: Option<String>,
     /// Whether deserialization of full items is skipped (id-only results).
@@ -692,6 +695,7 @@ impl Default for InternalItemsQuery {
             min_height: None,
             min_width: None,
             search_term: None,
+            search_order_by_requested: false,
             series_timer_id: None,
             skip_deserialization: false,
             include_extras: false,
