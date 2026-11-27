@@ -79,29 +79,51 @@ object Artwork {
                     connection.instanceFollowRedirects = false
                     connection.connectTimeout = 10000; connection.readTimeout = 10000
                     connection.setRequestProperty("Authorization", "MediaBrowser Client=\"Bluefin Android\", Device=\"Android\", DeviceId=\"${headerValue(owner.deviceId)}\", Version=\"0.1.0\", Token=\"${headerValue(owner.token)}\"")
-                    check(connection.responseCode == 200 && connection.contentType?.startsWith("image/") == true)
-                    check(connection.contentLengthLong <= 2 * 1024 * 1024)
-                    val bytes = connection.inputStream.use { input ->
-                        val out = java.io.ByteArrayOutputStream()
-                        val buffer = ByteArray(16384)
-                        while (true) {
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            check(out.size() + count <= 2 * 1024 * 1024)
-                            out.write(buffer, 0, count)
-                        }
-                        out.toByteArray()
-                    }
-                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-                    check(bounds.outWidth in 1..16384 && bounds.outHeight in 1..16384)
-                    var sample = 1
-                    while (bounds.outWidth / sample > 512 || bounds.outHeight / sample > 512) sample *= 2
-                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+                    val bitmap = decode(connection)
                     if (core.account == owner) bitmap else { bitmap?.recycle(); null }
                 } finally { connection.disconnect() }
             }.getOrNull()
         }
+    }
+
+    suspend fun publicTvPortrait(item: PublicTvTitle): Bitmap? {
+        val url = item.artwork ?: return null
+        if (!PublicTvTitle.isPortrait(url)) return null
+        return slots.withPermit {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val connection = URL(url).openConnection() as HttpURLConnection
+                    try {
+                        connection.instanceFollowRedirects = false
+                        connection.connectTimeout = 6000
+                        connection.readTimeout = 6000
+                        decode(connection)
+                    } finally { connection.disconnect() }
+                }.getOrNull()
+            }
+        }
+    }
+
+    private fun decode(connection: HttpURLConnection): Bitmap? {
+        check(connection.responseCode == 200 && connection.contentType?.startsWith("image/") == true)
+        check(connection.contentLengthLong <= 2 * 1024 * 1024)
+        val bytes = connection.inputStream.use { input ->
+            val out = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(16384)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                check(out.size() + count <= 2 * 1024 * 1024)
+                out.write(buffer, 0, count)
+            }
+            out.toByteArray()
+        }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        check(bounds.outWidth in 1..16384 && bounds.outHeight in 1..16384)
+        var sample = 1
+        while (bounds.outWidth / sample > 512 || bounds.outHeight / sample > 512) sample *= 2
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
     }
 }
 
@@ -112,5 +134,11 @@ fun ItemArtwork(item: LibraryItem, model: LibraryModel, modifier: Modifier) {
     LaunchedEffect(item.artworkSources, owner) {
         if (owner != null) bitmap = Artwork.fetch(model.core, owner, item.artworkSources)
     }
+    bitmap?.let { Image(it.asImageBitmap(), contentDescription = null, modifier = modifier, contentScale = ContentScale.Crop) }
+}
+
+@Composable fun PublicTvArtwork(item: PublicTvTitle, modifier: Modifier) {
+    var bitmap by remember(item) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(item) { bitmap = Artwork.publicTvPortrait(item) }
     bitmap?.let { Image(it.asImageBitmap(), contentDescription = null, modifier = modifier, contentScale = ContentScale.Crop) }
 }

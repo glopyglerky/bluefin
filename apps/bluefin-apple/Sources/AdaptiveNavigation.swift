@@ -312,7 +312,7 @@ struct TVWelcomeView: View {
                             if let connectedServer { signInOptions(connectedServer) }
                             else {
                                 Button { publicSearch = true } label: {
-                                    AccountActionLabel(title: "Search TV shows")
+                                    AccountActionLabel(title: "Search movies and shows")
                                 }.accountButtonStyle().accessibilityIdentifier("publicTVSearch")
                                 Button { meshPairing = true } label: {
                                     AccountActionLabel(title: "Connect with QR or invitation")
@@ -352,7 +352,7 @@ struct TVWelcomeView: View {
             .accountFocusScope(signInFocus)
         }
         .sheet(isPresented: $meshPairing) { MeshPairingView().environmentObject(store) }
-        .sheet(isPresented: $publicSearch) { PublicTVSearchView() }
+        .sheet(isPresented: $publicSearch) { PublicTitleSearchView() }
         .sheet(isPresented: $quickConnect) {
             QuickConnectView(server: address, allowHttp: localHTTP && allowHTTP)
                 .environmentObject(store)

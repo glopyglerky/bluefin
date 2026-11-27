@@ -66,6 +66,16 @@ class CoreClient private constructor(private val context: Context?, store: Clean
         check(account == owner) { "Account changed. Retry from the current library." }
         withContext(Dispatchers.IO) { cleanup.call(operation, fields, owner) }
     }
+    suspend fun publicTvSearch(query: String): List<PublicTvTitle> = withContext(Dispatchers.IO) {
+        val operation = "publicTvSearch"
+        val fields = JSONObject().put("query", query)
+        val value = exchange?.invoke(operation, fields, null) ?: run {
+            check(NativeCore.available) { "Public catalog is unavailable." }
+            fields.put("operation", operation).put("clientPlatform", "android")
+            decodeNativeReply(operation, JSONObject(NativeCore.invoke(fields.toString())))
+        }
+        PublicTvTitle.parse(value)
+    }
     private fun request(op: String, fields: JSONObject, owner: Account?): JSONObject {
         exchange?.let { return it(op, fields, owner) }
         check(NativeCore.available) { "Android native core is not packaged. Demo is available." }

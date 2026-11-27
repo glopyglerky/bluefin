@@ -16,7 +16,7 @@ let modalWasOpen=false,focusReturn=null,pageRetired=false,authTask=false,playbac
 let meshBeginStarted=false;
 let localLibrary=null,routeController=null,lyricsView=null,lyricsFrame=null;
 const categories=[['Home','home'],['Sports','sports'],['TV Shows','shows'],['Movies','movies'],['Live TV','live'],['Music','music']];
-const searchScopes=[['all','All',null],['movies','Movies','Movie'],['tvShows','TV Shows','Series,Season,Episode'],['music','Music','Audio,MusicAlbum,MusicArtist,MusicVideo,Playlist'],['sports','Sports',null],['liveTv','Live TV','TvChannel,LiveTvProgram'],['publicTv','Public TV catalog (TVmaze)',null]];
+const searchScopes=[['all','All',null],['library','Library only',null],['movies','Movies','Movie'],['tvShows','TV Shows','Series,Season,Episode'],['music','Music','Audio,MusicAlbum,MusicArtist,MusicVideo,Playlist'],['people','People',null],['sports','Sports',null],['liveTv','Live TV','TvChannel,LiveTvProgram'],['publicTv','Public TV catalog (TVmaze)',null],['publicMovies','Public film catalog','Movie']];
 function aborted(){return Object.assign(Error('The search or library view changed.'),{name:'AbortError'});}
 function notFound(error){return error?.status===404||/\bHTTP 404\b/.test(String(error?.message||error||''));}
 
@@ -437,28 +437,32 @@ async function readInvitationImage(file) {
 function hasSearchFacets(filters){return !!(filters.studioID||filters.tag||filters.collectionID);}
 function cleanSearchFilters(value={}) {
  const scope=searchScopes.some(([key])=>key===value.scope)?value.scope:'all';
- if(scope==='sports'||scope==='publicTv')return {scope,studioID:'',tag:'',collectionID:''};
+ if(['sports','publicTv','publicMovies','people'].includes(scope))return {scope,studioID:'',tag:'',collectionID:''};
  return {scope,studioID:uuid(value.studioID)?id(value.studioID):'',tag:typeof value.tag==='string'?value.tag.slice(0,512):'',
   collectionID:uuid(value.collectionID)?id(value.collectionID):''};
 }
 function searchLanes(filters){
  if(filters.scope==='publicTv')return [];
+ if(filters.scope==='publicMovies')return ['library'];
+ if(filters.scope==='library')return ['library'];
  if(hasSearchFacets(filters))return ['library'];
  if(filters.scope==='sports')return ['programmes'];
+ if(filters.scope==='people')return ['people'];
  if(filters.scope==='liveTv')return ['programmes','channels'];
  const lanes=['library'];if(['all','music'].includes(filters.scope))lanes.push('artists');
- if(filters.scope==='all')lanes.push('programmes','channels');return lanes;
+ if(filters.scope==='all')lanes.push('people','programmes','channels');return lanes;
 }
 function searchCall(lane,route,start=0){
  const filters=cleanSearchFilters(route.filters),query=[['UserId',state.session.user],['Limit',60],['StartIndex',start]];
  if(route.query)query.push(['SearchTerm',route.query]);
  let path;
  if(lane==='library'){
-  path='Users/'+state.session.user+'/Items';query.push(['Recursive',true],['Fields','Overview,PrimaryImageAspectRatio']);
+  path='Users/'+state.session.user+'/Items';query.push(['Recursive',true],['Fields','Overview,PrimaryImageAspectRatio,ProviderIds']);
   const type=searchScopes.find(([key])=>key===filters.scope)?.[2];if(type)query.push(['IncludeItemTypes',type]);
   if(filters.studioID)query.push(['StudioIds',filters.studioID]);if(filters.tag)query.push(['Tags',filters.tag]);
   if(filters.collectionID)query.push(['ParentId',filters.collectionID]);
  }else if(lane==='artists'){path='Artists';query.push(['Recursive',true]);}
+ else if(lane==='people'){path='Persons';query.push(['PersonTypes','Actor,Director,Writer,GuestStar']);}
  else if(lane==='programmes'){
   path='LiveTv/Programs';query.push(['MinEndDate',route.liveAfter]);
   if(filters.scope==='sports')query.push(['IsSports',true]);
@@ -472,45 +476,146 @@ function appendSearchPage(page,value){
  page.next+=(Array.isArray(value)?value:value.Items).length;
  page.total=entries.length?Math.max(page.next,Number(value.TotalRecordCount)||page.next):page.next;
 }
-async function publicTVSearch(term,signal){
- const url=new URL('https://api.tvmaze.com/search/shows');
- url.searchParams.set('q',term);
- const limit=1024*1024,controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),6000);
+async function publicCatalogJson(url,signal,limit=1024*1024,headers){
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),6000);
  const stop=()=>controller.abort();
  signal.addEventListener('abort',stop,{once:true});
  try{
   if(signal.aborted)throw aborted();
-  const response=await fetch(url,{credentials:'omit',redirect:'error',referrerPolicy:'no-referrer',signal:controller.signal});
+  const response=await fetch(url,{credentials:'omit',redirect:'error',referrerPolicy:'no-referrer',signal:controller.signal,headers});
   if(!response.ok)throw Error('Catalog unavailable');
-  const reader=response.body.getReader(),bytes=new Uint8Array(limit);
-  let length=0;
-  for(;;){
-   const {done,value}=await reader.read();if(done)break;
-   if(length+value.length>limit){await reader.cancel();throw Error('Catalog response too large');}
-   bytes.set(value,length);length+=value.length;
-  }
-  const rows=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(0,length)));
-  if(!Array.isArray(rows))throw Error('Invalid catalog response');
-  const titles=[],seen=new Set();
-  for(const {show} of rows.filter(row=>row&&typeof row==='object')){
-   if(!Number.isSafeInteger(show?.id)||show.id<=0||seen.has(show.id)||typeof show.name!=='string'||!show.name.trim()||show.name.length>256)continue;
-   seen.add(show.id);
-   const raw=show.image?.medium;
-   const art=typeof raw==='string'&&raw.length<=1024&&/^https:\/\/static\.tvmaze\.com\/uploads\/images\/medium_portrait\/[0-9]+\/[0-9]+\.jpg$/.test(raw)?raw:null;
-   const year=typeof show.premiered==='string'&&/^\d{4}-/.test(show.premiered)?show.premiered.slice(0,4):'';
-   titles.push({name:show.name,art,year,url:'https://www.tvmaze.com/shows/'+show.id});
-   if(titles.length===20)break;
-  }
-  return titles;
+  return await readJson(response,limit);
  }finally{clearTimeout(timeout);signal.removeEventListener('abort',stop);}
 }
+async function tvmazeSearch(term,category,signal){
+ const show=category==='shows',url=new URL('https://api.tvmaze.com/search/'+category);
+ url.searchParams.set('q',term);
+ const rows=await publicCatalogJson(url,signal);
+ if(!Array.isArray(rows))throw Error('Invalid catalog response');
+ const titles=[],seen=new Set();
+ for(const row of rows){
+  const item=row?.[show?'show':'person'];
+  if(!Number.isSafeInteger(item?.id)||item.id<=0||seen.has(item.id)||typeof item.name!=='string'||!item.name.trim()||item.name.length>256)continue;
+  seen.add(item.id);
+  const raw=item.image?.medium;
+  const art=typeof raw==='string'&&raw.length<=1024&&/^https:\/\/static\.tvmaze\.com\/uploads\/images\/medium_portrait\/[0-9]+\/[0-9]+\.jpg$/.test(raw)?raw:null;
+  const year=typeof item.premiered==='string'&&/^\d{4}-/.test(item.premiered)?item.premiered.slice(0,4):'';
+  titles.push({name:item.name,art,year,source:'TVmaze',url:'https://www.tvmaze.com/'+category+'/'+item.id});
+  if(titles.length===20)break;
+ }
+ return titles;
+}
+function wikidataJSON(params,signal){
+ const url=new URL('https://www.wikidata.org/w/api.php');
+ for(const [key,value] of Object.entries({format:'json',formatversion:'2',origin:'*',...params}))url.searchParams.set(key,value);
+ return publicCatalogJson(url,signal,1024*1024,{'Api-User-Agent':'Bluefin (https://github.com/glopyglerky/bluefin)'});
+}
+async function publicFilmSearch(term,signal){
+ // Only this adapter supplies a Wikidata predicate. User text is a literal title hint.
+ const hint=term.replace(/[^\p{L}\p{N}\p{M}]+/gu,' ').trim();
+ if(!hint)return [];
+ const results=await wikidataJSON({action:'query',list:'search',srnamespace:'0',srlimit:'12',
+  srprop:'',srsearch:hint+' haswbstatement:P31=Q11424'},signal);
+ if(!Array.isArray(results?.query?.search))throw Error('Invalid film search response');
+ const ids=[...new Set(results.query.search.map(item=>item?.title).filter(id=>typeof id==='string'&&/^Q[1-9][0-9]{0,14}$/.test(id)))].slice(0,12);
+ if(!ids.length)return [];
+ const language=(globalThis.navigator?.language||'en').toLowerCase();
+ const primary=/^[a-z]{2,3}/.exec(language)?.[0]||'en';
+ const details=await wikidataJSON({action:'wbgetentities',ids:ids.join('|'),props:'labels|descriptions',
+  languages:primary==='en'?'en':primary+'|en'},signal);
+ if(!details?.entities||details.error)throw Error('Invalid film catalog response');
+ const titles=[];
+ for(const id of ids){
+  const entity=details.entities[id];
+  const label=field=>entity?.[field]?.[primary]?.value||entity?.[field]?.en?.value;
+  const name=label('labels'),description=label('descriptions');
+  if(typeof name!=='string'||!name.trim()||name.length>256)continue;
+  titles.push({id,name,category:'movies',source:'Wikidata',description:typeof description==='string'?description.slice(0,180):'',url:'https://www.wikidata.org/wiki/'+id});
+ }
+ return titles;
+}
+const wikidataKinds=new Map([
+ ['Q11424',['movies','Movie']],['Q20650540',['movies','Anime film']],['Q202866',['movies','Animated film']],['Q5398426',['tvShows','TV show']],
+ ['Q482994',['music','Album']],['Q134556',['music','Single']],['Q7366',['music','Song']],['Q215380',['music','Musical group']],
+ ['Q16510064',['sports','Sporting event']],['Q13406554',['sports','Sports competition']],
+]);
+const wikidataRoles=new Map([['Q33999','Actor'],['Q2526255','Film director'],['Q28389','Screenwriter'],['Q36180','Writer']]);
+function wikidataValues(item,property){
+ const claims=item?.claims?.[property];
+ return Array.isArray(claims)?claims.slice(0,32).filter(claim=>claim?.rank!=='deprecated').map(claim=>claim?.mainsnak?.datavalue?.value):[];
+}
+function wikidataRequest(query){
+ const url=new URL('https://www.wikidata.org/w/api.php');
+ for(const [name,value] of Object.entries({format:'json',origin:'*',...query}))url.searchParams.set(name,value);
+ return url;
+}
+async function wikidataSearch(term,scope,signal){
+ const hits=await publicCatalogJson(wikidataRequest({action:'wbsearchentities',search:term,language:'en',uselang:'en',limit:16,type:'item'}),signal);
+ if(!Array.isArray(hits?.search))throw Error('Invalid public index response');
+ const entityId=id=>typeof id==='string'&&/^Q[1-9][0-9]{0,15}$/.test(id);
+ let ids=hits.search.slice(0,16).map(item=>item?.id).filter(entityId);
+ if(!ids.length){
+  const words=searchableWords(term).slice(0,8);
+  if(!words.length)return [];
+  const fuzzy=words.map(word=>word.length>=4?word+'~1':word).join(' ');
+  const matches=await publicCatalogJson(wikidataRequest({action:'query',list:'search',srsearch:fuzzy,srnamespace:0,srlimit:16,srprop:''}),signal);
+  if(!Array.isArray(matches?.query?.search))throw Error('Invalid public index response');
+  ids=matches.query.search.slice(0,16).map(match=>match?.title).filter(entityId);
+ }
+ ids=[...new Set(ids)];
+ if(!ids.length)return [];
+ const details=await publicCatalogJson(wikidataRequest({action:'wbgetentities',ids:ids.join('|'),props:'labels|claims',languages:'en',languagefallback:1}),signal,2*1024*1024);
+ if(!details?.entities||typeof details.entities!=='object')throw Error('Invalid public index entry');
+ const results=[];
+ for(const id of ids){
+  const item=details.entities[id],label=item?.labels?.en?.value;
+  if(typeof label!=='string'||!label.trim()||label.length>256)continue;
+  const typeIds=wikidataValues(item,'P31').map(value=>value?.id);
+  const kinds=typeIds.map(type=>wikidataKinds.get(type)).filter(Boolean);
+  if(typeIds.includes('Q5')){
+   const roles=[...new Set(wikidataValues(item,'P106').map(value=>wikidataRoles.get(value?.id)).filter(Boolean))];
+   if(roles.length)kinds.push(['people',roles.join(', ')]);
+  }
+  const kind=kinds.find(kind=>scope==='all'||scope===kind[0]);
+  if(!kind)continue;
+  const dates=kind[0]==='sports'?['P585','P580']:['P577'];
+  const published=dates.flatMap(property=>wikidataValues(item,property)).map(value=>value?.time).find(time=>typeof time==='string'&&/^\+\d{4}-\d{2}-\d{2}T/.test(time));
+  results.push({id,name:label,category:kind[0],source:kind[1]+' · Wikidata',url:'https://www.wikidata.org/wiki/'+id,
+                year:published?.slice(1,kind[0]==='sports'?11:5)||''});
+ }
+ return results;
+}
+const discoveryKinds={movie:'Movie',series:'TV show',person:'Person',artist:'Artist',album:'Album',track:'Track'};
+function connectedDiscoveryRows(value){
+ if(!Array.isArray(value?.results))throw Error('Invalid discovery response');
+ return value.results.slice(0,30).filter(item=>item&&Object.hasOwn(discoveryKinds,item.kind)&&typeof item.title==='string'&&item.title.trim())
+  .map(item=>({name:item.title.slice(0,256),year:typeof item.year==='string'?item.year.slice(0,20):'',
+             source:discoveryKinds[item.kind]}));
+}
+function searchableWords(value){return String(value||'').normalize('NFKD').toLowerCase().replace(/\p{M}/gu,'').match(/[\p{L}\p{N}]+/gu)||[];}
+function closeWord(left,right){
+ if(right.startsWith(left))return true;
+ if(left.length<4||right.length<4||Math.abs(left.length-right.length)>1)return false;
+ const a=Array.from(left.slice(0,40)),b=Array.from(right.slice(0,40));
+ let at=0;while(at<a.length&&a[at]===b[at])at++;
+ if(a.length!==b.length)return (a.length>b.length?a:b).slice(at+1).join('')===(a.length>b.length?b:a).slice(at).join('');
+ if(a.slice(at+1).join('')===b.slice(at+1).join(''))return true;
+ return a[at]===b[at+1]&&a[at+1]===b[at]&&a.slice(at+2).join('')===b.slice(at+2).join('');
+}
+function sportsTitle(game){return String(game.event?.name||game.title||game.native_title||'Sports broadcast').slice(0,256);}
+function sportsMatch(game,query){
+ const event=game.event||{},teams=Array.isArray(event.competitors)?event.competitors.slice(0,4):[];
+ const haystack=searchableWords([sportsTitle(game),event.league_name,game.channel_name,...teams.map(team=>team?.name||team?.short_name||team?.abbreviation)].join(' ')).slice(0,70);
+ return searchableWords(query).slice(0,12).every(word=>haystack.some(label=>closeWord(word,label)));
+}
 async function loadSearch(route,get,current,signal){
- const search=state.search={route,pages:[],problems:[],publicTV:null};
+ const search=state.search={route,pages:[],problems:[],catalogs:[],sports:[]};
  if(!route.query&&route.filters.scope==='all'&&!hasSearchFacets(route.filters)){
   if(state.session){search.browseMusic=state.tab==='Music';try{const value=await get(search.browseMusic?'MusicGenres':'Genres',[['UserId',state.session.user],['Recursive',true],['Limit',24]]);current();search.browse=items(value);render();}catch(error){current();}}
   return;
  }
- const names={library:'Your library',artists:'Artists',programmes:route.filters.scope==='sports'?'Sports broadcasts':'On now and upcoming',channels:'Channels'};
+ const scope=route.filters.scope,facets=hasSearchFacets(route.filters);
+ const names={library:'Your library',artists:'Artists',people:'People in your library',programmes:scope==='sports'?'Sports broadcasts':'On now and upcoming',channels:'Channels'};
  search.pages=state.session?searchLanes(route.filters).map(lane=>({lane,title:names[lane],items:[],next:0,total:0,loading:true})):[];
  const lookups=search.pages.map(async page=>{
   try{const call=searchCall(page.lane,route),value=await get(call.path,call.query);current();appendSearchPage(page,value);}
@@ -519,24 +624,52 @@ async function loadSearch(route,get,current,signal){
   state.rows=search.pages.flatMap(page=>page.items);
   render();
  });
- const publicTerm=Array.from(route.query).slice(0,160).join('');
- if(publicTerm.length>=2&&route.filters.scope==='publicTv'){
-  search.publicTV={loading:true,items:[],unavailable:false};
-  lookups.push(publicTVSearch(publicTerm,signal).then(titles=>{
-   current();search.publicTV.items=titles;
-  },()=>{
-   current();search.publicTV.unavailable=true;
-  }).then(()=>{search.publicTV.loading=false;render();}));
+ const term=Array.from(route.query).slice(0,160).join('');
+ function catalog(title,load,optional=false){
+  const group={title,loading:true,items:[],unavailable:false,optional};
+  search.catalogs.push(group);
+  lookups.push((async()=>{
+   try{const rows=await load();current();group.items=rows;}
+   catch(error){current();group.unavailable=true;}
+   group.loading=false;render();
+  })());
+ }
+ if(term.length>=2&&!facets){
+   const publicSearch=!state.session||['publicTv','publicMovies'].includes(scope);
+  if(publicSearch&&['all','tvShows','publicTv'].includes(scope))catalog('Public TV titles',()=>tvmazeSearch(term,'shows',signal));
+  if(publicSearch&&['all','people'].includes(scope))catalog('Public TV people',()=>tvmazeSearch(term,'people',signal));
+  if(publicSearch&&['movies','publicMovies'].includes(scope))catalog('Film catalog',async()=>{
+   const films=await publicFilmSearch(term,signal);
+   return films.length?films:wikidataSearch(term,'movies',signal);
+  });
+  else if(publicSearch&&['all','tvShows','music','people','sports'].includes(scope))catalog('Public media index',()=>wikidataSearch(term,scope,signal));
+  if(state.session&&['all','movies','tvShows'].includes(scope))catalog('Connected movie and TV catalog',async()=>{
+   const page=await get('Bluefin/Web/Discovery/Search',[['query',term],['scope',scope]]);
+   return connectedDiscoveryRows(page);
+  },true);
+  if(state.session&&['all','music'].includes(scope))catalog('Connected music catalog',async()=>{
+   const page=await get('Bluefin/Web/Discovery/Search',[['query',term],['scope','music']]);
+   return connectedDiscoveryRows(page);
+  },true);
+ }
+ if(state.session&&!facets&&['all','sports'].includes(scope)){
+  lookups.push((async()=>{
+   try{
+    const feed=await get('sports/api/v1/home');current();
+    if(feed?.schema!==1||feed.presentation_only!==true||!Array.isArray(feed.games)||!Array.isArray(feed.local_broadcasts)||feed.games.length+feed.local_broadcasts.length>400)return;
+    search.sports=feed.games.concat(feed.local_broadcasts).filter(game=>game&&sportsMatch(game,term)).slice(0,24);render();
+   }catch(_){current();}
+  })());
  }
  await Promise.all(lookups);
 }
 async function startSearch(query,filters={},record=false){
  const previous=state.route,route={kind:'search',title:'Search',query:String(query).trim().slice(0,256),
-  filters:cleanSearchFilters(state.session?filters:{scope:'publicTv'}),refine:previous.kind==='search'&&previous.refine,liveAfter:new Date().toISOString()};
+  filters:cleanSearchFilters(filters),refine:previous.kind==='search'&&previous.refine,liveAfter:new Date().toISOString()};
  state.query=route.query;state.route=route;state.error='';
  const search=loadRoute();render();
- if(route.refine&&!['sports','publicTv'].includes(route.filters.scope)&&(!state.facets||state.facets.loading))loadSearchFacets().catch(()=>{});
- if(record&&route.filters.scope!=='publicTv')recordHomeSearch(route.query).catch(()=>{});
+ if(route.refine&&state.session&&!['sports','publicTv','publicMovies','people'].includes(route.filters.scope)&&(!state.facets||state.facets.loading))loadSearchFacets().catch(()=>{});
+ if(record&&!['publicTv','publicMovies'].includes(route.filters.scope))recordHomeSearch(route.query).catch(()=>{});
  try{await search;}catch(error){if(route===state.route&&error.name!=='AbortError')state.error=String(error.message||error);}
  finally{if(route===state.route)render();}
 }
@@ -889,7 +1022,7 @@ function installationLink(){
 }
 function sourceFooter(){const p=node('p',undefined,'source-links');for(const [label,file]of[['Source code','SOURCE.txt'],['License','LICENSE']]){const link=node('a',label);link.href=new URL('./'+file,document.baseURI).href;link.target='_blank';link.rel='noopener noreferrer';p.append(link);}return p;}
 function welcome(){const main=node('main',undefined,'welcome');main.id='content';const mark=node('div',undefined,'wordmark');mark.append(icon('waves'),node('h1','Bluefin'));main.append(mark);const stack=node('section',undefined,'account-stack');
- if(state.phase==='connect'){stack.append(button('Search TV shows',openSearch,'','search'));stack.append(button('Connect with QR and passkey',()=>{state.sheet='invite';state.error='';render();},'primary'));stack.append(action('Open local music',openLocalMusic,'','music'));const form=node('form');form.append(node('h2','Connect to your server'));const [w,i]=field('Server address','url',state.base,'server');i.autocomplete='url';i.placeholder='https://media.example.com';i.required=true;form.append(w);const submit=node('button','Continue','primary');submit.disabled=state.busy;form.append(submit);form.onsubmit=e=>{e.preventDefault();perform(()=>connect(i.value.trim()));};stack.append(form);}
+ if(state.phase==='connect'){stack.append(button('Search media',openSearch,'','search'));stack.append(button('Connect with QR and passkey',()=>{state.sheet='invite';state.error='';render();},'primary'));stack.append(action('Open local music',openLocalMusic,'','music'));const form=node('form');form.append(node('h2','Connect to your server'));const [w,i]=field('Server address','url',state.base,'server');i.autocomplete='url';i.placeholder='https://media.example.com';i.required=true;form.append(w);const submit=node('button','Continue','primary');submit.disabled=state.busy;form.append(submit);form.onsubmit=e=>{e.preventDefault();perform(()=>connect(i.value.trim()));};stack.append(form);}
  else if(state.phase==='options'){stack.append(node('h2',state.server||'Sign in'));stack.append(button('Sign in with password',()=>{state.phase='password';render();},'primary'));if(state.options.passkeys)stack.append(action('Sign in with a passkey',startPasskey));if(state.options.quickConnect)stack.append(action('Quick Connect',startQuick));if(state.options.allowSignups)stack.append(button('Create account',()=>{state.phase='create';render();}));stack.append(button('Change server',()=>{state.phase='connect';render();},'plain'));}
  else if(state.phase==='password'||state.phase==='create'){const create=state.phase==='create';const f=node('form');f.append(node('h2',create?'Create account':'Sign in'));const [nw,ni]=field('Username','text','', 'username'),[pw,pi]=field('Password','password','','password');ni.autocomplete='username';pi.autocomplete=create?'new-password':'current-password';ni.required=true;pi.required=true;f.append(nw,pw);let confirm;if(create){const [w,i]=field('Confirm password','password','','confirm');confirm=i;i.autocomplete='new-password';f.append(w,node('p','Use at least 15 characters.','secondary'));}const b=node('button',create?'Create account':'Sign in','primary');b.disabled=state.busy;f.append(b);f.onsubmit=e=>{e.preventDefault();const password=pi.value,name=ni.value.trim();if(create&&password!==confirm.value){state.error='The passwords do not match.';render();return;}pi.value='';if(confirm)confirm.value='';perform(()=>signIn(name,password,create));};stack.append(f,button('Back to sign-in options',()=>{state.phase='options';render();},'plain'));}
  else if(state.phase==='device'){const d=state.device;stack.append(node('h2',d?.kind==='passkey'?'Sign in with a passkey':'Quick Connect'),node('p',d?.code||'','confirmation-code'));if(d?.url){const link=node('a','Open passkey page');link.href=d.url;link.target='_blank';link.rel='noopener noreferrer';stack.append(link,node('p','After verifying, return here to finish.','secondary'));}else stack.append(node('p','Enter this code in another client signed in to your server.'));stack.append(action('Finish sign-in',finishDevice,'primary'),action('Cancel',cancelDevice));}
@@ -919,23 +1052,143 @@ function searchPoster(item){
  card.append(playResult);
  return card;
 }
-function publicTVResults(catalog){
+let storefrontNames,storefrontRegions;
+function regionName(code){
+ if(typeof Intl.DisplayNames!=='function')return code;
+ storefrontNames??=new Intl.DisplayNames(undefined,{type:'region',fallback:'none'});
+ return storefrontNames.of(code);
+}
+function offeredRegions(){
+ storefrontRegions??=Array.from({length:26*26},(_,index)=>String.fromCharCode(65+Math.floor(index/26),65+(index%26)))
+  .map(code=>[code,regionName(code)]).filter(([,name])=>name).sort((a,b)=>a[1].localeCompare(b[1]));
+ return storefrontRegions;
+}
+function defaultStorefront(){
+ try{
+  const region=new Intl.Locale(globalThis.navigator?.language||'en-US').maximize().region;
+  return /^[A-Z]{2}$/.test(region)?region:'US';
+ }
+ catch{return 'US';}
+}
+function storefrontPrice(amount,currency){
+ return Number.isFinite(amount)&&amount>=0&&/^[A-Z]{3}$/.test(currency)?
+  new Intl.NumberFormat(undefined,{style:'currency',currency}).format(amount):null;
+}
+function statedIdentifiers(response,property,valid){
+ if(response?.error)throw Error('Store identifiers unavailable');
+ const rows=response?.claims?.[property];
+ if(!Array.isArray(rows))return [];
+ return [...new Set(rows.filter(row=>row?.rank!=='deprecated')
+  .map(row=>row?.mainsnak?.datavalue?.value).filter(id=>typeof id==='string'&&valid.test(id)))].slice(0,6);
+}
+async function findFilmOffers(item,region){
+ const signal=routeController?.signal;
+ if(!signal||signal.aborted||item.offer?.region===region&&item.offer.loading)return;
+ const current=item.offer={region,loading:true};render();
+ if(state.session&&!item.imdbIds){
+  wikidataJSON({action:'wbgetclaims',entity:item.id,property:'P345'},signal).then(response=>{
+   if(!signal.aborted){
+    item.imdbIds=statedIdentifiers(response,'P345',/^tt[0-9]{7,12}$/);
+    render();
+   }
+  }).catch(()=>{});
+ }
+ try{
+  const claims=await wikidataJSON({action:'wbgetclaims',entity:item.id,property:'P6398'},signal);
+  const ids=statedIdentifiers(claims,'P6398',/^[1-9][0-9]{0,14}$/);
+  if(signal.aborted||item.offer!==current)return;
+  if(!ids.length){
+   const pages=await wikidataJSON({action:'wbgetclaims',entity:item.id,property:'P9586'},signal);
+   if(signal.aborted||item.offer!==current)return;
+   item.offer={region,checked:false,links:statedIdentifiers(pages,'P9586',/^umc\.cmc\.[a-z0-9]{22,25}$/)
+    .map(id=>'https://tv.apple.com/movie/'+id)};
+   render();return;
+  }
+  const endpoint=new URL('https://itunes.apple.com/lookup');
+  endpoint.searchParams.set('id',ids.join(','));endpoint.searchParams.set('country',region);
+  const response=await publicCatalogJson(endpoint,signal);
+  if(signal.aborted||item.offer!==current)return;
+  if(!Array.isArray(response?.results))throw Error('Invalid storefront response');
+  const offers=[];
+  for(const row of response.results){
+   if(row?.kind!=='feature-movie'||!ids.includes(String(row.trackId))||typeof row.trackViewUrl!=='string')continue;
+   let destination;
+   try{destination=new URL(row.trackViewUrl);}catch{continue;}
+   if(destination.origin!=='https://itunes.apple.com'||destination.username||destination.password||
+      !destination.pathname.startsWith('/'+region.toLowerCase()+'/movie/')||
+      !destination.pathname.endsWith('/id'+row.trackId))continue;
+   const rent=storefrontPrice(row.trackRentalPrice,row.currency);
+   const buy=storefrontPrice(row.trackPrice,row.currency);
+   if(rent||buy)offers.push({rent,buy,destination:destination.origin+destination.pathname});
+  }
+  item.offer={region,checked:true,offers};
+ }catch{
+  if(signal.aborted||item.offer!==current)return;
+  item.offer={region,error:true};
+ }
+ render();
+}
+function filmProviderActions(item){
+ const actions=node('div'),status=item.offer;
+ if(!status){
+  const find=button('Where to watch',()=>findFilmOffers(item,defaultStorefront()),'plain');
+  find.dataset.focusKey='film-providers|'+item.id;
+  actions.append(find);
+  return actions;
+ }
+ const region=searchChoice('Storefront region','storefront-'+item.id,status.region,offeredRegions(),
+  selected=>findFilmOffers(item,selected),false);
+ const library=state.session&&state.search?.pages.find(page=>page.lane==='library');
+ const owned=library?.items.filter(value=>value.Type==='Movie'&&
+  item.imdbIds?.includes(value.ProviderIds?.Imdb||value.ProviderIds?.IMDb));
+ for(const media of owned||[]){
+  const caption=resumeTicks(media)>0?'Resume in Bluefin':'Play in Bluefin';
+  const start=action(caption,()=>play(media),'primary','play');
+  start.dataset.focusKey='film-play|'+id(media.Id);
+  actions.append(start);
+ }
+ actions.append(region);
+ if(status.loading)actions.append(node('p','Checking availability…','loading'));
+ else if(status.error){
+  actions.append(node('p','The Apple storefront could not be checked.','secondary'),
+   button('Retry',()=>findFilmOffers(item,status.region),'plain'));
+ }else if(status.checked){
+  const name=regionName(status.region)||status.region;
+  actions.append(node('p','Apple storefront · '+name));
+  if(!status.offers.length)actions.append(node('p','No rent or buy offer returned for this region.','secondary'));
+  for(const offer of status.offers){
+   actions.append(node('p',[offer.rent&&'Rent '+offer.rent,offer.buy&&'Buy '+offer.buy].filter(Boolean).join(' · ')));
+   const link=node('a','Continue to Apple TV');link.href=offer.destination;link.rel='noopener noreferrer';link.target='_blank';actions.append(link);
+  }
+ }else{
+  actions.append(node('p','No regional offers could be verified for this film.','secondary'));
+  for(const destination of status.links||[]){
+   const link=node('a','Open title in Apple TV');link.href=destination;link.rel='noopener noreferrer';link.target='_blank';actions.append(link);
+  }
+ }
+ return actions;
+}
+function catalogResults(catalog){
  const section=node('section',undefined,'search-results');
- section.append(node('h2','TV catalog'));
- if(catalog.loading)section.append(node('p','Searching TV catalog…','loading'));
- else if(catalog.unavailable)section.append(node('p','The TV catalog could not load.','error'));
- else if(!catalog.items.length)section.append(node('p','No titles found in the TV catalog.','secondary'));
+ section.append(node('h2',catalog.title));
+ if(catalog.loading)section.append(node('p','Searching catalog…','loading'));
+ else if(catalog.unavailable)section.append(node('p','This catalog is unavailable.','secondary'));
+ else if(!catalog.items.length)section.append(node('p','No matches in this catalog.','secondary'));
  else{
   const grid=node('div',undefined,'search-grid');
   for(const item of catalog.items){
-   const link=node('a',undefined,'public-title');link.href=item.url;link.rel='noopener noreferrer';link.target='_blank';
+   const entry=node(item.url?'a':'article',undefined,'public-title');
+   if(item.url){entry.href=item.url;entry.rel='noopener noreferrer';entry.target='_blank';}
    const art=node('div',undefined,'artwork');
    if(item.art){const image=node('img');image.alt='';image.loading='lazy';image.referrerPolicy='no-referrer';image.onerror=()=>art.replaceChildren(icon('shows'));image.src=item.art;art.append(image);}
    else art.append(icon('shows'));
-   link.append(art,node('strong',item.name),node('small',[item.year,'TVmaze'].filter(Boolean).join(' · ')));
-   grid.append(link);
+   entry.append(art,node('strong',item.name),node('small',[item.description||item.year,item.source].filter(Boolean).join(' · ')));
+   if(item.category==='movies'){
+    const card=node('article',undefined,'public-title');
+    card.append(entry,filmProviderActions(item));grid.append(card);
+   }else grid.append(entry);
   }
-  section.append(grid,node('p','TVmaze lists titles. Streaming availability for these results is unverified.','secondary'));
+  section.append(grid);
  }
  return section;
 }
@@ -943,7 +1196,7 @@ function publicSearchView(){
  const main=node('main',undefined,'app-main search-screen');main.id='content';
  main.append(button('Back',()=>{
   routeController?.abort();state.phase='connect';state.route={kind:'home'};state.back=[];state.search=null;state.query='';render();
- },'plain','back'),node('h1','Search TV shows'));
+ },'plain','back'),node('h1','Search media'));
  searchView(main);
  return main;
 }
@@ -997,22 +1250,23 @@ function searchView(main){
  const route=state.route,filters=cleanSearchFilters(route.filters);
  const form=node('form',undefined,'search-form'),input=node('input');
  form.setAttribute('role','search');
- input.id='bluefin-search';input.type='search';input.placeholder=state.session&&filters.scope!=='publicTv'?'Titles, artists, and channels':'TV show title';input.value=state.query;
- input.setAttribute('aria-label',state.session&&filters.scope!=='publicTv'?'Search connected media':'Search TV shows');input.maxLength=256;
+ const explicitlyPublic=!state.session||['publicTv','publicMovies'].includes(filters.scope);
+ input.id='bluefin-search';input.type='search';input.placeholder=filters.scope==='publicTv'?'TV show title':filters.scope==='publicMovies'?'Movie title':'Titles, songs, people, or teams';input.value=state.query;
+ input.setAttribute('aria-label',explicitlyPublic?'Search public media':'Search connected media');input.maxLength=256;
  input.oninput=()=>{state.query=input.value;};
  const submit=node('button','Search','primary');
  submit.type='submit';submit.id='bluefin-search-submit';
  form.append(icon('search'),input,submit);
  form.onsubmit=event=>{event.preventDefault();startSearch(input.value,filters,true);};
  main.append(form);
+ if(filters.scope==='all')main.append(node('p',state.session?'Searches your connected sources.':'Searches TVmaze and Wikidata.','secondary'));
+ if(state.session&&filters.scope==='publicTv')main.append(node('p','Searches the public TVmaze catalog.','secondary'));
+ if(state.session&&filters.scope==='publicMovies')main.append(node('p','Searches the public Wikidata film catalog.','secondary'));
  const search=state.search;
- if(!state.session){
-  if(search?.publicTV)main.append(publicTVResults(search.publicTV));
-  return;
- }
  const tools=node('div',undefined,'search-tools'),scopes=node('div',undefined,'search-scopes');
  scopes.setAttribute('role','group');scopes.setAttribute('aria-label','Media type');
  for(const [scope,label] of searchScopes){
+  if(!state.session&&['library','liveTv','publicMovies'].includes(scope))continue;
   const select=button(label,()=>startSearch(state.query,{...filters,scope}));
   select.id='bluefin-scope-'+scope;
   select.setAttribute('aria-pressed',String(scope===filters.scope));
@@ -1023,9 +1277,13 @@ function searchView(main){
   route.refine=!route.refine;render();if(route.refine)loadSearchFacets().catch(error=>{state.error=String(error.message||error);render();});
  },'search-filter');
  refine.setAttribute('aria-expanded',String(!!route.refine));
- if(!['sports','publicTv'].includes(filters.scope))tools.append(refine);
+ if(state.session&&!['sports','publicTv','publicMovies','people'].includes(filters.scope))tools.append(refine);
  main.append(tools);
- if(route.refine&&!['sports','publicTv'].includes(filters.scope)){
+ if(!state.session){
+  for(const group of search?.catalogs||[])main.append(catalogResults(group));
+  return;
+ }
+ if(route.refine&&!['sports','publicTv','publicMovies','people'].includes(filters.scope)){
   const panel=node('section',undefined,'search-refinements'),facets=state.facets;
   const studio=node('div');studio.append(facetLookup('studios',facets),searchChoice('Studio','studio',filters.studioID,[['','All studios'],...(facets?.studios||[]).map(value=>[value.id,value.name])],
    studioID=>startSearch(state.query,{...filters,studioID}),facets?.pending?.has('studios')||facets?.lookupBusy?.has('studios')||false));panel.append(studio);
@@ -1040,10 +1298,11 @@ function searchView(main){
  }
  if(hasSearchFacets(filters))main.append(node('p','Filtering your library. The live guide is searched when these refinements are cleared.','secondary'),
   button('Clear refinements',()=>startSearch(state.query,{scope:filters.scope}),'plain'));
- if(filters.scope==='publicTv'){
-  if(search?.route===route&&search.publicTV)main.append(publicTVResults(search.publicTV));
-  return;
+ if(search?.route===route){
+  for(const group of search.catalogs||[])if(!group.optional||group.items.length)main.append(catalogResults(group));
+  if(search.sports?.length){main.append(node('h2','Sports events'));appendSportsCards(main,search.sports);}
  }
+ if(filters.scope==='publicTv')return;
  if(search?.route===route)for(const page of search.pages){
   if(!page.items.length)continue;
   const section=node('section',undefined,'search-results');section.append(node('h2',page.title));
@@ -1063,7 +1322,27 @@ function searchView(main){
  const searched=route.query||filters.scope!=='all'||hasSearchFacets(filters);
  if(!route.loading&&!search?.pages.some(page=>page.items.length)){
   if(!searched)searchBrowse(main,search);
-  else if(!search?.problems.length&&!search?.publicTV?.items.length)main.append(empty('No matches in connected resources','Try a different title or clear your filters.'));
+  else if(!search?.problems.length&&!search?.catalogs?.some(group=>group.items.length)&&!search?.sports?.length)main.append(empty('No matches in connected resources','Try a different title or clear your filters.'));
+ }
+}
+function appendSportsCards(main,games){
+ if(games.length){
+  const grid=node('div',undefined,'sports-grid');
+  for(const game of games){
+   const card=node('section',undefined,'sports-card'),event=game.event||{};
+   card.append(node('small',String(event.league_name||game.kind||'Sports').slice(0,128)),
+    node('h2',String(event.name||game.title||game.native_title||'Sports broadcast').slice(0,256)));
+   for(const team of (Array.isArray(event.competitors)?event.competitors:[]).slice(0,4)){
+    const score=node('div',undefined,'score-row');score.append(node('span',String(team.short_name||team.name||team.abbreviation||'').slice(0,128)),
+     node('strong',String(team.score||'').slice(0,24)));card.append(score);
+   }
+   const start=new Date(game.native_start||game.start||event.date),time=Number.isNaN(start.valueOf())?'':start.toLocaleString();
+   if(event.detail||time)card.append(node('p',String(event.detail||time).slice(0,256),'secondary'));
+   if(uuid(game.channel_id))card.append(action(game.channel_name?'Open '+String(game.channel_name).slice(0,128):'Open channel',
+    ()=>openItem({Id:game.channel_id,Name:game.channel_name||'Live TV',Type:'TvChannel'}),'','live'));
+   grid.append(card);
+  }
+  main.append(grid);
  }
 }
 const sportsLeagues=[['nhl','NHL'],['nfl','NFL'],['nba','NBA'],['mlb','MLB'],['wnba','WNBA'],['epl','Premier League'],['mls','MLS']];

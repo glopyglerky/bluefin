@@ -681,32 +681,179 @@ test('sports search opens the scheduled programme without tuning to a different 
  assert(!t.requests.some(r=>new URL(r.url).pathname.endsWith('/leases')));
 });
 
-test('public TV discovery works without any connected peer and keeps catalog requests credential-free',async()=>{
- const t=setup({apiResponse:u=>u.origin==='https://api.tvmaze.com'?jsonReply([
-  {show:{id:47,name:'Unowned Stage',url:'https://unrelated.test/title',premiered:'2025-04-01',
-   image:{medium:'https://static.tvmaze.com/uploads/images/medium_portrait/2/47.jpg'}}},
-  {show:{id:48,name:'No Poster',image:{medium:'https://unrelated.test/image.jpg'}}},
- ]):undefined});
- await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search TV shows')).listeners.click();
- await t.ui.startSearch('unowned stage');
- assert.equal(t.requests.length,1);
- const request=t.requests[0],url=new URL(request.url);
- assert.equal(url.origin,'https://api.tvmaze.com');assert.equal(url.searchParams.get('q'),'unowned stage');
- assert.equal(request.options.credentials,'omit');assert.equal(request.options.referrerPolicy,'no-referrer');
- assert.equal(request.options.headers,undefined);
+test('default public search discovers TV, movies, music, credited people, and dated sports without account credentials',async()=>{
+ const statement=value=>({mainsnak:{datavalue:{value}}});
+ const entity=(label,kind,extra={})=>({labels:{en:{value:label}},claims:{P31:[statement({id:kind})],...extra}});
+ const t=setup({apiResponse:url=>{
+  if(url.href.startsWith('https://api.tvmaze.com/search/shows'))return jsonReply([
+   {show:{id:47,name:'Screen Fixture',url:'https://unrelated.test/title',premiered:'2025-04-01',
+    image:{medium:'https://static.tvmaze.com/uploads/images/medium_portrait/2/47.jpg'}}},
+   {show:{id:48,name:'No Poster',image:{medium:'https://unrelated.test/image.jpg'}}},
+  ]);
+  if(url.href.startsWith('https://api.tvmaze.com/search/people'))return jsonReply([{person:{id:73,name:'TV Crew Fixture'}}]);
+  if(url.hostname==='www.wikidata.org'){
+   if(url.searchParams.get('action')==='wbsearchentities')return jsonReply({search:[...['Q1','Q2','Q3','Q4','Q5'].map(id=>({id})),{id:'https://unrelated.test/'}]});
+   assert.equal(url.searchParams.get('ids'),'Q1|Q2|Q3|Q4|Q5');
+   return jsonReply({entities:{
+    Q1:entity('Film Fixture','Q20650540'),Q2:entity('Album Fixture','Q482994'),
+    Q3:entity('Person Fixture','Q5',{P106:['Q33999','Q2526255','Q28389'].map(id=>statement({id}))}),
+    Q4:entity('Upcoming Cup Fixture','Q16510064',{P585:[statement({time:'+2030-04-02T00:00:00Z'})]}),
+    Q5:entity('Not media','Q42'),
+   }});
+  }
+ }});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
+ await t.ui.startSearch('fixture');
+ assert.equal(t.requests.length,4);
  assert.equal(t.ui.state.session,null);
- assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent.includes('Unowned Stage')).href,'https://www.tvmaze.com/shows/47');
- assert(t.root.textContent.includes('Streaming availability for these results is unverified.'));
+ assert.match(t.root.textContent,/Film Fixture.*Album Fixture.*Person Fixture.*Actor, Film director, Screenwriter.*Upcoming Cup Fixture.*2030-04-02/);
+ assert.match(t.root.textContent,/TV Crew Fixture/);
+ assert(!t.root.textContent.includes('Not media'));
+ assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent.includes('Screen Fixture')).href,'https://www.tvmaze.com/shows/47');
  assert(!findElement(t.root,e=>String(e.src).includes('unrelated.test')));
+ assert(t.requests.every(r=>r.options.headers===undefined&&r.options.credentials==='omit'&&r.options.referrerPolicy==='no-referrer'));
+});
+
+test('public film search uses a bounded close-match lookup when the exact catalog misses',async()=>{
+ const t=setup({apiResponse:url=>{
+  if(url.hostname==='api.tvmaze.com')return jsonReply([]);
+  if(url.hostname!=='www.wikidata.org')return;
+  const action=url.searchParams.get('action');
+  if(action==='wbsearchentities')return jsonReply({search:[]});
+  if(action==='query'){
+   if(url.searchParams.get('srsearch').endsWith(' haswbstatement:P31=Q11424'))return jsonReply({query:{search:[]}});
+   assert.equal(url.searchParams.get('srsearch'),'spirted~1 away~1');
+   assert.equal(url.searchParams.get('srlimit'),'16');
+   return jsonReply({query:{search:[{title:'Q155653'},{title:'https://unrelated.test/'}]}});
+  }
+  assert.equal(url.searchParams.get('ids'),'Q155653');
+  return jsonReply({entities:{Q155653:{labels:{en:{value:'Spirited Away'}},claims:{P31:[
+   {mainsnak:{datavalue:{value:{id:'Q20650540'}}}}
+  ]}}}});
+ }});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
+ await t.ui.startSearch('Spirted Away',{scope:'movies'});
+ assert.match(t.root.textContent,/Spirited Away.*Anime film/);
+ assert.equal(t.requests.length,4);
+ assert(t.requests.every(r=>r.options.credentials==='omit'));
+});
+
+test('broad account search includes connected catalog and a close upcoming sports match, with a private library scope',async()=>{
+ const t=setup({apiResponse:url=>{
+  if(url.hostname==='api.tvmaze.com')return jsonReply([]);
+  if(url.hostname==='www.wikidata.org')return jsonReply(url.searchParams.get('action')==='query'?{query:{search:[]}}:{search:[]});
+  if(url.pathname==='/Bluefin/Web/Discovery/Search')return jsonReply({results:[url.searchParams.get('scope')==='music'
+   ?{title:'Track from connected catalog',kind:'track'}:{title:'Film from connected catalog',kind:'movie'}]});
+  if(url.pathname==='/sports/api/v1/home')return jsonReply({schema:1,presentation_only:true,local_broadcasts:[],
+   games:[{event:{name:'Boston Celtics at Toronto',date:'2030-04-02T19:30:00Z',
+    competitors:[{name:'Boston Celtics'},{name:'Toronto Raptors'}]}}]});
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.startSearch('celitcs');
+ assert.match(t.root.textContent,/Boston Celtics at Toronto/);
+ assert.match(t.root.textContent,/Film from connected catalog/);
+ assert.match(t.root.textContent,/Track from connected catalog/);
+ assert(t.requests.some(r=>new URL(r.url).pathname==='/Persons'&&new URL(r.url).searchParams.get('PersonTypes')==='Actor,Director,Writer,GuestStar'));
+ const before=t.requests.length;
+ await t.ui.startSearch('private title',{scope:'library'});
+ assert(t.requests.slice(before).every(r=>new URL(r.url).hostname==='bluefin.test'&&!new URL(r.url).pathname.includes('/Discovery/Search')));
+});
+
+test('film search resolves an exact identity and displays movie offers for the selected region', async()=>{
+ const t=setup({apiResponse:u=>{
+  if(u.hostname==='itunes.apple.com'){
+   const region=u.searchParams.get('country');
+   return jsonReply({results:[
+    {kind:'feature-movie',trackId:1003,trackRentalPrice:region==='US'?5.99:3.49,currency:region==='US'?'USD':'GBP',
+     trackViewUrl:'https://itunes.apple.com/'+region.toLowerCase()+'/movie/example/id1003?at=example'},
+    {kind:'feature-movie',trackId:1003,trackRentalPrice:0,currency:'USD',trackViewUrl:'https://unrelated.test/movie/id1003'},
+   ]});
+  }
+  if(u.hostname!=='www.wikidata.org')return undefined;
+  if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[
+   {title:'Q184843'},{title:'Q184843'},{title:'Q1234567890123456789'},{title:'File:Unrelated'}]}});
+  if(u.searchParams.get('action')==='wbgetclaims')return jsonReply({claims:{P6398:[
+   {rank:'normal',mainsnak:{datavalue:{value:'1003'}}},
+   {rank:'deprecated',mainsnak:{datavalue:{value:'1004'}}},
+   {rank:'normal',mainsnak:{datavalue:{value:'https://unrelated.test/play'}}}
+  ]}});
+  return jsonReply({entities:{Q184843:{labels:{en:{value:'Blade Runner'}},
+   descriptions:{en:{value:'1982 film directed by Ridley Scott'}}}}});
+ }});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
+ await t.ui.startSearch('Blade Runner',{scope:'movies'});
+ assert.equal(t.ui.state.session,null);
+ const requests=t.requests.filter(r=>new URL(r.url).hostname==='www.wikidata.org');
+ assert.equal(requests.length,2);
+ assert(requests.every(r=>r.options.credentials==='omit'&&r.options.referrerPolicy==='no-referrer'&&
+  Object.keys(r.options.headers).join(',')==='Api-User-Agent'));
+ assert.equal(new URL(requests[0].url).searchParams.get('srsearch'),'Blade Runner haswbstatement:P31=Q11424');
+ assert.equal(new URL(requests[1].url).searchParams.get('ids'),'Q184843');
+ const link=findElement(t.root,e=>e.tagName==='A'&&e.textContent.includes('Blade Runner'));
+ assert.equal(link.href,'https://www.wikidata.org/wiki/Q184843');
+ assert(link.textContent.includes('1982 film directed by Ridley Scott'));
+ assert(!findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Continue to Apple TV'));
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Where to watch')).listeners.click();
+ const provider=t.requests.find(r=>new URL(r.url).searchParams.get('action')==='wbgetclaims');
+ assert.equal(new URL(provider.url).searchParams.get('entity'),'Q184843');
+ assert.equal(provider.options.credentials,'omit');
+ const offer=t.requests.find(r=>new URL(r.url).hostname==='itunes.apple.com');
+ assert.equal(new URL(offer.url).searchParams.get('id'),'1003');
+ assert.equal(new URL(offer.url).searchParams.get('country'),'US');
+ assert.equal(offer.options.credentials,'omit');
+ assert(t.root.textContent.includes('5.99'));
+ assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Continue to Apple TV').href,
+  'https://itunes.apple.com/us/movie/example/id1003');
+ assert(!findElement(t.root,e=>String(e.href).includes('unrelated.test')));
+ const region=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-storefront-Q184843');
+ assert(region);
+ region.value='GB';await region.onchange();
+ assert(t.root.textContent.includes('3.49'));
+ assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Continue to Apple TV').href,
+  'https://itunes.apple.com/gb/movie/example/id1003');
+});
+
+test('public film availability offers in-app playback only for the exact authorized library title',async()=>{
+ const t=setup({apiResponse:u=>{
+  if(u.hostname==='itunes.apple.com')return jsonReply({results:[]});
+  if(u.hostname==='www.wikidata.org'){
+   if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[{title:'Q184843'}]}});
+   if(u.searchParams.get('action')==='wbgetentities')return jsonReply({entities:{
+    Q184843:{labels:{en:{value:'Blade Runner'}}}}});
+   const property=u.searchParams.get('property');
+   return jsonReply({claims:{[property]:[{rank:'normal',mainsnak:{datavalue:{value:property==='P345'?'tt0083658':'1003'}}}]}});
+  }
+  if(u.pathname.startsWith('/Users/')&&u.pathname.endsWith('/Items')&&u.searchParams.has('SearchTerm')){
+   return jsonReply({Items:[
+    {Id:'66666666666646668666666666666666',Name:'Blade Runner',Type:'Movie',ProviderIds:{Imdb:'tt0083658'}},
+    {Id:'77777777777747778777777777777777',Name:'Blade Runner',Type:'Movie',ProviderIds:{Imdb:'tt1856101'}}
+   ],TotalRecordCount:2});
+  }
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.startSearch('Blade Runner',{scope:'publicMovies'});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Where to watch')).listeners.click();
+ assert(findElement(t.root,e=>e.dataset.focusKey==='film-play|66666666666646668666666666666666'));
+ assert(!findElement(t.root,e=>e.dataset.focusKey==='film-play|77777777777747778777777777777777'));
+ const search=t.requests.find(r=>new URL(r.url).searchParams.has('SearchTerm'));
+ assert(new URL(search.url).searchParams.get('Fields').includes('ProviderIds'));
+});
+
+
+test('connected category queries stay private until an explicit public catalog scope is chosen',async()=>{
+ const t=setup({apiResponse:url=>url.hostname==='api.tvmaze.com'?jsonReply([]):undefined});
+ await t.ui.openSearch();await t.ui.startSearch('stage',{scope:'publicTv'});
+ assert.equal(t.ui.state.session,null);assert.equal(t.requests.filter(r=>new URL(r.url).hostname==='api.tvmaze.com').length,1);
  await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
  await t.ui.startSearch('private library title');
- await t.ui.startSearch('private TV title',{scope:'tvShows'});
+ for(const scope of ['tvShows','movies','music','people','sports','library'])await t.ui.startSearch('private category title',{scope});
  assert.equal(t.requests.filter(r=>new URL(r.url).hostname==='api.tvmaze.com').length,1);
+ assert.equal(t.requests.filter(r=>new URL(r.url).hostname==='www.wikidata.org').length,0);
  await t.ui.startSearch('stage',{scope:'publicTv'});
  const publicRequests=t.requests.filter(r=>new URL(r.url).hostname==='api.tvmaze.com');
- assert.equal(publicRequests.length,2);
- assert.equal(new URL(publicRequests[1].url).searchParams.get('q'),'stage');
+ assert.equal(publicRequests.length,2);assert.equal(new URL(publicRequests[1].url).searchParams.get('q'),'stage');
  assert(publicRequests.every(r=>r.options.headers===undefined&&r.options.credentials==='omit'));
+ await t.ui.signOut();
 });
 
 test('moonlit explicit search history uses the current account revision and survives a stale write rejection',async()=>{
