@@ -153,10 +153,16 @@ class MainActivity : ComponentActivity() {
                 if (model.section == "Search") {
                     var term by rememberSaveable { mutableStateOf(model.query) }
                     val search = remember { FocusRequester() }
-                    TextEntry(term, { term = it }, "Search your library", television,
+                    TextEntry(term, { term = it }, "Search titles, artists, and channels", television,
                         modifier = Modifier.fillMaxWidth(), next = if (!model.busy) search else null)
                     Action("Search", !model.busy, Modifier.focusRequester(search)) { model.submitSearch(term) }
                     SearchRefinements(model)
+                    val filters = model.searchFilters
+                    if (filters.scope in listOf(MediaSearchScope.ALL, MediaSearchScope.SHOWS) &&
+                        filters.studio == null && filters.tag == null && filters.collection == null &&
+                        model.query.length >= 2 && model.selected == null) {
+                        PublicTvResults(model.core, model.query)
+                    }
                 }
                 Text(model.section, style = MaterialTheme.typography.headlineMedium)
                 val detail = model.selected
@@ -193,6 +199,41 @@ class MainActivity : ComponentActivity() {
                     if (model.hasMore) Action("Load more", !model.busy) { model.more() }
                 }
             }
+        }
+    }
+}
+@Composable private fun PublicTvResults(core: CoreClient, query: String) {
+    val context = LocalContext.current
+    var titles by remember(query) { mutableStateOf<List<PublicTvTitle>?>(null) }
+    var failed by remember(query) { mutableStateOf(false) }
+    LaunchedEffect(core, query) {
+        try {
+            titles = core.publicTvSearch(query)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            failed = true
+        }
+    }
+    Text("TV catalog", style = MaterialTheme.typography.titleLarge)
+    val results = titles
+    when {
+        failed -> Text("Could not load TVmaze results.")
+        results == null -> Text("Searching TV catalog…")
+        results.isEmpty() -> Text("No matches from TVmaze.")
+        else -> {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(results, key = { it.id }) { item ->
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        PublicTvArtwork(item, Modifier.width(60.dp).height(84.dp))
+                        Action(listOfNotNull(item.name, item.year).joinToString(" · ")) {
+                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.url))) }
+                        }
+                    }
+                }
+            }
+            Text("Title information from TVmaze. Streaming availability is unverified.",
+                style = MaterialTheme.typography.bodySmall)
         }
     }
 }
