@@ -80,6 +80,41 @@ Run the store executable with `--vault-failure` to check that failed Keychain
 deletion preserves the saved account, reports the failure and allows sign-out
 to succeed on retry. Its Keychain adapter never accesses a real saved account.
 
+## Signing profiles
+
+The normal `project.yml` retains SharePlay and the Apple TV Top Shelf extension.
+Signing those capabilities requires a compatible provisioning profile. A free
+Personal Team can use the separate iPhone/iPad and Apple TV development profile:
+
+```sh
+xcodegen generate --spec project-personal.yml
+```
+
+This generates `BluefinPersonal.xcodeproj` with the same Bluefin and BluefinTV
+schemes and bundle identifiers. It keeps the existing app data on an eligible
+in-place update signed by the same team. The profile omits the SharePlay flag,
+uses an empty application entitlement file, and does not embed the TV Top Shelf
+extension that requires an App Group. The TV settings already hide Top Shelf
+when its shared directory is unavailable. The existing Watch and widget targets
+remain part of the iPhone app and still require valid development provisioning.
+
+QR invitation handling, the Rust mesh connection, Keychain custody, and browser
+passkey continuation use the same source in both profiles. The passkey flow uses
+`ASWebAuthenticationSession` and the registered `bluefin` callback scheme; it
+does not require an Associated Domains entitlement. These source settings do not
+establish successful signing, installation, or physical-device qualification.
+
+Set `BLUEFIN_APP_PROFILE=personal` when using `BuildApps.rs` with the personal
+project. The default `provisioned` profile selects `Bluefin.xcodeproj`. Both
+helper modes retain unsigned candidates. Device signing remains a separate
+operation with the developer's own team and valid provisioning profiles.
+
+The profile uses XcodeGen's documented
+[include replacement rules](https://github.com/yonaskolb/XcodeGen/blob/master/Docs/ProjectSpec.md#include)
+so the inherited SharePlay flag and TV extension dependency are replaced, not
+appended. A Personal Team development build does not enable TestFlight, public
+over-the-air distribution, or App Store submission.
+
 ## Development reuse
 
 For release candidates, compile `tools/BuildCore.rs` with stable Rust into your
@@ -154,8 +189,8 @@ or lossless wireless output.
 
 ## Private distribution
 
-The requested destination is private TestFlight testing, with no public App
-Store release or public tester link. A free Personal Team cannot use
+Private TestFlight testing and App Store distribution require an eligible
+paid Developer Program membership. A free Personal Team cannot use
 TestFlight. Its on-device provisioning expires after seven days. A paid
 Developer Program membership enables TestFlight, where each build expires
 after 90 days and must be replaced with a newly uploaded build.

@@ -1,0 +1,32 @@
+# iPhone/iPad and Apple TV development with a free Personal Team.
+# Generate with xcodegen generate --spec project-personal.yml.
+# Keep the provisioned project unchanged for capability-enabled distribution.
+include:
+  - project.yml
+name: BluefinPersonal
+settings:
+  base:
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS:REPLACE: ["$(inherited)"]
+targets:
+  Bluefin:
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: PersonalTeam.entitlements
+  BluefinTV:
+    dependencies:REPLACE: []
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: PersonalTeam.entitlements
+schemes:REPLACE:
+  Bluefin:
+    build:
+      targets:
+        Bluefin: all
+    test:
+      targets: [BluefinTests]
+  BluefinTV:
+    build:
+      targets:
+        BluefinTV: all
+    test:
+      targets: [BluefinTVTests]
