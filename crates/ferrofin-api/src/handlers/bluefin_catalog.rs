@@ -18,7 +18,7 @@ impl crate::extract::QueryParameters for OffersQuery {
 }
 #[derive(serde::Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-struct ProvidersQuery {country:Option<CountryCode>}
+struct ProvidersQuery {country:Option<CountryCode>,kind:Option<MediaKind>,source:Option<String>,id:Option<String>}
 impl crate::extract::QueryParameters for ProvidersQuery {
     const COLLECTIONS: &'static [(&'static str,char)] = &[];
 }
@@ -53,7 +53,12 @@ async fn providers(
     State(state): State<AppState>, Query(query):Query<ProvidersQuery>,
 ) -> Result<Json<RegistryResponse>,ApiError> {
     let discovery=state.discovery.as_ref().ok_or_else(unavailable)?;
-    Ok(Json(discovery.catalog().providers(query.country).await.map_err(error)?))
+    let identity=match (query.kind,query.source,query.id) {
+        (None,None,None)=>None,
+        (Some(kind),Some(source),Some(id))=>Some(CatalogIdentity{kind,ids:vec![CatalogId{source,id}]}),
+        _=>return Err(ApiError::BadRequest("Catalog context requires kind, source and id".into())),
+    };
+    Ok(Json(discovery.catalog().providers_for(query.country,identity).await.map_err(error)?))
 }
 
 /// Adds public read-only offers and dynamic regional provider discovery.

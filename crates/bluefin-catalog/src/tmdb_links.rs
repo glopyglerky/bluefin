@@ -24,7 +24,10 @@ pub fn project_tmdb_watch_page(
         MediaKind::Movie => "movie", MediaKind::Series => "tv",
         _ => return failure(request, SourceStatus::UnsupportedIdentity, observed_at),
     };
-    let Some(expected_id) = request.identity.id("tmdb").and_then(numeric_id) else {
+    let key = match crate::video::tmdb_key(&request.identity) {
+        Ok(key) => key, Err(status) => return failure(request, status, observed_at),
+    };
+    let Some(expected_id) = key.split_once('/').and_then(|(_, id)| numeric_id(id)) else {
         return failure(request, SourceStatus::UnsupportedIdentity, observed_at);
     };
     if html.is_empty() || html.len() > MAX_HTML {
@@ -124,6 +127,109 @@ pub fn project_tmdb_watch_page(
         ],
     });
     result
+}
+
+
+/// Extracts the public watch-page country picker as literal JSON, without executing JavaScript.
+/// Countries are source-supported choices, not evidence that this title has an offer in each one.
+pub fn project_tmdb_watch_page_countries(
+    request: &LookupRequest, page_url: &str, html: &str, observed_at: u64,
+) -> crate::RegistryResponse {
+    let fail = |status| crate::RegistryResponse {
+        schema_version: 1, countries: Vec::new(), sources: vec![SourceObservation {
+            source: SOURCE.into(), status, observed_at, scope: CoverageScope::RegionalAvailability,
+            coverage: Coverage::Unknown, catalog_url: None, attributions: Vec::new(),
+        }],
+    };
+    let key = match crate::video::tmdb_key(&request.identity) {
+        Ok(key) => key, Err(status) => return fail(status),
+    };
+    let Some((kind, id)) = key.split_once('/').and_then(|(kind, id)| numeric_id(id).map(|id| (kind, id))) else {
+        return fail(SourceStatus::UnsupportedIdentity);
+    };
+    if html.is_empty() || html.len() > MAX_HTML { return fail(SourceStatus::InvalidResponse); }
+    let Some(page) = tmdb_url(page_url) else { return fail(SourceStatus::InvalidResponse); };
+    if tmdb_identity(&page) != Some((kind.into(), id)) ||
+        !page.path().trim_end_matches('/').ends_with("/watch") {
+        return fail(SourceStatus::IdentityMismatch);
+    }
+    let mut canonical_seen = false;
+    let mut stack: Vec<(String, bool)> = Vec::new();
+    for (count, tag) in Tags::new(html).enumerate() {
+        if count >= 50_000 || stack.len() > 512 { return fail(SourceStatus::InvalidResponse); }
+        if tag.closing {
+            if let Some(index) = stack.iter().rposition(|(name, _)| name == &tag.name) { stack.truncate(index); }
+            continue;
+        }
+        let hidden = stack.last().is_some_and(|(_, h)| *h) || tag.hidden() ||
+            matches!(tag.name.as_str(), "template" | "script" | "style" | "noscript");
+        if !tag.empty && !is_void(&tag.name) { stack.push((tag.name.clone(), hidden)); }
+        if hidden { continue; }
+        let canonical = if tag.name == "link" &&
+            tag.attr("rel").is_some_and(|rel| rel.split_ascii_whitespace().any(|r| r.eq_ignore_ascii_case("canonical"))) {
+            tag.attr("href")
+        } else if tag.name == "meta" && tag.attr("property") == Some("og:url") {
+            tag.attr("content")
+        } else { None };
+        if let Some(canonical) = canonical {
+            canonical_seen = true;
+            if tmdb_url(canonical).and_then(|url| tmdb_identity(&url)) != Some((kind.into(), id)) {
+                return fail(SourceStatus::IdentityMismatch);
+            }
+        }
+    }
+    if !canonical_seen { return fail(SourceStatus::InvalidResponse); }
+    let Some(rows) = country_literal(html).and_then(|value| value.as_array().cloned()) else {
+        return fail(SourceStatus::InvalidResponse);
+    };
+    if rows.is_empty() || rows.len() > 300 { return fail(SourceStatus::InvalidResponse); }
+    let mut countries = Vec::<crate::CountryRecord>::new();
+    let mut partial = false;
+    for row in rows {
+        let Some(code) = row.get("country_code").and_then(Value::as_str).and_then(|c| CountryCode::parse(c).ok()) else {
+            partial = true; continue;
+        };
+        let Some(name) = text(&row, "native_name", 200) else { partial = true; continue; };
+        if let Some(existing) = countries.iter().find(|existing| existing.code == code) {
+            partial |= existing.name != name;
+            continue;
+        }
+        countries.push(crate::CountryRecord { code, name, services: Vec::new() });
+    }
+    if countries.is_empty() { return fail(SourceStatus::InvalidResponse); }
+    countries.sort_by(|a,b| a.name.cmp(&b.name).then_with(|| a.code.cmp(&b.code)));
+    crate::RegistryResponse { schema_version: 1, countries, sources: vec![SourceObservation {
+        source: SOURCE.into(), status: if partial { SourceStatus::Partial } else { SourceStatus::Complete },
+        observed_at, scope: CoverageScope::RegionalAvailability, coverage: Coverage::Partial,
+        catalog_url: Some(page.to_string()),
+        attributions: vec![
+            Attribution { name: "TMDB".into(), url: "https://www.themoviedb.org/".into() },
+            Attribution { name: "JustWatch".into(), url: "https://www.justwatch.com/".into() },
+        ],
+    }] }
+}
+fn country_literal(html: &str) -> Option<Value> {
+    const MARKER: &str = "var ott_country_datasource = new kendo.data.DataSource({";
+    let mut tags = Tags::new(html);
+    let mut found = None;
+    while let Some(tag) = tags.next() {
+        if tag.closing || tag.name != "script" || tag.hidden() { continue; }
+        let remaining = &html[tags.offset..];
+        let end = remaining.as_bytes().windows(8).position(|bytes| bytes.eq_ignore_ascii_case(b"</script"))?;
+        let script = &remaining[..end];
+        for (index, _) in script.match_indices(MARKER) {
+            if found.is_some() { return None; }
+            // The observed source uses a standalone assignment, never an evaluated expression.
+            if !script[..index].rsplit('\n').next()?.trim().is_empty() { return None; }
+            let after = script[index + MARKER.len()..].trim_start().strip_prefix("data:")?.trim_start();
+            if !after.starts_with('[') { return None; }
+            let mut stream = serde_json::Deserializer::from_str(after).into_iter::<Value>();
+            let value = stream.next()?.ok()?;
+            if !value.is_array() || stream.byte_offset() > 128_000 { return None; }
+            found = Some(value);
+        }
+    }
+    found
 }
 
 fn failure(request: &LookupRequest, status: SourceStatus, at: u64) -> OfferResponse {
@@ -498,4 +604,58 @@ mod tests {
             assert!(project_tmdb_watch_page(&request(MediaKind::Movie, "10331", Some("US")), PAGE, &envelope(&hidden), 1).offers.is_empty());
         }
     }
+    #[test]
+    fn typed_and_numeric_tmdb_identifiers_return_the_same_source_offers() {
+        for (kind, bare, typed, fixture_json) in [
+            (MediaKind::Movie, "10331", "movie/10331", NIGHT_US),
+            (MediaKind::Series, "1396", "tv/1396", BREAKING_US),
+        ] {
+            let (page, html) = fixture(fixture_json);
+            let bare = project_tmdb_watch_page(&request(kind, bare, Some("US")), &page, &html, 1);
+            let typed = project_tmdb_watch_page(&request(kind, typed, Some("US")), &page, &html, 1);
+            assert!(!typed.offers.is_empty());
+            assert_eq!(bare.sources, typed.sources);
+            let keys = |result: &OfferResponse| {
+                let mut keys: Vec<_> = result.offers.iter().map(|offer|
+                    format!("{}:{:?}:{:?}:{:?}", offer.service.id, offer.country, offer.access_type, offer.destinations))
+                    .collect();
+                keys.sort(); keys
+            };
+            assert_eq!(keys(&bare), keys(&typed));
+        }
+        let (page, html) = fixture(NIGHT_US);
+        let wrong = project_tmdb_watch_page(&request(MediaKind::Movie, "tv/10331", Some("US")), &page, &html, 1);
+        assert_eq!(wrong.sources[0].status, SourceStatus::IdentityMismatch);
+    }
+    fn country_page(data: &str) -> String {
+        format!("<html><head><link rel='canonical' href='https://www.themoviedb.org/movie/10331/watch'></head><body><script>\nvar ott_country_datasource = new kendo.data.DataSource({{\n data: {data}\n}});\n</script></body></html>")
+    }
+    #[test]
+    fn observed_country_choices_are_source_data_without_availability_claims() {
+        let html = country_page(include_str!("../tests/fixtures/tmdb-watch/countries.json"));
+        let result = project_tmdb_watch_page_countries(&request(MediaKind::Movie, "movie/10331", None),
+            "https://www.themoviedb.org/movie/10331/watch", &html, 10);
+        assert_eq!(result.countries.len(), 140);
+        assert!(result.countries.iter().any(|country| country.code.as_str() == "GB"));
+        assert!(result.countries.iter().any(|country| country.code.as_str() == "US"));
+        assert!(result.countries.iter().all(|country| country.services.is_empty()));
+        assert_eq!(result.sources[0].status, SourceStatus::Complete);
+        assert_eq!(result.sources[0].coverage, Coverage::Partial);
+    }
+    #[test]
+    fn country_registry_rejects_expressions_wrong_identity_and_missing_markup() {
+        let req = request(MediaKind::Movie, "movie/10331", None);
+        let page = "https://www.themoviedb.org/movie/10331/watch";
+        for html in [country_page("loadCountries()"), country_page("[1,2,3]"),
+            "<html>Access denied</html>".into(),
+            country_page(r#"[{"country_code":"USA","native_name":"Invalid"}]"#)] {
+            assert_eq!(project_tmdb_watch_page_countries(&req,page,&html,10).sources[0].status,
+                SourceStatus::InvalidResponse);
+        }
+        let html = country_page(r#"[{"country_code":"US","native_name":"United States"}]"#)
+            .replace("movie/10331/watch'", "movie/603/watch'");
+        assert_eq!(project_tmdb_watch_page_countries(&req,page,&html,10).sources[0].status,
+            SourceStatus::IdentityMismatch);
+    }
+
 }

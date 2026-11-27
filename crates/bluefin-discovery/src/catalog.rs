@@ -7,9 +7,9 @@ use crate::{Error, Result};
 use bluefin_catalog::{
     CatalogClient, CountryCode, Coverage, CoverageScope, LookupRequest, MediaKind,
     OfferResponse, RegistryResponse, SourceObservation, SourceStatus,
-    music_http::MusicBrainzClient,
+    music_http::MusicBrainzClient, WatchPageClient, CatalogIdentity,
 };
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Response, StatusCode};
 use std::{
     collections::HashMap, path::Path, sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -27,12 +27,11 @@ pub struct CatalogService {
     direct: CatalogClient,
     music: MusicBrainzClient,
     seerr: Option<seerr::Seerr>,
-    pages: Client,
+    watch: WatchPageClient,
     public_watch_pages: bool,
     offers: Cache<OfferResponse>,
     registry: Cache<RegistryResponse>,
     network: Semaphore,
-    page_spacing: Mutex<Instant>,
 }
 
 impl CatalogService {
@@ -42,25 +41,11 @@ impl CatalogService {
         let direct = CatalogClient::new(settings.credentials()).map_err(|_| Error::Upstream)?;
         let music = MusicBrainzClient::new().map_err(|_| Error::Upstream)?;
         let seerr = seerr::Seerr::from_settings(&settings)?;
-        let pages = Client::builder().no_proxy()
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() < 3
-                    && attempt.url().scheme() == "https"
-                    && matches!(attempt.url().host_str(), Some("www.themoviedb.org" | "themoviedb.org"))
-                    && attempt.url().username().is_empty()
-                    && attempt.url().password().is_none()
-                    && attempt.url().port().is_none_or(|port| port == 443)
-                {
-                    attempt.follow()
-                } else { attempt.stop() }
-            }))
-            .timeout(Duration::from_secs(15)).connect_timeout(Duration::from_secs(4))
-            .user_agent("Bluefin catalog/1.0").build().map_err(|_| Error::Upstream)?;
+        let watch = WatchPageClient::new().map_err(|_| Error::Upstream)?;
         Ok(Self {
-            direct, music, seerr, pages, public_watch_pages: !settings.disable_public_watch_pages,
+            direct, music, seerr, watch, public_watch_pages: !settings.disable_public_watch_pages,
             offers: Mutex::new(HashMap::new()), registry: Mutex::new(HashMap::new()),
             network: Semaphore::new(4),
-            page_spacing: Mutex::new(Instant::now()),
         })
     }
 
@@ -79,8 +64,10 @@ impl CatalogService {
                     CoverageScope::RegionalAvailability,timestamp()),
             }
         }).await.clone();
-        if !result.sources.iter().any(|source| matches!(source.status,
-            SourceStatus::Complete | SourceStatus::Partial | SourceStatus::NoOffers)) {
+        if result.sources.iter().any(|source| matches!(source.status,
+            SourceStatus::Unavailable | SourceStatus::RateLimited | SourceStatus::InvalidResponse))
+            || !result.sources.iter().any(|source| matches!(source.status,
+                SourceStatus::Complete | SourceStatus::Partial | SourceStatus::NoOffers)) {
             self.offers.lock().await.remove(&key);
         }
         Ok(result)
@@ -116,37 +103,25 @@ impl CatalogService {
     }
 
     async fn watch_page(&self, request: &LookupRequest) -> Option<OfferResponse> {
-        if !self.public_watch_pages { return None; }
-        let (kind, id) = seerr::tmdb_title(request)?;
-        let Some(country) = &request.country else {
-            // All-region summary is available through the configured catalog.
-            // Fetch each country's full page only when that country is selected.
-            return Some(OfferResponse::with_status(request,"tmdb-watch-page",SourceStatus::Partial,
-                CoverageScope::RegionalAvailability,timestamp()));
-        };
-        {
-            let mut next = self.page_spacing.lock().await;
-            if *next > Instant::now() { tokio::time::sleep_until((*next).into()).await; }
-            *next = Instant::now() + Duration::from_millis(750);
+        if self.public_watch_pages { Some(self.watch.lookup(request).await) } else { None }
+    }
+
+    /// Supplements an unconfigured hosted registry with the requested title's
+    /// public source country dataset. No private service is required.
+    pub async fn providers_for(&self, country: Option<CountryCode>, identity: Option<CatalogIdentity>) -> Result<RegistryResponse> {
+        let mut result = self.providers(country.clone()).await?;
+        if result.countries.is_empty() && self.public_watch_pages {
+            if let Some(identity) = identity {
+                let request = LookupRequest {identity, country:country.clone()};
+                validate(&request)?;
+                let mut observed = self.watch.countries(&request).await;
+                if let Some(country) = country {
+                    observed.countries.retain(|entry| entry.code == country);
+                }
+                result.merge(observed);
+            }
         }
-        let url = format!("https://www.themoviedb.org/{kind}/{id}/watch?locale={country}");
-        let response = match self.pages.get(&url).send().await {
-            Ok(response) => response,
-            Err(_) => return Some(page_error(request, SourceStatus::Unavailable)),
-        };
-        if !response.status().is_success() {
-            return Some(page_error(request,http_status(response.status())));
-        }
-        let final_url = response.url().to_string();
-        let bytes = match bounded_bytes(response, 4 * 1024 * 1024).await {
-            Ok(bytes) => bytes,
-            Err(status) => return Some(page_error(request,status)),
-        };
-        let html = match std::str::from_utf8(&bytes) {
-            Ok(html) => html,
-            Err(_) => return Some(page_error(request, SourceStatus::InvalidResponse)),
-        };
-        Some(bluefin_catalog::tmdb_links::project_tmdb_watch_page(request, &final_url, html, timestamp()))
+        Ok(result)
     }
 
     /// Returns current source-reported countries and services, refreshed hourly.
@@ -210,9 +185,6 @@ fn remove_replaced_placeholders(result: &mut OfferResponse) {
             && id == &offer.service.id && access == &offer.access_type && raw == &offer.raw_access_type
             && addon.as_ref().map(|(source,id)| (source.as_str(),id.as_str()))
                 == offer.addon.as_ref().map(|addon| (addon.source.as_str(),addon.id.as_str()))));
-}
-fn page_error(request: &LookupRequest, status: SourceStatus) -> OfferResponse {
-    OfferResponse::with_status(request,"tmdb-watch-page",status,CoverageScope::RegionalAvailability,timestamp())
 }
 fn timestamp() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()

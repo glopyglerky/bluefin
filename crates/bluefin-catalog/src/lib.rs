@@ -22,3 +22,8 @@ pub use model::*;
 pub mod http;
 #[cfg(feature = "http")]
 pub use http::{CatalogClient, ClientError, Credentials, MovieOfTheNightCredential, TmdbCredential};
+
+#[cfg(feature = "http")]
+pub mod watch_http;
+#[cfg(feature = "http")]
+pub use watch_http::WatchPageClient;
