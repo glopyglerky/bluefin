@@ -205,6 +205,29 @@ async fn mesh_invalid_device_proof_cannot_spend_or_steal_an_invitation(){
     assert!(f.service.invite_row(&invite).await.is_ok());
 }
 #[tokio::test]
+async fn mesh_signup_and_later_login_do_not_require_an_account_name(){
+    let f=Fixture::new().await;
+    let device=DeviceIdentity::from_seed([7;32]).unwrap();
+    let signup=f.invite(InviteIntent::Signup,None).await;
+    let start=begin(&f,signup,&device,1,None).await;
+    let key_user=&start["body"]["passkey_options"]["publicKey"]["user"];
+    let generated=key_user["name"].as_str().unwrap();
+    assert!(Uuid::parse_str(generated.strip_prefix("bluefin-").unwrap()).is_ok());
+    assert_eq!(key_user["displayName"],"Bluefin account");
+    let mut authenticator=WebauthnAuthenticator::new(SoftPasskey::new(true));
+    let proof=registration(&mut authenticator,&start);
+    let finish=f.service.handle(&f.state,&device.public_key(),finish_request(&start,&device,2,proof)).await.unwrap();
+    let handle=finish["body"]["session"]["handle"].as_str().unwrap();
+    let user=f.state.users.approve_mesh_signup(handle).await.unwrap();
+    assert_eq!(user.username,generated);
+    let login=f.invite(InviteIntent::Login,Some(Uuid::parse_str(&user.id).unwrap())).await;
+    let other=DeviceIdentity::from_seed([8;32]).unwrap();
+    let start=begin(&f,login,&other,3,None).await;
+    let proof=assertion(&mut authenticator,&start);
+    let finish=f.service.handle(&f.state,&other.public_key(),finish_request(&start,&other,4,proof)).await.unwrap();
+    assert_eq!(finish["body"]["session"]["kind"],"session");
+}
+#[tokio::test]
 async fn mesh_signup_waits_for_owner_approval_and_the_original_device_resumes(){
     let f=Fixture::new().await;
     let device=DeviceIdentity::from_seed([7;32]).unwrap();

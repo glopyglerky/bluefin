@@ -72,7 +72,7 @@ import UIKit
         }
     }
 
-    func begin(accountName: String, owner: UUID) {
+    func begin(accountName: String = "", owner: UUID) {
         guard ownsPresentation(owner), let preview, pending == nil else { return }
         start(owner: owner) {
             let identity: MeshIdentity = try await RustBridge.call("meshIdentityCreate")
@@ -378,7 +378,6 @@ struct MeshPairingView: View {
     @ObservedObject private var model = MeshPairingModel.shared
     @EnvironmentObject private var nearby: MeshNearbyBrowser
     @State private var code = ""
-    @State private var accountName = ""
     @State private var importing = false
     @State private var camera = false
     @State private var photos = false
@@ -454,11 +453,8 @@ struct MeshPairingView: View {
                             Section("Ready to connect") {
                                 Text(preview.intent == "signup" ? "Request your own account" : "Connect to your existing account")
                                 Text("The invitation is used once. A passkey is required before this device receives access.")
-                                if preview.intent == "signup" {
-                                    TextField("Your account name", text: $accountName).bluefinAddressInput()
-                                }
-                                Button("Connect securely") { code = ""; model.begin(accountName: accountName, owner: presentationID) }
-                                    .disabled(model.busy || (preview.intent == "signup" && accountName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                                Button("Connect securely") { code = ""; model.begin(owner: presentationID) }
+                                    .disabled(model.busy)
                                     .accessibilityIdentifier("meshBegin")
                             }
                         }

@@ -8,7 +8,7 @@ const runtime=()=>window.BluefinRuntime;
 const launched=globalThis.takeBluefinLaunch?.()||'';
 const state={phase:'connect',base:hostedBase(),server:null,options:{},session:null,mode:'https',
   tab:'Home',route:{kind:'home'},rows:[],shelves:[],back:[],sheet:launched?'invite':null,
-  code:launched,meshName:'',remember:false,pairing:null,pairingView:0,device:null,invitation:null,inviteTimer:null,
+  code:launched,remember:false,pairing:null,pairingView:0,device:null,invitation:null,inviteTimer:null,
   busy:false,error:'',notice:'',epoch:0,capabilities:null,capability:null,player:null,expanded:false,nowPanel:'artwork',
   featured:null,homeHistory:null,facets:null,search:null,
   queue:[],unshuffledQueue:[],queueIndex:0,shuffle:false,repeat:'off',query:'',local:false,localQuery:'',localSnapshot:null,images:new Map(),imageEpoch:0};
@@ -157,7 +157,7 @@ function toggleShuffle(){
 const artworkPending=new Map(),artworkMissing=new Set(),imageControllers=new Set(),requestControllers=new Set();let artworkActive=0,artworkScrollTimer;
 function assertLive(epoch=state.epoch,session){if(pageRetired||epoch!==state.epoch||(session!==undefined&&session!==state.session))throw Error('This page or account changed. Resume the current connection.');}
 function clearSearchFacets(){state.facets?.controller?.abort();state.facets=null;}
-function clearPrivateView(){routeController?.abort();routeController=null;state.featured=null;state.homeHistory=null;clearSearchFacets();state.search=null;state.rows=[];state.shelves=[];state.back=[];state.query='';state.route={kind:'home'};state.queue=[];state.unshuffledQueue=[];state.queueIndex=0;state.shuffle=false;state.local=false;state.localQuery='';state.localSnapshot=null;state.repeat='off';state.nowPanel='artwork';state.capabilities=null;state.capability=null;state.code='';state.meshName='';state.pairing=null;state.device=null;state.invitation=null;}
+function clearPrivateView(){routeController?.abort();routeController=null;state.featured=null;state.homeHistory=null;clearSearchFacets();state.search=null;state.rows=[];state.shelves=[];state.back=[];state.query='';state.route={kind:'home'};state.queue=[];state.unshuffledQueue=[];state.queueIndex=0;state.shuffle=false;state.local=false;state.localQuery='';state.localSnapshot=null;state.repeat='off';state.nowPanel='artwork';state.capabilities=null;state.capability=null;state.code='';state.pairing=null;state.device=null;state.invitation=null;}
 const paths={
  waves:'M3 6c3-3 6 3 9 0s6 3 9 0M3 12c3-3 6 3 9 0s6 3 9 0M3 18c3-3 6 3 9 0s6 3 9 0',
  sports:'M4 4h16v16H4zM4 12h16M12 4v16M9 12a3 3 0 1 0 6 0 3 3 0 1 0-6 0',
@@ -240,7 +240,7 @@ async function connect(raw){
 function account(value){const token=value?.AccessToken,user=value?.User?.Id;if(!uuid(user)||!token)throw Error('The server returned an invalid account.');authorization(token);return {token,user:id(user),name:String(value.User.Name||'Your account')};}
 async function accept(value,mode='https',epoch=state.epoch){
  assertLive(epoch);state.epoch++;const accepted=state.epoch;
- state.featured=null;state.homeHistory=null;clearSearchFacets();state.search=null;state.session=value;state.mode=mode;state.phase='library';state.sheet=null;state.capability=null;state.meshName='';state.device=null;
+ state.featured=null;state.homeHistory=null;clearSearchFacets();state.search=null;state.session=value;state.mode=mode;state.phase='library';state.sheet=null;state.capability=null;state.device=null;
  state.pairing=null;state.invitation=null;state.code='';state.tab='Home';state.back=[];state.route={kind:'home'};
  const capabilities=await api('Bluefin/Capabilities').catch(()=>null);assertLive(accepted,value);
  state.capabilities=capabilities;await loadRoute();assertLive(accepted,value);
@@ -300,7 +300,7 @@ async function meshProgress(serialized,epoch,view,engine){
 }
 async function beginMesh(code,name,remember){
  const epoch=state.epoch,view=state.pairingView;assertLive(epoch);
- state.code=code;state.meshName=name;
+ state.code=code;
  const engine=await meshEngine(()=>beginMesh(code,name,remember),canReloadBeforeMeshBegin(),false,view);assertLive(epoch);if(view!==state.pairingView)throw Error('The connection screen was closed.');
  state.remember=remember;
  meshBeginStarted=true;
@@ -708,7 +708,7 @@ function installationLink(){
 }
 function sourceFooter(){const p=node('p',undefined,'source-links');for(const [label,file]of[['Source code','SOURCE.txt'],['License','LICENSE']]){const link=node('a',label);link.href=new URL('./'+file,document.baseURI).href;link.target='_blank';link.rel='noopener noreferrer';p.append(link);}return p;}
 function welcome(){const main=node('main',undefined,'welcome');main.id='content';const mark=node('div',undefined,'wordmark');mark.append(icon('waves'),node('h1','Bluefin'));main.append(mark);const stack=node('section',undefined,'account-stack');
- if(state.phase==='connect'){stack.append(action('Open local music',openLocalMusic,'primary','music'));stack.append(button('Connect with QR or invitation',()=>{state.sheet='invite';state.error='';render();}));const form=node('form');form.append(node('h2','Connect to your server'));const [w,i]=field('Server address','url',state.base,'server');i.autocomplete='url';i.placeholder='https://media.example.com';i.required=true;form.append(w);const submit=node('button','Continue','primary');submit.disabled=state.busy;form.append(submit);form.onsubmit=e=>{e.preventDefault();perform(()=>connect(i.value.trim()));};stack.append(form);}
+ if(state.phase==='connect'){stack.append(button('Connect with QR and passkey',()=>{state.sheet='invite';state.error='';render();},'primary'));stack.append(action('Open local music',openLocalMusic,'','music'));const form=node('form');form.append(node('h2','Connect to your server'));const [w,i]=field('Server address','url',state.base,'server');i.autocomplete='url';i.placeholder='https://media.example.com';i.required=true;form.append(w);const submit=node('button','Continue','primary');submit.disabled=state.busy;form.append(submit);form.onsubmit=e=>{e.preventDefault();perform(()=>connect(i.value.trim()));};stack.append(form);}
  else if(state.phase==='options'){stack.append(node('h2',state.server||'Sign in'));stack.append(button('Sign in with password',()=>{state.phase='password';render();},'primary'));if(state.options.passkeys)stack.append(action('Sign in with a passkey',startPasskey));if(state.options.quickConnect)stack.append(action('Quick Connect',startQuick));if(state.options.allowSignups)stack.append(button('Create account',()=>{state.phase='create';render();}));stack.append(button('Change server',()=>{state.phase='connect';render();},'plain'));}
  else if(state.phase==='password'||state.phase==='create'){const create=state.phase==='create';const f=node('form');f.append(node('h2',create?'Create account':'Sign in'));const [nw,ni]=field('Username','text','', 'username'),[pw,pi]=field('Password','password','','password');ni.autocomplete='username';pi.autocomplete=create?'new-password':'current-password';ni.required=true;pi.required=true;f.append(nw,pw);let confirm;if(create){const [w,i]=field('Confirm password','password','','confirm');confirm=i;i.autocomplete='new-password';f.append(w,node('p','Use at least 15 characters.','secondary'));}const b=node('button',create?'Create account':'Sign in','primary');b.disabled=state.busy;f.append(b);f.onsubmit=e=>{e.preventDefault();const password=pi.value,name=ni.value.trim();if(create&&password!==confirm.value){state.error='The passwords do not match.';render();return;}pi.value='';if(confirm)confirm.value='';perform(()=>signIn(name,password,create));};stack.append(f,button('Back to sign-in options',()=>{state.phase='options';render();},'plain'));}
  else if(state.phase==='device'){const d=state.device;stack.append(node('h2',d?.kind==='passkey'?'Sign in with a passkey':'Quick Connect'),node('p',d?.code||'','confirmation-code'));if(d?.url){const link=node('a','Open passkey page');link.href=d.url;link.target='_blank';link.rel='noopener noreferrer';stack.append(link,node('p','After verifying, return here to finish.','secondary'));}else stack.append(node('p','Enter this code in another client signed in to your server.'));stack.append(action('Finish sign-in',finishDevice,'primary'),action('Cancel',cancelDevice));}
@@ -824,7 +824,43 @@ function tabbar(){
 }
 function sheet(){if(state.expanded)return nowPlaying();const outer=node('section',undefined,'sheet');outer.setAttribute('role','dialog');outer.setAttribute('aria-modal','true');outer.id='bluefin-dialog';outer.tabIndex=-1;outer.setAttribute('aria-label',state.sheet==='invite'?'Connect Bluefin':state.sheet==='connections'?'Connections':'Account and settings');const inner=node('div',undefined,'sheet-inner'),bar=node('div',undefined,'toolbar');bar.append(node('h2',state.sheet==='invite'?'Connect Bluefin':state.sheet==='connections'?'Connections':'Account and settings'),button('Done',closeSheet,'plain'));inner.append(bar);
  if(state.sheet==='invite'){const g=group(state.pairing?'Saved connection':'Connect with an invitation');if(state.pairing){g.append(node('p',state.remember?'This request is saved on this device.':'This request stays in this tab. Keep it open until your connection is complete.'));if(state.pairing.awaitingApproval)g.append(node('p','Your request is waiting for administrator approval.'));if(state.pairing.externalUrl){const u=new URL(state.pairing.externalUrl);if(u.protocol==='https:'&&!u.username&&!u.password){const a=node('a','Open passkey page');a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';g.append(a,node('p','After verifying, return here to finish.','secondary'));}}g.append(action(state.pairing.awaitingApproval?'Check approval':state.pairing.needsBeginRetry?'Resume connection':'Verify and finish',continueMesh,'primary'));}
- else{g.append(node('p','Scan a Bluefin QR code, open an invitation image, or paste the full connection code.'));const f=node('form'),[cw,ci]=field('Connection code','password',state.code,'mesh-code'),[nw,ni]=field('Your account name for a signup request','text',state.meshName,'mesh-name');ni.oninput=()=>{state.meshName=ni.value;};ci.autocomplete='off';ci.spellcheck=false;ci.maxLength=3072;ci.oninput=()=>{state.code=ci.value;};f.append(cw,nw);const remember=node('label',undefined,'check'),c=node('input');c.type='checkbox';c.checked=state.remember;c.onchange=()=>{state.remember=c.checked;};remember.append(c,node('span','Remember this device in protected browser storage'));f.append(remember,node('p','Temporary by default. Closing this tab removes its connection key. Use Sign out to request immediate remote revocation.','secondary'));const b=node('button','Connect securely','primary');b.disabled=state.busy;f.append(b);f.onsubmit=e=>{e.preventDefault();const code=ci.value.trim(),name=ni.value.trim(),keep=c.checked;ci.value='';perform(()=>beginMesh(code,name,keep));};g.append(f);for(const [label,capture]of[['Open QR image or screenshot',false],['Take a photo of a QR code',true]]){const l=node('label',label),input=node('input');input.type='file';input.accept='image/png,image/jpeg';if(capture)input.setAttribute('capture','environment');input.onchange=()=>{const file=input.files?.[0];input.value='';if(!file)return;perform(()=>readInvitationImage(file));};l.append(input);g.append(l);}if(validInvitation()){const a=node('a','Open in the installed Bluefin app');a.href='bluefin://connect/'+state.code;g.append(a);}}
+ else {
+  g.append(node('p','Scan a Bluefin QR code, open an invitation image, or paste the full connection code. You will use a passkey to connect.'));
+  const form=node('form');
+  const [wrap,input]=field('Connection code','password',state.code,'mesh-code');
+  input.autocomplete='off';input.spellcheck=false;input.maxLength=3072;
+  input.oninput=()=>{state.code=input.value;};
+  const remember=node('label',undefined,'check'),checkbox=node('input');
+  checkbox.type='checkbox';checkbox.checked=state.remember;
+  checkbox.onchange=()=>{state.remember=checkbox.checked;};
+  remember.append(checkbox,node('span','Remember this device in protected browser storage'));
+  const connect=node('button','Connect securely','primary');
+  connect.disabled=state.busy;
+  form.append(wrap,remember,node('p','Temporary by default. Closing this tab removes its connection key. Use Sign out to request immediate remote revocation.','secondary'),connect);
+  form.onsubmit=event=>{
+   event.preventDefault();
+   const code=input.value.trim(),keep=checkbox.checked;
+   input.value='';
+   perform(()=>beginMesh(code,'',keep));
+  };
+  g.append(form);
+  for(const [label,capture] of [['Open QR image or screenshot',false],['Take a photo of a QR code',true]]){
+   const prompt=node('label',label),fileInput=node('input');
+   fileInput.type='file';fileInput.accept='image/png,image/jpeg';
+   if(capture)fileInput.setAttribute('capture','environment');
+   fileInput.onchange=()=>{
+    const file=fileInput.files?.[0];
+    fileInput.value='';
+    if(file)perform(()=>readInvitationImage(file));
+   };
+   prompt.append(fileInput);g.append(prompt);
+  }
+  if(validInvitation()){
+   const native=node('a','Open in the installed Bluefin app');
+   native.href='bluefin://connect/'+state.code;
+   g.append(native);
+  }
+ }
  if(!state.pairing)g.append(installationLink());
  g.append(action('Resume request in this tab',()=>resumeMesh(false)),action('Restore a remembered device',()=>resumeMesh(true)));inner.append(g,node('p','The QR verifies a device connection. Your browser still uses its normal trusted HTTPS certificate.','secondary'));
  }else if(state.sheet==='account'){const g=group(state.session?.name||'Music on this device');g.append(node('p',!state.session?'Temporary local music · no account connected':state.mode==='mesh'?'Connected through the encrypted Bluefin mesh':'Signed in through the server address'));if(state.session)g.append(button('Connections',()=>{state.sheet='connections';render();},'','qr'));else g.append(action('Connect account',openAccountConnection,'','qr'));g.append(action(state.session?'Sign out':'Close local library',signOut,'danger'));inner.append(g);}

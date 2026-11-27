@@ -77,7 +77,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  return {context,ui:context.contract,root,video,requests,events,item,pending};
 }
 test('ordinary HTML controls and HTTPS library work without Wasm, storage, or workers',async()=>{
- const t=setup();assert.match(t.root.textContent,/Connect with QR or invitation/);assert.equal(t.requests.length,0);
+ const t=setup();assert.match(t.root.textContent,/Connect with QR and passkey/);assert.equal(t.requests.length,0);
  await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);await t.ui.navigate('Library');t.ui.render();
  assert.match(t.root.textContent,/Collections/);assert.match(t.root.textContent,/Music/);
  assert(!t.root.textContent.includes('synthetic-private-bearer'));
@@ -232,6 +232,7 @@ test('opening an invitation exposes installation without sending or persisting i
  assert.equal(t.ui.state.code,code);
  const sheet=findElement(t.root,e=>e.attributes.role==='dialog');
  assert(sheet);
+ assert(!sheet.textContent.includes('Your account name'));
  const install=findElement(sheet,e=>e.tagName==='A'&&e.textContent==='Install Bluefin');
  assert.equal(install?.href,'https://bluefin.test/web/bluefin/install.html');
  assert.equal(install.target,'_blank');

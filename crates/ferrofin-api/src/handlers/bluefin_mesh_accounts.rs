@@ -239,9 +239,14 @@ impl Service {
             },
             InviteIntent::Signup=>{
                 if !self.policy(state).await?.allow_signups {return Err(failed());}
-                let name=name.filter(|s|name_valid(s)).ok_or_else(||ApiError::BadRequest("Choose an account name of up to 64 bytes.".into()))?;
+                let credential_user=Uuid::new_v4();
+                let (name,display)=match name {
+                    Some(name) if name_valid(&name)=>(name.clone(),name),
+                    Some(_)=>return Err(ApiError::BadRequest("Choose an account name of up to 64 bytes.".into())),
+                    None=>(format!("bluefin-{}",credential_user.simple()),"Bluefin account".to_owned()),
+                };
                 if state.users.get_user_by_name(&name).await?.is_some(){return Err(ApiError::Conflict("This account name is unavailable.".into()));}
-                let (public,private)=self.webauthn.start_passkey_registration(Uuid::new_v4(),&name,&name,None).map_err(|_|failed())?;
+                let (public,private)=self.webauthn.start_passkey_registration(credential_user,&name,&display,None).map_err(|_|failed())?;
                 (serde_json::to_value(public).map_err(storage)?,Ceremony::Signup{username:name,state:private},"registration")
             },
         };

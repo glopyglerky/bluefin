@@ -12,6 +12,11 @@ presentation does not grant a role or create another account ledger. A login
 invitation connects another device to the same account and still requires that
 account's passkey. It is not a library-sharing invitation for another person.
 
+The QR signup flow asks the recipient to create a passkey. The server assigns an
+internal account identifier when neither client supplies an account name. That
+identifier is not a sign-in field. The installation that issues the invitation
+still owns the account database and applies its signup approval policy.
+
 The shared Rust core validates capsule syntax, expiry, service, certificate
 pin, browser origin/path/challenge, callback identity and protocol responses.
 Swift adapts Keychain, AuthenticationServices, camera/photo/files, Bonjour and

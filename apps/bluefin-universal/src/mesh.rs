@@ -232,10 +232,10 @@ pub async fn begin(code: String, account_name: String, remember: bool) -> Result
     let invite = ConnectInvite::parse_at(&code, now_ms().map_err(|_| failure())?)
         .map_err(|_| "This connection code is invalid or expired.")?;
     invite.require_service(SERVICE).map_err(|_| "This invitation belongs to another application.")?;
-    let account_name = if invite.intent == InviteIntent::Signup {
-        let name = account_name.trim();
-        if name.is_empty() || name.len() > 64 || name.chars().any(char::is_control) {
-            return Err("Enter a username for this signup request.".into());
+    let name = account_name.trim();
+    let account_name = if invite.intent == InviteIntent::Signup && !name.is_empty() {
+        if name.len() > 64 || name.chars().any(char::is_control) {
+            return Err("The account name is invalid.".into());
         }
         Some(name.to_owned())
     } else { None };
