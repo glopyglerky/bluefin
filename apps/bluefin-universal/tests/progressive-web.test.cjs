@@ -369,6 +369,8 @@ test('temporary local Files play and search without any account, storage, worker
  assert.equal(t.requests.length,0);
  await t.ui.navigate('Search');assert.equal(t.requests.length,0);
  t.ui.state.localQuery='private';await t.ui.loadRoute();assert.equal(t.ui.state.rows.length,1);assert.equal(t.requests.length,0);
+ await t.ui.startSearch('private',{scope:'music'});assert.equal(t.ui.state.route.kind,'local_search');
+ assert.equal(t.ui.state.rows.length,1);assert.equal(t.requests.length,0);
  t.ui.state.expanded=true;t.ui.render();assert.match(t.root.textContent,/Local file/);
  assert.equal(t.requests.length,0);
  await t.ui.signOut();assert.equal(t.video.src,'');assert.equal(t.ui.state.local,false);assert.equal(t.ui.localItems().length,0);
@@ -1495,4 +1497,56 @@ test('a denied source stops scheduling remaining regions and does not report uni
  assert(t.ui.state.route.offerProgress.stopped);
  assert(t.root.textContent.includes('Remaining regions were not requested.'));
  assert(!t.root.textContent.includes('Checked 5 of 5 regions'));
+});
+
+test('failed country registries are retried and their failure remains visible',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Registry Fixture'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]};
+ let countryLists=0;const lookups=[];
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Providers'){
+   if(!url.searchParams.has('country')&&++countryLists===1)return jsonReply({schemaVersion:1,countries:[],
+    sources:[{source:'tmdb',status:'unavailable',scope:'regionalAvailability',coverage:'unknown',attributions:[]}]});
+   return jsonReply({schemaVersion:1,countries:[{code:'GB',name:'United Kingdom',services:[]}],sources:[]});
+  }
+  if(url.pathname==='/Bluefin/Catalog/Offers'){
+   const country=url.searchParams.get('country');lookups.push(country);
+   return jsonReply({schemaVersion:1,identity,country,offers:[],sources:[
+    {source:'tmdb-watch-page',status:'noOffers',scope:'regionalAvailability',coverage:'partial',attributions:[]}]});
+  }
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('Registry Fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ assert(t.root.textContent.includes('The country registry is temporarily unavailable.'));
+ const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ country.value='';await country.onchange();
+ assert.equal(countryLists,2);
+ assert(lookups.includes('GB'));
+ assert(t.root.textContent.includes('Checked 1 of 1 regions'));
+});
+
+test('exact offers appear before slow country metadata, including an iTunes Apple title',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Fast Offers Fixture'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]};
+ const pending=[];
+ const destination='https://tv.apple.com/us/movie/fixture/umc.cmc.actualfixture';
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Providers')return new Promise(resolve=>pending.push(resolve));
+  if(url.pathname==='/Bluefin/Catalog/Offers')return jsonReply({schemaVersion:1,identity,country:'US',offers:[{
+   id:'itunes-title',identity,country:'US',service:{source:'tmdb',id:'2',name:'iTunes'},
+   accessType:'buy',destinations:[{kind:'title',url:destination}],
+   evidence:{source:'tmdb-watch-page',observedAt:1700000000,regionVerified:true}}],
+   sources:[{source:'tmdb-watch-page',status:'partial',scope:'regionalAvailability',coverage:'partial',attributions:[]}]});
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('Fast Offers Fixture',{scope:'movies'});
+ const opened=findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ await until(()=>!!findElement(t.root,e=>e.href===destination));
+ assert.equal(pending.length,2);
+ assert(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Buy on iTunes'));
+ for(const finish of pending)finish(jsonReply({schemaVersion:1,countries:[{code:'US',name:'United States',services:[]}],sources:[]}));
+ await opened;
 });

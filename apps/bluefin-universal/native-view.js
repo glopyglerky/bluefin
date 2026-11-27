@@ -710,6 +710,10 @@ async function loadSearch(route,get,current,signal){
  await Promise.all(lookups);
 }
 async function startSearch(query,filters={},record=false){
+ if(!state.session&&state.local){
+  state.localQuery=String(query).trim();state.route={kind:'local_search',title:'Search'};state.back=[];
+  await loadRoute();render();return;
+ }
  const previous=state.route,route={kind:'search',title:'Search',query:String(query).trim().slice(0,256),
   filters:cleanSearchFilters(filters),refine:previous.kind==='search'&&previous.refine,liveAfter:new Date().toISOString()};
  state.query=route.query;state.route=route;state.error='';
@@ -1264,7 +1268,8 @@ async function providerRegistry(country,signal,identity){
  if(value.schemaVersion!==1||!Array.isArray(value.countries))throw Error('Invalid provider registry');
  const clean={...value,countries:value.countries.filter(row=>/^[A-Z]{2}$/.test(row?.code)&&typeof row.name==='string')};
  if(providerRegistryCache.size>=160)providerRegistryCache.delete(providerRegistryCache.keys().next().value);
- providerRegistryCache.set(key,{value:clean,expires:Date.now()+300000});
+ const failed=Array.isArray(clean.sources)&&clean.sources.some(source=>!['complete','partial','noOffers'].includes(source?.status));
+ if(!failed)providerRegistryCache.set(key,{value:clean,expires:Date.now()+300000});
  return clean;
 }
 function matchesOfferIdentity(value,identity){
@@ -1309,6 +1314,7 @@ async function enrichAllOfferRegions(route,identity,signal,current){
   route.offerProgress={completed:0,total:0,failed:0,registryUnavailable:true};render();return;
  }
  const progress=route.offerProgress={completed:0,total:codes.length,failed:0,stopped:false};
+ render();
  const baseSources=route.offers.sources||[],sourcesByCountry=new Map();
  let next=0,pauseUntil=0;
  const transient=new Set(['denied','rateLimited','unavailable','invalidResponse','identityMismatch']);
@@ -1375,14 +1381,23 @@ async function loadRegionalOffers(route,country,parentSignal=routeController?.si
  route.offerCountry=country;route.offers={loading:true};render();
  try{
   const awaitingCountry=!country&&identity.source==='tmdb'&&!route.offerAllExplicit;
+  const offersTask=(awaitingCountry?Promise.resolve({awaitingCountry:true,offers:[],sources:[]}):
+   fetchCatalogOffers(identity,country,signal)).then(value=>{
+    if(current()){route.offers=value;render();}return value;
+   },error=>{if(current()){route.offers={unavailable:true};render();}throw error;});
   const [offers,countries,providers]=await Promise.allSettled([
-   awaitingCountry?Promise.resolve({awaitingCountry:true,offers:[],sources:[]}):fetchCatalogOffers(identity,country,signal),
-   providerRegistry('',signal,identity),
+   offersTask,providerRegistry('',signal,identity),
    country?providerRegistry(country,signal,identity):Promise.resolve(null),
   ]);
   if(!current())return;
-  if(countries.status==='fulfilled'){route.offerCountries=countries.value.countries;route.offerRegistryUnavailable=false;}
-  else route.offerRegistryUnavailable=true;
+  if(countries.status==='fulfilled'){
+   route.offerCountries=countries.value.countries;
+   route.offerRegistrySources=Array.isArray(countries.value.sources)?countries.value.sources:[];
+   route.offerRegistryUnavailable=route.offerRegistrySources.some(source=>!['complete','partial','noOffers'].includes(source?.status));
+  }else{
+   route.offerRegistryUnavailable=true;
+   route.offerRegistrySources=[{source:'catalog',status:'unavailable',scope:'regionalAvailability',coverage:'unknown',attributions:[]}];
+  }
   route.offerProviders=providers.status==='fulfilled'?providers.value?.countries||[]:[];
   if(offers.status==='fulfilled')route.offers=offers.value;
   else route.offers={unavailable:true};
@@ -1418,7 +1433,7 @@ function offerTarget(value,provider='',allowArtistRoot=false){
  const safe=publicOfferUrl(value);if(!safe)return null;
  const target=new URL(safe),host=target.hostname.toLowerCase().replace(/\.$/,'');
  if(/(^|\.)(justwatch\.com|themoviedb\.org)$/.test(host))return null;
- if(host==='tv.apple.com'&&!provider.toLowerCase().includes('apple'))return null;
+ if(host==='tv.apple.com'&&!/(apple|itunes)/i.test(provider))return null;
  let parts;
  try{parts=target.pathname.split('/').filter(Boolean).map(part=>decodeURIComponent(part).toLowerCase());}catch{return null;}
  if(parts.some(part=>['search','results','login','signin','sign-in','signup','sign-up','redirect','click','subscribe','register'].includes(part)))return null;
@@ -1580,7 +1595,7 @@ function offersView(route){
    known?'No offers were returned by these sources for this request.':'Availability could not be checked.','secondary'));
  }
  if(result.filtered)content.append(node('p','Offers with a different title or country were excluded.','secondary'));
- offerSourceNotes(content,result.sources);
+ offerSourceNotes(content,[...result.sources,...(route.offerRegistrySources||[])]);
  return content;
 }
 async function openPublicTitle(item){
