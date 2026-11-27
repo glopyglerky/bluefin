@@ -10,13 +10,13 @@ const state={phase:'connect',base:hostedBase(),server:null,options:{},session:nu
   tab:'Home',route:{kind:'home'},rows:[],shelves:[],back:[],sheet:launched?'invite':null,
   code:launched,remember:false,pairing:null,pairingView:0,device:null,invitation:null,inviteTimer:null,
   busy:false,error:'',notice:'',epoch:0,capabilities:null,capability:null,player:null,expanded:false,nowPanel:'artwork',
-  featured:null,homeHistory:null,facets:null,search:null,
+  featured:null,homeHistory:null,facets:null,search:null,sportsPreferences:null,
   queue:[],unshuffledQueue:[],queueIndex:0,shuffle:false,repeat:'off',query:'',local:false,localQuery:'',localSnapshot:null,images:new Map(),imageEpoch:0};
 let modalWasOpen=false,focusReturn=null,pageRetired=false,authTask=false,playbackGeneration=0,leaseRenew=null,progressTimer=null,meshPoll=null,hlsPromise,meshRetirement=null;
 let meshBeginStarted=false;
 let localLibrary=null,routeController=null,lyricsView=null,lyricsFrame=null;
 const categories=[['Home','home'],['Sports','sports'],['TV Shows','shows'],['Movies','movies'],['Live TV','live'],['Music','music']];
-const searchScopes=[['all','All',null],['movies','Movies','Movie'],['tvShows','TV Shows','Series,Season,Episode'],['music','Music','Audio,MusicAlbum,MusicArtist,MusicVideo,Playlist'],['sports','Sports',null],['liveTv','Live TV','TvChannel,LiveTvProgram']];
+const searchScopes=[['all','All',null],['movies','Movies','Movie'],['tvShows','TV Shows','Series,Season,Episode'],['music','Music','Audio,MusicAlbum,MusicArtist,MusicVideo,Playlist'],['sports','Sports',null],['liveTv','Live TV','TvChannel,LiveTvProgram'],['publicTv','Public TV catalog (TVmaze)',null]];
 function aborted(){return Object.assign(Error('The search or library view changed.'),{name:'AbortError'});}
 function notFound(error){return error?.status===404||/\bHTTP 404\b/.test(String(error?.message||error||''));}
 
@@ -136,6 +136,7 @@ async function playLocal(item,queue=[item],index=0,original=null){
 }
 function playbackTimeline(){
  const p=state.player,offset=Number.isFinite(p?.offset)?p.offset:0;
+ if(p?.sing?.active)return {position:singPosition(p.sing),duration:p.sing.duration,minimum:0};
  if(p?.mode==='mesh'&&p.snapshot)return {position:p.snapshot.position||0,duration:p.snapshot.duration||0,minimum:offset};
  const position=offset+(Number.isFinite(media.currentTime)?media.currentTime:0);
  const duration=Number.isFinite(media.duration)&&media.duration>0?offset+media.duration:0;
@@ -143,6 +144,7 @@ function playbackTimeline(){
 }
 function seekPlayback(position){
  const p=state.player;if(!p||!Number.isFinite(position)||p.item.Type==='TvChannel')return;
+ if(p.sing?.active){runSing(p,position,p.sing.paused).catch(error=>{state.error=String(error.message||error);render();});return;}
  if(p.mode==='mesh')runtime()?.ready()?.webMeshControl(p.handle,'seek',position);
  else media.currentTime=Math.max(0,position-(p.offset||0));
  updatePlayback();
@@ -154,11 +156,17 @@ function toggleShuffle(){
  syncLocalQueue();render();
 }
 
-const artworkPending=new Map(),artworkMissing=new Set(),imageControllers=new Set(),requestControllers=new Set();let artworkActive=0,artworkScrollTimer;
+const artworkPending=new Map(),artworkMissing=new Map(),artworkRetries=new Map(),imageControllers=new Set(),requestControllers=new Set();let artworkActive=0,artworkScrollTimer,artworkRetryTimer;
 function assertLive(epoch=state.epoch,session){if(pageRetired||epoch!==state.epoch||(session!==undefined&&session!==state.session))throw Error('This page or account changed. Resume the current connection.');}
-function clearSearchFacets(){state.facets?.controller?.abort();state.facets=null;}
-function clearPrivateView(){routeController?.abort();routeController=null;state.featured=null;state.homeHistory=null;clearSearchFacets();state.search=null;state.rows=[];state.shelves=[];state.back=[];state.query='';state.route={kind:'home'};state.queue=[];state.unshuffledQueue=[];state.queueIndex=0;state.shuffle=false;state.local=false;state.localQuery='';state.localSnapshot=null;state.repeat='off';state.nowPanel='artwork';state.capabilities=null;state.capability=null;state.code='';state.pairing=null;state.device=null;state.invitation=null;}
+function clearSearchFacets(){
+ const facets=state.facets;facets?.controller?.abort();
+ for(const controller of Object.values(facets?.lookupControllers||{}))controller.abort();
+ for(const timer of Object.values(facets?.lookupTimers||{}))clearTimeout(timer);
+ state.facets=null;
+}
+function clearPrivateView(){clearTimeout(sportsRefreshTimer);state.sportsPreferences=null;routeController?.abort();routeController=null;state.featured=null;state.homeHistory=null;clearSearchFacets();state.search=null;state.rows=[];state.shelves=[];state.back=[];state.query='';state.route={kind:'home'};state.queue=[];state.unshuffledQueue=[];state.queueIndex=0;state.shuffle=false;state.local=false;state.localQuery='';state.localSnapshot=null;state.repeat='off';state.nowPanel='artwork';state.capabilities=null;state.capability=null;state.code='';state.pairing=null;state.device=null;state.invitation=null;}
 const paths={
+ artist:'M8 11a4 4 0 1 0 8 0 4 4 0 1 0-8 0M4 22v-2a8 8 0 0 1 16 0v2M9 2l3 2 3-2',album:'M4 8h16v13H4zM6 5h12M8 2h8',star:'m12 3 3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z',genres:'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z',mic:'M9 4a3 3 0 0 1 6 0v8a3 3 0 0 1-6 0V4M6 10v2a6 6 0 0 0 12 0v-2M12 18v4M8 22h8',close:'m5 5 14 14M19 5 5 19',filter:'M3 6h18M6 12h12M9 18h6',
  waves:'M3 6c3-3 6 3 9 0s6 3 9 0M3 12c3-3 6 3 9 0s6 3 9 0M3 18c3-3 6 3 9 0s6 3 9 0',
  sports:'M4 4h16v16H4zM4 12h16M12 4v16M9 12a3 3 0 1 0 6 0 3 3 0 1 0-6 0',
  shows:'M3 6h18v14H3zM8 2l4 4 4-4',movies:'M3 4h18v16H3zM7 4v16M17 4v16M3 9h4m-4 6h4M17 9h4m-4 6h4',
@@ -225,7 +233,7 @@ function items(value){const list=Array.isArray(value)?value:value?.Items;if(!Arr
 function subtitle(item){return [item.AlbumArtist||item.Artists?.join(', ')||item.ProductionYear,item.Album].filter(Boolean).join(' · ');}
 async function perform(task){
  if(pageRetired||state.busy)return;state.busy=true;state.error='';state.notice='';render();
- try{await task();}catch(e){if(!pageRetired&&!state.capability)state.error=String(e.message||e);}
+ try{await task();}catch(e){if(!pageRetired&&!state.capability&&e.name!=='AbortError')state.error=String(e.message||e);}
  finally{if(!pageRetired){state.busy=false;render();}}
 }
 async function connect(raw){
@@ -429,11 +437,12 @@ async function readInvitationImage(file) {
 function hasSearchFacets(filters){return !!(filters.studioID||filters.tag||filters.collectionID);}
 function cleanSearchFilters(value={}) {
  const scope=searchScopes.some(([key])=>key===value.scope)?value.scope:'all';
- if(scope==='sports')return {scope,studioID:'',tag:'',collectionID:''};
+ if(scope==='sports'||scope==='publicTv')return {scope,studioID:'',tag:'',collectionID:''};
  return {scope,studioID:uuid(value.studioID)?id(value.studioID):'',tag:typeof value.tag==='string'?value.tag.slice(0,512):'',
   collectionID:uuid(value.collectionID)?id(value.collectionID):''};
 }
 function searchLanes(filters){
+ if(filters.scope==='publicTv')return [];
  if(hasSearchFacets(filters))return ['library'];
  if(filters.scope==='sports')return ['programmes'];
  if(filters.scope==='liveTv')return ['programmes','channels'];
@@ -497,7 +506,10 @@ async function publicTVSearch(term,signal){
 }
 async function loadSearch(route,get,current,signal){
  const search=state.search={route,pages:[],problems:[],publicTV:null};
- if(!route.query&&route.filters.scope==='all'&&!hasSearchFacets(route.filters))return;
+ if(!route.query&&route.filters.scope==='all'&&!hasSearchFacets(route.filters)){
+  if(state.session){search.browseMusic=state.tab==='Music';try{const value=await get(search.browseMusic?'MusicGenres':'Genres',[['UserId',state.session.user],['Recursive',true],['Limit',24]]);current();search.browse=items(value);render();}catch(error){current();}}
+  return;
+ }
  const names={library:'Your library',artists:'Artists',programmes:route.filters.scope==='sports'?'Sports broadcasts':'On now and upcoming',channels:'Channels'};
  search.pages=state.session?searchLanes(route.filters).map(lane=>({lane,title:names[lane],items:[],next:0,total:0,loading:true})):[];
  const lookups=search.pages.map(async page=>{
@@ -508,7 +520,7 @@ async function loadSearch(route,get,current,signal){
   render();
  });
  const publicTerm=Array.from(route.query).slice(0,160).join('');
- if(publicTerm.length>=2&&!hasSearchFacets(route.filters)&&['all','tvShows'].includes(route.filters.scope)){
+ if(publicTerm.length>=2&&route.filters.scope==='publicTv'){
   search.publicTV={loading:true,items:[],unavailable:false};
   lookups.push(publicTVSearch(publicTerm,signal).then(titles=>{
    current();search.publicTV.items=titles;
@@ -520,11 +532,11 @@ async function loadSearch(route,get,current,signal){
 }
 async function startSearch(query,filters={},record=false){
  const previous=state.route,route={kind:'search',title:'Search',query:String(query).trim().slice(0,256),
-  filters:cleanSearchFilters(filters),refine:previous.kind==='search'&&previous.refine,liveAfter:new Date().toISOString()};
+  filters:cleanSearchFilters(state.session?filters:{scope:'publicTv'}),refine:previous.kind==='search'&&previous.refine,liveAfter:new Date().toISOString()};
  state.query=route.query;state.route=route;state.error='';
  const search=loadRoute();render();
- if(route.refine&&route.filters.scope!=='sports'&&(!state.facets||state.facets.loading))loadSearchFacets().catch(()=>{});
- if(record)recordHomeSearch(route.query).catch(()=>{});
+ if(route.refine&&!['sports','publicTv'].includes(route.filters.scope)&&(!state.facets||state.facets.loading))loadSearchFacets().catch(()=>{});
+ if(record&&route.filters.scope!=='publicTv')recordHomeSearch(route.query).catch(()=>{});
  try{await search;}catch(error){if(route===state.route&&error.name!=='AbortError')state.error=String(error.message||error);}
  finally{if(route===state.route)render();}
 }
@@ -557,7 +569,7 @@ async function loadSearchFacets(){
  if(state.facets?.epoch===epoch&&state.facets.session===session&&!state.facets.controller.signal.aborted)return state.facets.promise;
  clearSearchFacets();
  const controller=new AbortController();
- const facets=state.facets={epoch,session,controller,studios:[],tags:[],collections:[],pending:new Set(['studios','tags','collections']),loading:true,problems:[],truncated:false};
+ const facets=state.facets={epoch,session,controller,studios:[],tags:[],collections:[],pending:new Set(['studios','tags','collections']),loading:true,problems:[],truncated:false,queries:{},lookupControllers:{},lookupTimers:{},lookupBusy:new Set(),lookupProblems:{},lookupTruncated:{}};
  const current=()=>!pageRetired&&epoch===state.epoch&&session===state.session&&facets===state.facets&&!controller.signal.aborted;
  const publish=()=>{if(current()&&state.route.kind==='search'&&state.route.refine)render();};
  publish();
@@ -571,11 +583,11 @@ async function loadSearchFacets(){
    let values,truncated;
    if(kind==='tags'){
     if(!Array.isArray(value?.Tags))throw Error('The server returned invalid tags.');
-    values=[...new Set(value.Tags.filter(tag=>typeof tag==='string'&&tag.length<=512))].slice(0,512);truncated=value.Tags.length>512;
+    values=[...new Set(value.Tags.filter(tag=>typeof tag==='string'&&tag.length<=512))].slice(0,8192);truncated=value.Tags.length>8192;
    }else{
     values=items(value).map(item=>({id:id(item.Id),name:item.Name}));truncated=Number(value.TotalRecordCount)>values.length;
    }
-   facets[kind]=values;facets.truncated||=truncated;
+   if(!facets.queries[kind])facets[kind]=values;facets.truncated||=truncated;
   }catch(error){if(current()&&error.name!=='AbortError')facets.problems.push(String(error.message||error));}
   finally{if(current()){facets.pending.delete(kind);facets.loading=facets.pending.size>0;publish();}}
  }));
@@ -616,48 +628,58 @@ async function clearHomeSearchHistory(){
 }
 async function loadRoute(){
  const epoch=state.epoch,session=state.session,route=state.route,user=session?.user;assertLive(epoch,session);
- routeController?.abort();const controller=routeController=new AbortController();
- const current=()=>{assertLive(epoch,session);if(route!==state.route||controller!==routeController||controller.signal.aborted)throw aborted();};
+ clearTimeout(sportsRefreshTimer);routeController?.abort();const controller=routeController=new AbortController();
+ const current=()=>{if(pageRetired||epoch!==state.epoch||session!==state.session||route!==state.route||controller!==routeController||controller.signal.aborted)throw aborted();};
  const get=(path,query=[])=>api(path,'GET',undefined,query,controller.signal);
  if(route.kind==='local_music'||route.kind==='local_search'){state.rows=route.kind==='local_search'?localOwner().search(state.localQuery).map(localItem):localItems();state.shelves=[];return;}
  if(!user&&route.kind!=='search')return;
  state.rows=[];state.shelves=[];state.featured=null;state.error='';route.loading=true;
  if(route.kind!=='search')state.search=null;
+ const publish=()=>{current();render();};
  try{
   if(route.kind==='home'){
+   const values=[null,null,null,null];
+   const show=()=>{
+    current();const resume=values[0]||[],next=values[1]||[],latest=values[2]||[],recommended=values[3]?.shelves||[];
+    state.homeHistory=values[3]?.history||null;
+    state.shelves=[{title:'Continue Watching',items:resume},{title:'Up Next',items:next},...recommended,{title:'Recently Added',items:latest}].filter(shelf=>shelf.items.length);
+    // Publish useful rows immediately, then preserve the account's recommendation priority.
+    state.featured = resume[0]||recommended.find(shelf=>shelf.items.length)?.items[0]||next[0]||latest[0]||null;
+    publish();
+   };
    const requests=[
     get('Users/'+user+'/Items/Resume',[['Limit',12],['Fields','Overview']]).then(items),
     get('Shows/NextUp',[['UserId',user],['Limit',12],['Fields','Overview']]).then(items),
     get('Users/'+user+'/Items/Latest',[['Limit',18],['Fields','Overview']]).then(items),
     homeRecommendations(get,user)];
-   const results=await Promise.allSettled(requests);current();
-   const values=results.map(result=>result.status==='fulfilled'?result.value:null);
-   const resume=values[0]||[],next=values[1]||[],latest=values[2]||[],recommended=values[3]?.shelves||[];
-   state.homeHistory=values[3]?.history||null;
-   state.shelves=[{title:'Continue watching',items:resume},{title:'Up next',items:next},...recommended,{title:'Recently added',items:latest}].filter(shelf=>shelf.items.length);
-   state.featured=resume[0]||recommended.find(shelf=>shelf.items.length)?.items[0]||next[0]||latest[0]||null;
+   const results=await Promise.allSettled(requests.map((request,index)=>request.then(value=>{current();values[index]=value;show();})));current();
    if(results.every(result=>result.status==='rejected'))throw Error('Your library could not refresh. Open Collections or try again.');
    if(results.some(result=>result.status==='rejected'))state.notice='Some Home sections could not refresh. Try again to load the remaining sections.';
-  }else if(route.kind==='library'){const rows=items(await get('Users/'+user+'/Views'));current();state.rows=rows;}
+  }else if(route.kind==='library'){state.rows=items(await get('Users/'+user+'/Views'));current();}
   else if(route.kind==='music'){
-   const q=[['Limit',12],['Recursive',true],['IncludeItemTypes','MusicAlbum'],['Fields','Overview,PrimaryImageAspectRatio'],['SortBy','DateCreated'],['SortOrder','Descending']];
-   const recent=items(await get('Users/'+user+'/Items',q));current();state.shelves=[{title:'Recently added',items:recent}];
-   const favorites=await get('Users/'+user+'/Items',[...q,['IsFavorite',true]]).then(items).catch(()=>[]);current();
-   if(favorites.length)state.shelves.push({title:'Favorite albums',items:favorites});
-  }else if(route.kind==='live'){const rows=items(await get('LiveTv/Channels',[['UserId',user],['Limit',100]]));current();state.rows=rows;}
-  else if(route.kind==='sports'){
-   try{
-    const feed=await get('sports/api/v1/home');current();
-    if(feed?.schema!==1||feed.presentation_only!==true||!Array.isArray(feed.games)||!Array.isArray(feed.local_broadcasts)||feed.games.length+feed.local_broadcasts.length>400)throw Error('The server returned invalid sports information.');
-    route.sports=feed.games.concat(feed.local_broadcasts);
-   }catch(error){
-    if(!notFound(error))throw error;
-    const rows=items(await get('LiveTv/Programs',[['UserId',user],['IsSports',true],['MinEndDate',new Date().toISOString()],['Limit',100]]));current();state.rows=rows;
-   }
+   const q=[['Limit',18],['Recursive',true],['IncludeItemTypes','MusicAlbum'],['Fields','Overview,PrimaryImageAspectRatio'],['SortBy','DateCreated'],['SortOrder','Descending']];
+   const values=[[],[]],labels=['Recently Added','Favorite Albums'];
+   const results=await Promise.allSettled([q,[...q,['IsFavorite',true]]].map((query,index)=>get('Users/'+user+'/Items',query).then(value=>{
+    current();values[index]=items(value);state.shelves=values.map((entries,index)=>({title:labels[index],items:entries})).filter(shelf=>shelf.items.length);publish();
+   })));current();if(results.every(result=>result.status==='rejected'))throw Error('Your music library could not load. Try again.');
+  }else if(route.kind==='catalog'){
+   const base=[['Recursive',true],['IncludeItemTypes',route.type],['Fields','Overview,PrimaryImageAspectRatio']];
+   const tasks=[
+    get('Users/'+user+'/Items',[...base,['Limit',16],['SortBy','DateCreated'],['SortOrder','Descending']]).then(value=>{current();route.recent=items(value);state.featured ||= route.recent[0]||null;publish();}),
+    get('Users/'+user+'/Items',[...base,['Limit',16],['IsFavorite',true]]).then(value=>{current();route.favorites=items(value);publish();}),
+    get('Users/'+user+'/Items',[...base,['Limit',100],['StartIndex',route.start||0],['SortBy','SortName']]).then(value=>{current();state.rows=items(value);route.total=Number(value.TotalRecordCount)||state.rows.length;publish();})
+   ];
+   const results=await Promise.allSettled(tasks);current();
+   if(results[2].status==='rejected')throw Error('This library could not load. Try again.');
+  }else if(route.kind==='genres'){state.rows=items(await get('MusicGenres',[['UserId',user],['Recursive',true],['Limit',200]]));current();}
+  else if(route.kind==='live'){state.rows=items(await get('LiveTv/Channels',[['UserId',user],['Limit',100]]));current();}
+  else if(route.kind==='sports'){await loadSports(route,get,current);
+  }else if(route.kind==='sports_detail'){await loadSportsDetail(route,get,current);
   }else if(route.kind==='search'){route.filters=cleanSearchFilters(route.filters);route.query=route.query??state.query;route.liveAfter??=new Date().toISOString();await loadSearch(route,get,current,controller.signal);}
   else if(route.kind==='collection'){
    const q=[['Limit',100],['StartIndex',route.start||0],['Recursive',true],['Fields','Overview,PrimaryImageAspectRatio'],['SortBy',route.type==='Audio'&&route.parent?'ParentIndexNumber,IndexNumber,SortName':'SortName']];
    if(route.type)q.push(['IncludeItemTypes',route.type]);if(route.parent)q.push(['ParentId',route.parent]);if(route.artist)q.push(['ArtistIds',route.artist]);
+   if(route.favorite)q.push(['IsFavorite',true]);if(route.genre)q.push(['GenreIds',route.genre]);
    const value=await get('Users/'+user+'/Items',q);current();state.rows=items(value);route.total=Number(value.TotalRecordCount)||state.rows.length;
   }else if(route.kind==='detail'){
    const value=await get('Users/'+user+'/Items/'+id(route.item.Id));current();if(!uuid(value.Id))throw Error('The item is no longer available.');route.item=value;
@@ -674,11 +696,11 @@ async function navigate(tab){
  }
  state.tab=tab;state.back=[];
  if(!state.session&&state.local){state.route={kind:tab==='Music'?'local_music':'local_connect',title:tab};return loadRoute();}
- if(tab==='Movies'||tab==='TV Shows')state.route={kind:'collection',title:tab,type:tab==='Movies'?'Movie':'Series',start:0};
+ if(tab==='Movies'||tab==='TV Shows')state.route={kind:'catalog',title:tab,type:tab==='Movies'?'Movie':'Series',start:0,recent:[],favorites:[]};
  else state.route={kind:({Home:'home',Sports:'sports',Music:'music','Live TV':'live'})[tab]||'home'};
  await loadRoute();
 }
-async function openCollection(title,type,parent,artist){state.back.push({...state.route});state.route={kind:'collection',title,type,parent,artist,start:0};await loadRoute();}
+async function openCollection(title,type,parent,artist,options={}){state.back.push({...state.route});state.route={kind:'collection',title,type,parent,artist,start:0,...options};await loadRoute();}
 async function openItem(item,recordSelection=true){
  if(recordSelection&&state.route.kind==='search')recordHomeSearch(state.route.query,item).catch(()=>{});
  if(['Program','LiveTvProgram'].includes(item.Type)){
@@ -688,20 +710,74 @@ async function openItem(item,recordSelection=true){
   return openItem({...channel,Type:'TvChannel'},false);
  }
  if(item.Type==='LiveTvChannel')item={...item,Type:'TvChannel'};
-if(item.Type==='TvChannel'&&state.mode!=='mesh'){state.back.push({...state.route});state.route={kind:'detail',item};return;}if(isLocalItem(item)){const queue=localItems();return playLocal(item,queue,queue.findIndex(track=>track.Id===item.Id));}if(item.Type==='Audio')return play(item,[item],0);if(item.Type==='MusicArtist')return openCollection(item.Name,'MusicAlbum,Audio,MusicVideo',null,id(item.Id));if(['MusicAlbum','MusicArtist','Playlist','Series','Season','CollectionFolder','Folder','BoxSet'].includes(item.Type)||item.IsFolder){return openCollection(item.Name,item.Type==='Series'||item.Type==='Season'?'Episode':(item.Type==='MusicArtist'?'MusicAlbum':['MusicAlbum','Playlist'].includes(item.Type)?'Audio':null),id(item.Id));}state.back.push({...state.route});state.route={kind:'detail',item};await loadRoute();}
-function artKey(item,backdrop=false){return (backdrop?'b:':'p:')+id(item.Id);}
-function applyArtwork(element,url,backdrop=false){if(backdrop){element.style.backgroundImage='linear-gradient(180deg,rgba(6,23,39,.05),rgba(6,23,39,.9)),url("'+url+'")';element.style.backgroundSize='cover';element.style.backgroundPosition='center';return;}const image=node('img');image.alt='';image.src=url;image.loading='lazy';image.onerror=()=>{element.replaceChildren(icon('music'));};element.replaceChildren(image);}
-function bindArtwork(element,item,backdrop=false){if(isLocalItem(item))return;const key=artKey(item,backdrop);element.dataset.artKey=key;element.dataset.artId=id(item.Id);if(backdrop)element.dataset.backdrop='true';const cached=state.images.get(key);if(cached)applyArtwork(element,cached,backdrop);}
+ if(item.Type==='TvChannel'&&state.mode!=='mesh'){state.back.push({...state.route});state.route={kind:'detail',item};return;}
+ if(isLocalItem(item)){const queue=localItems();return playLocal(item,queue,queue.findIndex(track=>track.Id===item.Id));}
+ if(item.Type==='Audio')return play(item,[item],0);
+ if(item.Type==='MusicArtist')return openCollection(item.Name,'MusicAlbum,Audio,MusicVideo',null,id(item.Id),{headerItem:item});
+ if(['MusicAlbum','Playlist','Series','Season','CollectionFolder','Folder','BoxSet'].includes(item.Type)||item.IsFolder){
+  const type=['Series','Season'].includes(item.Type)?'Episode':['MusicAlbum','Playlist'].includes(item.Type)?'Audio':null;
+  return openCollection(item.Name,type,id(item.Id),null,{headerItem:item});
+ }
+ state.back.push({...state.route});state.route={kind:'detail',item};await loadRoute();
+}
+function artworkSource(item,backdrop=false){
+ const tag=value=>typeof value==='string'&&value.length<=256?value:'';
+ const own=id(item.Id);
+ if(backdrop){
+  if(Array.isArray(item.BackdropImageTags)&&item.BackdropImageTags.length)return {item:own,backdrop:true,tag:tag(item.BackdropImageTags[0])};
+  if(uuid(item.ParentBackdropItemId)&&Array.isArray(item.ParentBackdropImageTags)&&item.ParentBackdropImageTags.length)return {item:id(item.ParentBackdropItemId),backdrop:true,tag:tag(item.ParentBackdropImageTags[0])};
+ }
+ if(item.ImageTags?.Primary)return {item:own,backdrop:false,tag:tag(item.ImageTags.Primary)};
+ if(uuid(item.AlbumId)&&item.AlbumPrimaryImageTag)return {item:id(item.AlbumId),backdrop:false,tag:tag(item.AlbumPrimaryImageTag)};
+ if(uuid(item.ParentPrimaryImageItemId)&&item.ParentPrimaryImageTag)return {item:id(item.ParentPrimaryImageItemId),backdrop:false,tag:tag(item.ParentPrimaryImageTag)};
+ // Some older servers omit image tags. Keep their authenticated image lookup.
+ return {item:own,backdrop,tag:''};
+}
+function artKey(item,backdrop=false){const source=artworkSource(item,backdrop);return (backdrop?'b:':'p:')+source.item+(source.tag?':'+source.tag:'');}
+function applyArtwork(element,url,backdrop=false){
+ if(backdrop){
+  const classes=element.className.split(/\s+/),overlay=classes.includes('hero')?'linear-gradient(180deg,rgba(6,23,39,0),rgba(6,23,39,.15) 35%,rgba(6,23,39,.94)),':classes.includes('browse-tile')?'linear-gradient(transparent,rgba(6,23,39,.65)),':'';
+  element.style.backgroundImage=overlay+'url("'+url+'")';element.style.backgroundSize='cover';element.style.backgroundPosition='center';element.classList.add('has-artwork');return;
+ }
+ const progress=element.querySelector?.('.poster-progress'),image=node('img');image.alt='';image.src=url;image.loading='eager';image.decoding='async';
+ image.onerror=()=>{element.replaceChildren(icon(element.dataset.artSymbol||'library'));if(progress)element.append(progress);};
+ element.replaceChildren(image);if(progress)element.append(progress);
+}
+function bindArtwork(element,item,backdrop=false){
+ if(isLocalItem(item))return;const source=artworkSource(item,backdrop),key=artKey(item,backdrop);
+ element.dataset.artKey=key;element.dataset.artId=source.item;element.dataset.artBackdrop=String(source.backdrop);
+ element.dataset.artSymbol=['Audio','MusicAlbum','MusicArtist','Playlist'].includes(item.Type)?'music':'library';
+ if(backdrop)element.dataset.backdrop='true';const cached=state.images.get(key);if(cached)applyArtwork(element,cached,backdrop);
+}
 function cover(item,square=false){const d=node('div',undefined,'artwork'+(square?' square':''));d.append(icon(item.Type==='Audio'||item.Type==='MusicAlbum'?'music':'library'));bindArtwork(d,item);return d;}
 async function imageBytes(item,backdrop,session,mode){
  if(mode==='mesh')return (await runtime().engine()).webMeshArtwork(session.handle,item,backdrop);
  const url=endpoint('Items/'+item+'/Images/'+(backdrop?'Backdrop':'Primary'),[['maxWidth',backdrop?1200:400],['quality',85]]);
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);imageControllers.add(controller);
  try{const response=await fetch(url,{headers:{Authorization:authorization(session.token)},credentials:'omit',redirect:'error',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});
- if(!response.ok||!['image/jpeg','image/png','image/webp'].includes((response.headers.get('Content-Type')||'').split(';')[0].trim()))throw Error('Artwork unavailable');
+ if(!response.ok)throw Object.assign(Error('Artwork unavailable'),{status:response.status});
+ if(!['image/jpeg','image/png','image/webp'].includes((response.headers.get('Content-Type')||'').split(';')[0].trim()))throw Error('Artwork unavailable');
  const reader=response.body.getReader(),parts=[];let total=0;try{for(;;){const {done,value}=await reader.read();if(done)break;total+=value.length;if(total>2*1024*1024)throw Error('Artwork limit');parts.push(value);}}catch(e){await reader.cancel().catch(()=>{});throw e;}
  const bytes=new Uint8Array(total);let at=0;for(const part of parts){bytes.set(part,at);at+=part.length;}return bytes;
  }finally{clearTimeout(timer);imageControllers.delete(controller);}
+}
+async function authenticatedBytes(path,query,session,signal,limit,expected,timeout=20000){
+ const controller=new AbortController(),cancel=()=>controller.abort(),timer=setTimeout(cancel,timeout);requestControllers.add(controller);signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)controller.abort();
+ try{
+  const response=await fetch(endpoint(path,query),{headers:{Authorization:authorization(session.token)},credentials:'omit',redirect:'error',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});
+  if(!response.ok)throw Object.assign(Error('The server returned HTTP '+response.status+'.'),{status:response.status});
+  if(!response.body)throw Error('The media response was empty.');
+  const reader=response.body.getReader(),parts=expected?null:[],bytes=expected?new Uint8Array(expected):null;let total=0;
+  try{for(;;){const {done,value}=await reader.read();if(done)break;if(total+value.length>limit||(expected&&total+value.length>expected))throw Error('The media response exceeded its size limit.');if(bytes)bytes.set(value,total);else parts.push(value);total+=value.length;}}
+  catch(error){await reader.cancel().catch(()=>{});throw error;}
+  if(expected&&total!==expected)throw Error('The media response was incomplete.');
+  if(bytes)return bytes;const result=new Uint8Array(total);let offset=0;for(const part of parts){result.set(part,offset);offset+=part.length;}return result;
+ }finally{clearTimeout(timer);requestControllers.delete(controller);signal?.removeEventListener('abort',cancel);}
+}
+async function sportsLogoBytes(asset,session,mode){
+ if(!/^[a-f0-9]{64}$/.test(asset))throw Error('Invalid team artwork.');
+ if(mode==='mesh'){const engine=await runtime().engine();if(typeof engine.webMeshSportsLogo!=='function')throw Error('Reload Bluefin to load team logos.');return engine.webMeshSportsLogo(session.handle,asset);}
+ return authenticatedBytes('sports/api/v1/logos/'+asset,[],session,undefined,2*1024*1024,undefined,8000);
 }
 function imageType(bytes){if(bytes.length>2&&bytes[0]===255&&bytes[1]===216&&bytes[2]===255)return 'image/jpeg';
  if(bytes.length>8&&[137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v))return 'image/png';
@@ -716,34 +792,59 @@ function visibleArtwork(){
 function pumpArtwork(){if(!state.session)return;const epoch=state.imageEpoch,session=state.session,mode=state.mode;
  const elements=visibleArtwork(),visible=new Set(elements.map(element=>element.dataset.artKey));
  for(const element of elements){
-  if(artworkActive>=2)break;const key=element.dataset.artKey;if(state.images.has(key)||artworkPending.has(key)||artworkMissing.has(key))continue;
+  if(artworkActive>=(mode==='mesh'?2:4))break;const key=element.dataset.artKey;
+  if(state.images.has(key)||artworkPending.has(key)||(artworkMissing.get(key)||0)>Date.now())continue;
+  artworkMissing.delete(key);
   while(state.images.size+artworkPending.size>=64){
    const evict=Array.from(state.images.keys()).find(candidate=>!visible.has(candidate));
    if(evict===undefined)break;URL.revokeObjectURL(state.images.get(evict));state.images.delete(evict);
   }
   if(state.images.size+artworkPending.size>=64)break;artworkPending.set(key,epoch);artworkActive++;
-  const item=element.dataset.artId,backdrop=element.dataset.backdrop==='true';
-  imageBytes(item,backdrop,session,mode).then(bytes=>{
-   if(epoch!==state.imageEpoch||session!==state.session)return;const url=URL.createObjectURL(new Blob([bytes],{type:imageType(bytes)}));state.images.set(key,url);
+  const item=element.dataset.artId,backdrop=element.dataset.artBackdrop===undefined?element.dataset.backdrop==='true':element.dataset.artBackdrop==='true';
+  (element.dataset.sportsLogo?sportsLogoBytes(element.dataset.sportsLogo,session,mode):imageBytes(item,backdrop,session,mode)).then(bytes=>{
+   if(epoch!==state.imageEpoch||session!==state.session)return;const url=URL.createObjectURL(new Blob([bytes],{type:imageType(bytes)}));state.images.set(key,url);artworkRetries.delete(key);
    for(const target of document.querySelectorAll('[data-art-key]'))if(target.dataset.artKey===key)applyArtwork(target,url,target.dataset.backdrop==='true');
-  }).catch(()=>{if(epoch===state.imageEpoch){if(artworkMissing.size>=256)artworkMissing.delete(artworkMissing.values().next().value);artworkMissing.add(key);}})
+  }).catch(error=>{if(epoch===state.imageEpoch&&session===state.session){
+   if(artworkMissing.size>=256){const oldest=artworkMissing.keys().next().value;artworkMissing.delete(oldest);artworkRetries.delete(oldest);}
+   const attempts=(artworkRetries.get(key)||0)+1;artworkRetries.set(key,error.status===404?3:attempts);
+   artworkMissing.set(key,Date.now()+(error.status===404||attempts>=3?300000:5000*attempts));
+  }})
    .finally(()=>{artworkActive--;if(artworkPending.get(key)===epoch)artworkPending.delete(key);pumpArtwork();});
  }
+ clearTimeout(artworkRetryTimer);
+ const retry=elements.map(element=>element.dataset.artKey).filter(key=>(artworkRetries.get(key)||0)<3).map(key=>artworkMissing.get(key)).filter(value=>value>Date.now());
+ if(retry.length)artworkRetryTimer=setTimeout(pumpArtwork,Math.max(50,Math.min(...retry)-Date.now()+20));
 }
-addEventListener('scroll',()=>{clearTimeout(artworkScrollTimer);artworkScrollTimer=setTimeout(pumpArtwork,80);},{passive:true,capture:true});
+addEventListener('scroll',()=>{clearTimeout(artworkScrollTimer);artworkScrollTimer=setTimeout(pumpArtwork,60);},{passive:true,capture:true});
+addEventListener('resize',pumpArtwork,{passive:true});
+addEventListener('online',()=>{artworkMissing.clear();artworkRetries.clear();pumpArtwork();});
 
-function poster(item){
- const square=['MusicAlbum','MusicArtist'].includes(item.Type),b=button('',()=>perform(()=>openItem(item)),'poster'+(square?' album':'')+(item.Type==='MusicArtist'?' artist':''));
+function poster(item,shape='poster'){
+ const square=['Audio','MusicAlbum','MusicArtist','Playlist'].includes(item.Type),wide=!square&&shape==='landscape';
+ const b=button('',()=>perform(()=>openItem(item)),'poster'+(square?' album':'')+(wide?' landscape':'')+(item.Type==='MusicArtist'?' artist':''));
+ const art=node('div',undefined,'artwork'+(square?' square':wide?' landscape':''));
+ art.append(icon(square?'music':item.Type==='Series'?'shows':'movies'));bindArtwork(art,item,wide);
  const copy=node('span',undefined,'poster-copy');copy.append(node('strong',item.Name));
- if(subtitle(item))copy.append(node('small',subtitle(item)));
+ const detail=item.Type==='Episode'?[item.SeriesName,item.ParentIndexNumber&&item.IndexNumber?'S'+item.ParentIndexNumber+' · E'+item.IndexNumber:null].filter(Boolean).join(' · '):subtitle(item);
+ if(detail)copy.append(node('small',detail));
  const duration=Number(item.RunTimeTicks),position=Number(item.UserData?.PlaybackPositionTicks);
  const progress=duration>0&&position>0?Math.min(100,Math.max(0,100*position/duration)):0;
- if(progress>0){const track=node('span',undefined,'poster-progress'),fill=node('span');fill.style.width=progress+'%';track.append(fill);track.setAttribute('role','progressbar');track.setAttribute('aria-label','Watched');track.setAttribute('aria-valuemin','0');track.setAttribute('aria-valuemax','100');track.setAttribute('aria-valuenow',String(Math.round(progress)));copy.append(track);}
- b.setAttribute('aria-label',[item.Name,subtitle(item),progress>0?Math.round(progress)+' percent watched':''].filter(Boolean).join(', '));
- b.append(cover(item,square),copy);return b;
+ if(progress>0){const track=node('span',undefined,'poster-progress'),fill=node('span');fill.style.width=progress+'%';track.append(fill);track.setAttribute('role','progressbar');track.setAttribute('aria-label','Watched');track.setAttribute('aria-valuemin','0');track.setAttribute('aria-valuemax','100');track.setAttribute('aria-valuenow',String(Math.round(progress)));art.append(track);}
+ b.setAttribute('aria-label',[item.Name,detail,progress>0?Math.round(progress)+' percent watched':''].filter(Boolean).join(', '));
+ b.dataset.focusKey='media|'+id(item.Id);b.append(art,copy);return b;
 }
-function shelf(title,entries){if(!entries.length)return document.createDocumentFragment();const s=node('section',undefined,'shelf');s.append(node('h2',title));const row=node('div',undefined,'shelf-track');for(const item of entries.slice(0,18))row.append(poster(item));s.append(row);return s;}
-function row(item,select=()=>openItem(item),detail=subtitle(item)){const b=button('',()=>perform(select),'list-row'+(item.Type==='Audio'?' song':''));if(item.Type==='Audio')b.append(cover(item,true));else b.append(icon(item.CollectionType==='music'?'music':'library'));const t=node('span',undefined,'grow');t.append(node('strong',item.Name));if(detail)t.append(node('small',detail));b.append(t,icon('chevron'));return b;}
+function shelf(title,entries,shape='landscape'){
+ if(!entries.length)return document.createDocumentFragment();
+ const s=node('section',undefined,'shelf'),heading=node('div',undefined,'section-heading');heading.append(node('h2',title));s.append(heading);
+ const track=node('div',undefined,'shelf-track');track.setAttribute('aria-label',title);
+ for(const item of entries.slice(0,18))track.append(poster(item,shape));s.append(track);return s;
+}
+function row(item,select=()=>openItem(item),detail=subtitle(item)){
+ const audio=item.Type==='Audio',b=button('',()=>perform(select),'list-row'+(audio?' song':''));
+ b.dataset.focusKey='row|'+item.Id;if(audio)b.append(cover(item,true));else b.append(icon(item.CollectionType==='music'?'music':'library'));
+ const text=node('span',undefined,'grow');text.append(node('strong',item.Name));if(detail)text.append(node('small',detail));b.append(text);
+ if(audio&&item.RunTimeTicks>0)b.append(node('small',time(item.RunTimeTicks/10000000),'track-duration'));else b.append(icon('chevron'));return b;
+}
 function programmeTime(item){
  const date=new Date(item.StartDate||'');
  return Number.isFinite(date.valueOf())?date.toLocaleString():'';
@@ -770,13 +871,13 @@ function programmeView(main,item){
 }
 function empty(title,message){const d=node('section',undefined,'empty-state');d.append(icon('library'),node('h2',title),node('p',message,'secondary'));return d;}
 function toolbar(title,back=false){
- const d=node('div',undefined,'toolbar');
- if(back)d.append(action('Back',async()=>{state.route=state.back.pop()||{kind:'home'};await loadRoute();},'plain','back'));
+ const d=node('header',undefined,'toolbar page-header');
+ if(back)d.append(action('Back',async()=>{state.route=state.back.pop()||{kind:'home'};await loadRoute();},'plain back-button','back'));
  else d.append(node('h1',title));
  const utilities=node('div',undefined,'utility-actions');
- const search=button('',()=>openSearch(),'plain','search');search.setAttribute('aria-label','Search all media');
- const collections=action('',()=>navigate('Collections'),'plain','library');collections.setAttribute('aria-label','Collections');
- const account=button('',()=>{state.sheet='account';render();},'plain','account');account.setAttribute('aria-label','Account and settings');
+ const search=button('',()=>openSearch(),'round-control','search');search.setAttribute('aria-label','Search all media');
+ const collections=action('',()=>navigate('Collections'),'round-control','library');collections.setAttribute('aria-label','Collections');
+ const account=button('',()=>{state.sheet='account';render();},'round-control account-control','account');account.setAttribute('aria-label','Account and settings');
  utilities.append(search,collections,account);d.append(utilities);return d;
 }
 function installationLink(){
@@ -846,12 +947,58 @@ function publicSearchView(){
  searchView(main);
  return main;
 }
+function searchBrowse(main,search){
+ const genres=search?.browse?.length?node('section',undefined,'browse-section'):null;
+ if(genres)genres.append(node('h2',search.browseMusic?'Browse Music':'Genres'),genreGrid(search.browse,search.browseMusic));
+ if(genres&&search.browseMusic)main.append(genres);
+ const section=node('section',undefined,'browse-section');section.append(node('h2','Browse Categories'));
+ const grid=node('div',undefined,'browse-grid'),types=[['movies','Movies','movies'],['tvShows','TV Shows','shows'],['music','Music','music'],['sports','Sports','sports'],['liveTv','Live TV','live']];
+ types.forEach(([scope,label,symbol],index)=>{const tile=button(label,()=>startSearch('',{scope}),'browse-tile',symbol);tile.dataset.tone=String(index);grid.append(tile);});
+ section.append(grid);main.append(section);
+ if(genres&&!search.browseMusic)main.append(genres);
+}
+function facetLookup(kind,facets){
+ const input=node('input');input.type='search';input.id='bluefin-find-'+kind;input.maxLength=128;
+ const label=kind==='studios'?'Find a studio':'Find a collection';input.placeholder=label;input.setAttribute('aria-label',label);
+ input.value=facets?.queries?.[kind]||'';input.className='facet-lookup';
+ input.oninput=()=>{
+  if(!facets||facets!==state.facets)return;
+  facets.queries[kind]=input.value;clearTimeout(facets.lookupTimers[kind]);
+  facets.lookupTimers[kind]=setTimeout(()=>lookupSearchFacet(kind,input.value).catch(()=>{}),250);
+ };
+ return input;
+}
+async function lookupSearchFacet(kind,query){
+ if(!['studios','collections'].includes(kind))return;
+ const facets=state.facets,session=state.session,epoch=state.epoch;if(!facets||!session)return;
+ query=String(query).trim().slice(0,128);facets.queries[kind]=query;
+ facets.lookupControllers[kind]?.abort();const controller=facets.lookupControllers[kind]=new AbortController();
+ const current=()=>!pageRetired&&epoch===state.epoch&&session===state.session&&facets===state.facets&&facets.lookupControllers[kind]===controller&&!controller.signal.aborted;
+ facets.lookupBusy.add(kind);delete facets.lookupProblems[kind];
+ if(state.route.kind==='search'&&state.route.refine)render();
+ const path=kind==='studios'?'Studios':'Users/'+session.user+'/Items',params=[['UserId',session.user],['Recursive',true],['Limit',200]];
+ if(kind==='collections')params.push(['IncludeItemTypes','BoxSet']);if(query)params.push(['SearchTerm',query]);
+ try{
+  const value=await api(path,'GET',undefined,params,controller.signal);if(!current())return;
+  facets[kind]=items(value).map(item=>({id:id(item.Id),name:item.Name}));
+  facets.lookupTruncated[kind]=Number(value.TotalRecordCount)>facets[kind].length;
+ }catch(error){if(current()&&error.name!=='AbortError')facets.lookupProblems[kind]=String(error.message||error);}
+ finally{if(current()){facets.lookupBusy.delete(kind);if(state.route.kind==='search'&&state.route.refine)render();}}
+}
+
+function tagRefinement(route,filters,facets){
+ const wrap=node('div'),label=node('label','Service or custom group');label.htmlFor='bluefin-tag-refinement';wrap.append(label);
+ const controls=node('div',undefined,'tag-lookup'),input=node('input'),suggestions=node('datalist');input.id='bluefin-tag-refinement';input.type='text';input.maxLength=512;input.placeholder='Search your server tags';input.value=route.tagDraft??filters.tag;input.setAttribute('list','bluefin-tag-options');suggestions.id='bluefin-tag-options';
+ const suggest=()=>{const query=input.value.trim().toLocaleLowerCase();suggestions.replaceChildren();for(const name of (facets?.tags||[]).filter(name=>!query||name.toLocaleLowerCase().includes(query)).slice(0,128)){const option=node('option');option.value=name;suggestions.append(option);}};
+ input.oninput=()=>{route.tagDraft=input.value;suggest();};suggest();
+ const apply=button('Apply',()=>startSearch(state.query,{...filters,tag:input.value.trim()}));controls.append(input,apply);wrap.append(controls,suggestions);return wrap;
+}
 function searchView(main){
  const route=state.route,filters=cleanSearchFilters(route.filters);
  const form=node('form',undefined,'search-form'),input=node('input');
  form.setAttribute('role','search');
- input.id='bluefin-search';input.type='search';input.placeholder=state.session?'Titles, artists, and channels':'TV show title';input.value=state.query;
- input.setAttribute('aria-label',state.session?'Search all media':'Search TV shows');input.maxLength=256;
+ input.id='bluefin-search';input.type='search';input.placeholder=state.session&&filters.scope!=='publicTv'?'Titles, artists, and channels':'TV show title';input.value=state.query;
+ input.setAttribute('aria-label',state.session&&filters.scope!=='publicTv'?'Search connected media':'Search TV shows');input.maxLength=256;
  input.oninput=()=>{state.query=input.value;};
  const submit=node('button','Search','primary');
  submit.type='submit';submit.id='bluefin-search-submit';
@@ -876,24 +1023,27 @@ function searchView(main){
   route.refine=!route.refine;render();if(route.refine)loadSearchFacets().catch(error=>{state.error=String(error.message||error);render();});
  },'search-filter');
  refine.setAttribute('aria-expanded',String(!!route.refine));
- if(filters.scope!=='sports')tools.append(refine);
+ if(!['sports','publicTv'].includes(filters.scope))tools.append(refine);
  main.append(tools);
- if(route.refine&&filters.scope!=='sports'){
+ if(route.refine&&!['sports','publicTv'].includes(filters.scope)){
   const panel=node('section',undefined,'search-refinements'),facets=state.facets;
-  panel.append(searchChoice('Studio','studio',filters.studioID,[['','All studios'],...(facets?.studios||[]).map(value=>[value.id,value.name])],
-   studioID=>startSearch(state.query,{...filters,studioID}),facets?.pending?.has('studios')||false));
-  panel.append(searchChoice('Tag','tag',filters.tag,[['','All tags'],...(facets?.tags||[]).map(value=>[value,value])],
-   tag=>startSearch(state.query,{...filters,tag}),facets?.pending?.has('tags')||false));
-  panel.append(searchChoice('Collection','collection',filters.collectionID,[['','All collections'],...(facets?.collections||[]).map(value=>[value.id,value.name])],
-   collectionID=>startSearch(state.query,{...filters,collectionID}),facets?.pending?.has('collections')||false));
+  const studio=node('div');studio.append(facetLookup('studios',facets),searchChoice('Studio','studio',filters.studioID,[['','All studios'],...(facets?.studios||[]).map(value=>[value.id,value.name])],
+   studioID=>startSearch(state.query,{...filters,studioID}),facets?.pending?.has('studios')||facets?.lookupBusy?.has('studios')||false));panel.append(studio);
+  panel.append(tagRefinement(route,filters,facets));
+  const collection=node('div');collection.append(facetLookup('collections',facets),searchChoice('Collection','collection',filters.collectionID,[['','All collections'],...(facets?.collections||[]).map(value=>[value.id,value.name])],
+   collectionID=>startSearch(state.query,{...filters,collectionID}),facets?.pending?.has('collections')||facets?.lookupBusy?.has('collections')||false));panel.append(collection);
   main.append(panel);
   if(facets?.loading)main.append(node('p','Loading '+[...facets.pending].join(', ')+'…','loading'));
-  if(facets?.truncated)main.append(node('p','Your server has more refinements than this menu shows. Open Collections to browse all groups.','secondary'));
+  if(facets?.truncated||Object.values(facets?.lookupTruncated||{}).some(Boolean))main.append(node('p','Use a studio or collection name to narrow more matches.','secondary'));
+  for(const problem of Object.values(facets?.lookupProblems||{}))main.append(node('p',problem,'error'));
   if(facets?.problems.length){main.append(node('p',facets.problems.join(' '),'error'),button('Reload refinements',()=>{clearSearchFacets();loadSearchFacets();}));}
  }
  if(hasSearchFacets(filters))main.append(node('p','Filtering your library. The live guide is searched when these refinements are cleared.','secondary'),
   button('Clear refinements',()=>startSearch(state.query,{scope:filters.scope}),'plain'));
- if(search?.route===route&&search.publicTV)main.append(publicTVResults(search.publicTV));
+ if(filters.scope==='publicTv'){
+  if(search?.route===route&&search.publicTV)main.append(publicTVResults(search.publicTV));
+  return;
+ }
  if(search?.route===route)for(const page of search.pages){
   if(!page.items.length)continue;
   const section=node('section',undefined,'search-results');section.append(node('h2',page.title));
@@ -912,64 +1062,307 @@ function searchView(main){
  for(const problem of search?.problems||[])main.append(node('p',problem,'error'));
  const searched=route.query||filters.scope!=='all'||hasSearchFacets(filters);
  if(!route.loading&&!search?.pages.some(page=>page.items.length)){
-  if(!searched)main.append(empty('Search titles, music, and live TV','Enter a title, artist, or channel, or choose a category to browse.'));
+  if(!searched)searchBrowse(main,search);
   else if(!search?.problems.length&&!search?.publicTV?.items.length)main.append(empty('No matches in connected resources','Try a different title or clear your filters.'));
  }
 }
-function sportsView(main){
- const games=state.route.sports||[];
- if(games.length){
-  const grid=node('div',undefined,'sports-grid');
-  for(const game of games){
-   const card=node('section',undefined,'sports-card'),event=game.event||{};
-   card.append(node('small',String(event.league_name||game.kind||'Sports').slice(0,128)),
-    node('h2',String(event.name||game.title||game.native_title||'Sports broadcast').slice(0,256)));
-   for(const team of (Array.isArray(event.competitors)?event.competitors:[]).slice(0,4)){
-    const score=node('div',undefined,'score-row');score.append(node('span',String(team.short_name||team.name||team.abbreviation||'').slice(0,128)),
-     node('strong',String(team.score||'').slice(0,24)));card.append(score);
-   }
-   const start=new Date(game.native_start||game.start||event.date),time=Number.isNaN(start.valueOf())?'':start.toLocaleString();
-   if(event.detail||time)card.append(node('p',String(event.detail||time).slice(0,256),'secondary'));
-   if(uuid(game.channel_id))card.append(action(game.channel_name?'Open '+String(game.channel_name).slice(0,128):'Open channel',
-    ()=>openItem({Id:game.channel_id,Name:game.channel_name||'Live TV',Type:'TvChannel'}),'','live'));
-   grid.append(card);
-  }
-  main.append(grid);
- }
- if(state.rows.length){const list=node('div',undefined,'group');for(const item of state.rows)list.append(row(item));main.append(list);}
- if(!games.length&&!state.rows.length&&!state.route.loading)main.append(empty('Sports for your account','Your server’s selected games and available sports broadcasts will appear here.'));
+const sportsLeagues=[['nhl','NHL'],['nfl','NFL'],['nba','NBA'],['mlb','MLB'],['wnba','WNBA'],['epl','Premier League'],['mls','MLS']];
+let sportsRefreshTimer=null;
+function sportsDay(offset=0){const date=new Date();date.setDate(date.getDate()+offset);return date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0');}
+function sportsDateLabel(value){const date=new Date(value+'T12:00:00');return Number.isFinite(date.valueOf())?date.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}):value;}
+function sportsEnvelope(value,key,league){
+ if(value?.schema!==1||value.provider!=='ESPN'||value.league!==league)throw Error('The server returned invalid sports information.');
+ if(key==='event'){if(!value.event||!/^[0-9]{1,20}$/.test(value.event.id))throw Error('The game could not be loaded.');}
+ else if(!Array.isArray(value[key])||value[key].length>400)throw Error('The server returned too much sports information.');
+ return value;
 }
-function libraryView(){const main=node('main',undefined,'app-main');main.id='content';const route=state.route,title=route.title||(route.kind==='detail'?route.item.Name:state.tab);main.append(toolbar(title,state.back.length>0));if(state.back.length)main.append(node('h1',title));
+function validSportsPreferences(value){
+ if(!Number.isSafeInteger(value?.version)||value.version<0||value.preferences?.schema!==1||!['sports','leagues','conferences','teams','players'].every(key=>Array.isArray(value.preferences[key])&&value.preferences[key].length<=256&&value.preferences[key].every(id=>typeof id==='string'&&id.length<=128)))throw Error('Your Sports preferences could not be read.');
+ return value;
+}
+async function loadSports(route,get,current){
+ route.league=sportsLeagues.some(([key])=>key===route.league)?route.league:'nhl';route.date ||= sportsDay();
+ route.boardLoading=true;route.boardError='';route.guideError='';route.sports=[];
+ const board=get('sports/api/v1/scoreboard',[['league',route.league],['date',route.date]]).then(value=>{
+  current();route.board=sportsEnvelope(value,'events',route.league);route.boardLoading=false;render();
+ },error=>{current();route.boardLoading=false;route.boardError=String(error.message||error);render();});
+ const preferences=get('sports/api/v1/preferences').then(value=>{current();state.sportsPreferences=validSportsPreferences(value);render();},()=>{current();});
+ const guide=get('sports/api/v1/home').then(feed=>{
+  current();if(feed?.schema===1&&Array.isArray(feed.local_broadcasts)&&feed.local_broadcasts.length<=400)route.sports=feed.local_broadcasts;
+ },error=>{current();if(![403,404].includes(error.status))route.guideError='Your local broadcasts could not refresh.';});
+ await Promise.all([board,preferences,guide]);current();
+ if(route.date===sportsDay()||route.board?.events.some(event=>event.status?.state==='in'))scheduleSportsRefresh(route);
+}
+function scheduleSportsRefresh(route){
+ clearTimeout(sportsRefreshTimer);
+ sportsRefreshTimer=setTimeout(()=>{
+  if(pageRetired||state.route!==route)return;
+  if(document.hidden||state.busy||route.loading){scheduleSportsRefresh(route);return;}
+  loadRoute().catch(error=>{if(state.route===route&&error.name!=='AbortError')state.error=String(error.message||error);}).finally(()=>{if(state.route===route)render();});
+ },30000);
+}
+async function loadSportsDetail(route,get,current){
+ const tasks=[
+  get('sports/api/v1/events/'+route.league+'/'+route.event.id).then(value=>{current();route.event=sportsEnvelope(value,'event',route.league).event;route.detailError='';render();},error=>{current();route.detailError=String(error.message||error);}),
+  get('sports/api/v1/standings/'+route.league).then(value=>{current();route.standings=sportsEnvelope(value,'groups',route.league);render();},error=>{current();route.standingsError=String(error.message||error);})
+ ];
+ await Promise.all(tasks);current();if(route.event.status?.state==='in')scheduleSportsRefresh(route);
+}
+async function openSportsEvent(event,league){if(!/^[0-9]{1,20}$/.test(event?.id)||!sportsLeagues.some(([key])=>key===league))throw Error('Invalid game.');state.back.push({...state.route});state.route={kind:'sports_detail',title:'Game',league,event,detailTab:'stats',keyPlays:true,playLimit:60};await loadRoute();}
+function sportsTeamName(team){return String(team?.shortName||team?.name||team?.abbreviation||'Team').slice(0,128);}
+function sportsTeamKey(team,league){return 'espn:'+league+':'+team.id;}
+function sportsFollowed(team,league){const teams=state.sportsPreferences?.preferences?.teams||[];return teams.includes(sportsTeamKey(team,league))||teams.includes(String(team.id));}
+async function saveSportsPreferences(value){
+ const epoch=state.epoch,session=state.session,mode=state.mode;
+ validSportsPreferences(value);const body=JSON.stringify(value.preferences);if(new TextEncoder().encode(body).length>60000)throw Error('Choose fewer teams.');
+ let result;
+ if(mode==='mesh'){
+  const engine=await runtime().engine();assertLive(epoch,session);
+  if(typeof engine.webMeshSportsPreferences!=='function')throw Error('Reload Bluefin to update your teams over this connection.');
+  result=JSON.parse(await engine.webMeshSportsPreferences(session.handle,String(value.version),body));
+ }else{
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);requestControllers.add(controller);
+  try{
+   const response=await fetch(endpoint('sports/api/v1/preferences'),{method:'PUT',headers:{Authorization:authorization(session.token),'Content-Type':'application/json','If-Match':'"'+value.version+'"'},body,credentials:'omit',redirect:'error',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});
+   if(!response.ok)throw Object.assign(Error('The server returned HTTP '+response.status+'.'),{status:response.status});
+   result=await readJson(response,65536);
+  }finally{clearTimeout(timer);requestControllers.delete(controller);}
+ }
+ assertLive(epoch,session);return validSportsPreferences(result);
+}
+async function followSportsTeam(team,league){
+ if(!/^[0-9]{1,20}$/.test(String(team?.id||''))||!sportsLeagues.some(([key])=>key===league))throw Error('This team cannot be followed.');
+ const epoch=state.epoch,session=state.session;
+ const saved=validSportsPreferences(await api('sports/api/v1/preferences'));assertLive(epoch,session);
+ const preferences={...saved.preferences},teams=new Set(preferences.teams),key=sportsTeamKey(team,league);
+ if(teams.has(key)||teams.has(String(team.id))){teams.delete(key);teams.delete(String(team.id));}else teams.add(key);
+ preferences.teams=[...teams];preferences.all_teams=teams.size===0;
+ try{state.sportsPreferences=await saveSportsPreferences({version:saved.version,preferences});}
+ catch(error){
+  assertLive(epoch,session);
+  if(error.status===412||/HTTP 412/.test(String(error.message||error))){state.sportsPreferences=validSportsPreferences(await api('sports/api/v1/preferences'));throw Error('Your teams changed on another device. Tap Follow again to update them.');}
+  throw error;
+ }
+}
+function sportsLogo(team){
+ const logo=node('span',undefined,'team-logo'),match=typeof team?.logo==='string'&&team.logo.match(/^\/sports\/api\/v1\/logos\/([a-f0-9]{64})$/);
+ logo.append(node('span',String(team?.abbreviation||'').slice(0,6)));
+ if(match){logo.dataset.artKey='sports:'+match[1];logo.dataset.sportsLogo=match[1];logo.dataset.artSymbol='sports';const cached=state.images.get(logo.dataset.artKey);if(cached)applyArtwork(logo,cached);}
+ return logo;
+}
+function sportsTeamView(team,league,compact=false){
+ const box=node('div',undefined,'sports-team'+(compact?' compact':''));
+ box.append(sportsLogo(team));const name=node('strong',sportsTeamName(team));box.append(name);
+ if(team?.record)box.append(node('small',String(team.record).slice(0,32)));
+ if(sportsFollowed(team||{},league)){const favorite=node('span','★','team-followed');favorite.setAttribute('aria-label','Following');box.append(favorite);}
+ return box;
+}
+function sportsGameCard(event,league){
+ const card=button('',()=>perform(()=>openSportsEvent(event,league)),'sports-game');
+ const home=event.home||{},away=event.away||{},status=event.status||{};
+ const heading=node('div',undefined,'sports-game-heading');heading.append(node('small',league.toUpperCase()),node('span',status.state==='in'?'LIVE':String(status.detail||''),'game-state'+(status.state==='in'?' is-live':'')));card.append(heading);
+ const match=node('div',undefined,'sports-match'),score=node('div',undefined,'sports-score');
+ if(status.state==='pre'){
+  const date=event.date?new Date(event.date):new Date(NaN);score.append(node('strong',Number.isFinite(date.valueOf())?date.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}):'Scheduled'),node('small',Number.isFinite(date.valueOf())?date.toLocaleDateString(undefined,{month:'short',day:'numeric'}):''));
+ }else score.append(node('strong',String(away.score??'–')+' – '+String(home.score??'–')),node('small',String(status.clock||status.detail||'')));
+ match.append(sportsTeamView(away,league,true),score,sportsTeamView(home,league,true));card.append(match);
+ if(event.broadcasts?.length)card.append(node('small',event.broadcasts.slice(0,4).join(' · '),'sports-broadcasts'));
+ return card;
+}
+function sportsView(main){
+ const route=state.route,league=route.league||'nhl';
+ const controls=node('div',undefined,'sports-controls'),leagues=node('div',undefined,'sports-leagues');
+ leagues.setAttribute('aria-label','League');
+ for(const [key,label]of sportsLeagues){const choice=action(label,async()=>{route.league=key;route.board=null;await loadRoute();});choice.setAttribute('aria-pressed',String(key===league));leagues.append(choice);}
+ controls.append(leagues);main.append(controls);
+ const panel=node('section',undefined,'sports-board'),tabs=node('div',undefined,'sports-segmented');tabs.setAttribute('aria-label','Game day');
+ for(const [label,offset]of[['Yesterday',-1],['Today',0],['Upcoming',1]]){const choice=action(label,async()=>{route.date=sportsDay(offset);route.board=null;await loadRoute();});choice.setAttribute('aria-pressed',String(offset===1?route.date>sportsDay():route.date===sportsDay(offset)));tabs.append(choice);}
+ panel.append(tabs);
+ const heading=node('div',undefined,'sports-date-heading'),previous=action('',async()=>{const d=new Date(route.date+'T12:00:00');d.setDate(d.getDate()-1);route.date=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');route.board=null;await loadRoute();},'plain','back');previous.setAttribute('aria-label','Previous day');
+ const next=action('',async()=>{const d=new Date(route.date+'T12:00:00');d.setDate(d.getDate()+1);route.date=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');route.board=null;await loadRoute();},'plain','chevron');next.setAttribute('aria-label','Next day');
+ heading.append(previous,node('h2',sportsDateLabel(route.date||sportsDay())),next);panel.append(heading);
+ const events=route.board?.events||[],following=events.filter(event=>sportsFollowed(event.home||{},league)||sportsFollowed(event.away||{},league)),rest=events.filter(event=>!following.includes(event));
+ for(const [title,games]of[['My Teams',following],['All Games',rest]]){
+  if(!games.length)continue;const group=node('section',undefined,'sports-day-group');group.append(node('h3',title));
+  for(const event of games)group.append(sportsGameCard(event,league));panel.append(group);
+ }
+ if(route.boardLoading&&!events.length)panel.append(node('p','Loading games…','loading'));
+ else if(route.boardError)panel.append(node('p',route.boardError,'error'),action('Try again',loadRoute,'plain'));
+ else if(!events.length)panel.append(empty('No games on this day','Choose another date or league.'));
+ if(route.board)panel.append(node('p',(route.board.stale?'Last available scores':'Scores')+' · '+route.board.provider,'sports-attribution'));
+ main.append(panel);
+ if(route.sports?.length){
+  const guide=node('section',undefined,'sports-local');guide.append(node('h2','From Your Live TV'));
+  for(const game of route.sports.slice(0,12)){const entry=action(String(game.native_title||'Sports broadcast').slice(0,256),()=>openItem({Id:game.channel_id,Name:game.channel_name||'Live TV',Type:'TvChannel'}),'local-broadcast','live');entry.append(node('small',[game.channel_name,game.native_start?new Date(game.native_start).toLocaleString():null].filter(Boolean).join(' · ')));guide.append(entry);}main.append(guide);
+ }
+ if(route.guideError)main.append(node('p',route.guideError,'secondary'));
+}
+function sportsStats(event){
+ const panel=node('section',undefined,'sports-detail-card');panel.append(node('h2','Team Stats'));
+ const stats=Array.isArray(event.stats)?event.stats.slice(0,60):[];
+ if(!stats.length){panel.append(node('p','Team statistics are not available for this game yet.','secondary'));return panel;}
+ for(const stat of stats){
+  const row=node('div',undefined,'sports-stat'),labels=node('div',undefined,'sports-stat-labels');
+  labels.append(node('strong',String(stat.away??'–')),node('span',String(stat.label||stat.name||'').slice(0,128)),node('strong',String(stat.home??'–')));row.append(labels);
+  const a=Number.parseFloat(stat.away),h=Number.parseFloat(stat.home);
+  if(Number.isFinite(a)&&Number.isFinite(h)&&a>=0&&h>=0&&a+h>0){const bars=node('div',undefined,'sports-stat-bars'),away=node('span'),home=node('span');away.style.width=(a/(a+h)*100)+'%';home.style.width=(h/(a+h)*100)+'%';bars.append(away,home);row.append(bars);}
+  panel.append(row);
+ }return panel;
+}
+function sportsPlays(route){
+ const panel=node('section',undefined,'sports-plays'),tabs=node('div',undefined,'sports-segmented');
+ for(const [label,key]of[['All Plays',false],['Key Plays',true]]){const choice=button(label,()=>{route.keyPlays=key;route.playLimit=60;render();});choice.setAttribute('aria-pressed',String(route.keyPlays===key));tabs.append(choice);}
+ panel.append(tabs);const plays=(Array.isArray(route.event.plays)?route.event.plays:[]).filter(play=>!route.keyPlays||play.scoring).slice().reverse();let period=null;
+ if(!plays.length)panel.append(empty('No plays to show',route.keyPlays?'Scoring plays will appear here when they are available.':'Play-by-play is not available for this game yet.'));
+ for(const play of plays.slice(0,route.playLimit||60)){
+  if(play.period!==period){period=play.period;if(period!=null)panel.append(node('h3','Period '+period,'sports-period'));}
+  const card=node('article',undefined,'sports-play-card');card.append(node('p',String(play.text||'').slice(0,1024)));const detail=node('div',undefined,'sports-play-meta');detail.append(node('span',String(play.clock||'')),node('span',String(play.awayScore??'–')+' · '+String(play.homeScore??'–')));card.append(detail);panel.append(card);
+ }
+ if(plays.length>(route.playLimit||60))panel.append(button('More plays',()=>{route.playLimit=(route.playLimit||60)+60;render();}));return panel;
+}
+function sportsStandings(route){
+ const panel=node('section',undefined,'sports-standings');
+ if(!route.standings){panel.append(node('p',route.standingsError||'Loading standings…',route.standingsError?'error':'loading'));return panel;}
+ const columns=route.league==='nhl'?[['gamesPlayed','GP'],['wins','W'],['losses','L'],['overtimeLosses','OTL'],['points','PTS']]:['epl','mls'].includes(route.league)?[['gamesPlayed','P'],['wins','W'],['ties','D'],['losses','L'],['points','PTS']]:route.league==='nfl'?[['wins','W'],['losses','L'],['ties','T'],['winPercent','PCT']]:[['wins','W'],['losses','L'],['winPercent','PCT'],['gamesBehind','GB']];
+ for(const group of route.standings.groups){
+  const card=node('section',undefined,'sports-detail-card');card.append(node('h2',String(group.name||'Standings').slice(0,128)));
+  const table=node('table',undefined,'standings-table'),head=node('thead'),heading=node('tr');heading.append(node('th','Team'));for(const [,label]of columns)heading.append(node('th',label));head.append(heading);table.append(head);
+  const body=node('tbody');for(const entry of (group.entries||[]).slice(0,64)){
+   const row=node('tr'),team=node('td'),label=node('span',sportsTeamName(entry.team));team.append(node('span',entry.rank==null?'':String(entry.rank),'standing-rank'),sportsLogo(entry.team),label);if(sportsFollowed(entry.team||{},route.league))team.append(node('span','★','standing-followed'));row.append(team);
+   for(const [key]of columns)row.append(node('td',String(entry.stats?.[key]??'–')));body.append(row);
+  }table.append(body);card.append(table);panel.append(card);
+ }return panel;
+}
+function sportsDetailView(main){
+ const route=state.route,event=route.event,league=route.league,home=event.home||{},away=event.away||{};
+ const header=node('section',undefined,'sports-game-detail');
+ if(/^[a-f0-9]{6}$/i.test(away.color||''))header.style.setProperty('--away-color','#'+away.color);
+ if(/^[a-f0-9]{6}$/i.test(home.color||''))header.style.setProperty('--home-color','#'+home.color);
+ header.append(node('p',league.toUpperCase(),'sports-league-label'));
+ const score=node('div',undefined,'sports-detail-score');
+ for(const [team,side]of[[away,'away'],[home,'home']]){
+  const block=node('div',undefined,'sports-detail-team '+side);
+  if(event.status?.state!=='pre')block.append(node('strong',String(team.score??'–'),'large-score'));
+  block.append(sportsTeamView(team,league));
+  const follow=action(sportsFollowed(team,league)?'Following':'Follow',()=>followSportsTeam(team,league),'team-follow','star');follow.setAttribute('aria-pressed',String(sportsFollowed(team,league)));block.append(follow);score.append(block);
+ }
+ const middle=node('div',undefined,'sports-game-state');middle.append(node('strong',String(event.status?.detail||'')));if(event.status?.state==='pre'&&event.date){const date=new Date(event.date);middle.append(node('span',date.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'})),node('small',date.toLocaleDateString()));}else if(event.status?.clock)middle.append(node('small',event.status.clock));score.append(middle);header.append(score);
+ if(event.broadcasts?.length)header.append(node('p','Coverage: '+event.broadcasts.join(' · '),'sports-broadcasts'));
+ main.append(header);
+ const tabs=node('div',undefined,'sports-detail-tabs');tabs.setAttribute('aria-label','Game information');
+ for(const [key,label]of[['stats','Stats'],['plays','Play-by-Play'],['standings','Standings']]){const tab=button(label,()=>{route.detailTab=key;render();});tab.setAttribute('aria-pressed',String(route.detailTab===key));tabs.append(tab);}main.append(tabs);
+ if(route.detailError)main.append(node('p',route.detailError,'error'));
+ main.append(route.detailTab==='plays'?sportsPlays(route):route.detailTab==='standings'?sportsStandings(route):sportsStats(event));
+ const info=node('section',undefined,'sports-game-info');info.append(node('h2','Game Information'));if(event.date)info.append(node('p',new Date(event.date).toLocaleString()));if(event.venue)info.append(node('p',event.venue));if(event.broadcasts?.length)info.append(node('p',event.broadcasts.join(' · ')));info.append(node('small','Scores and game information · ESPN'));main.append(info);
+}
+function featureView(item,eyebrow){
+ const hero=node('section',undefined,'hero featured'),copy=node('div',undefined,'hero-copy');bindArtwork(hero,item,true);
+ const kind={Movie:'Movie',Series:'TV Show',Episode:'Episode',Audio:'Song',MusicAlbum:'Album'}[item.Type]||'Your Library';
+ copy.append(node('p',eyebrow||kind,'hero-eyebrow'),node('h2',item.Name));
+ const meta=[item.ProductionYear,item.OfficialRating,item.RunTimeTicks>0?Math.round(item.RunTimeTicks/600000000)+' min':null].filter(Boolean).join(' · ');
+ if(meta)copy.append(node('p',meta,'hero-meta'));
+ if(item.Overview)copy.append(node('p',item.Overview,'hero-overview'));
+ const controls=node('div',undefined,'actions');
+ const playable=['Movie','Episode','MusicVideo','Audio'].includes(item.Type)||(item.Type==='TvChannel'&&state.mode==='mesh');
+ if(playable)controls.append(action(resumeTicks(item)>0?'Resume':'Play',()=>play(item,[item],0),'primary','play'));
+ else if(item.Type!=='TvChannel')controls.append(action(item.Type==='Series'?'View Episodes':'Open',()=>openItem(item),'primary','play'));
+ if(state.route.kind!=='detail'&&['Movie','Episode','MusicVideo','Audio','TvChannel'].includes(item.Type))controls.append(action('Details',()=>openItem(item),'hero-secondary','info'));
+ copy.append(controls);hero.append(copy);return hero;
+}
+function genreGrid(entries,music=false){
+ const grid=node('div',undefined,'browse-grid');
+ entries.forEach((item,index)=>{
+  const tile=action(item.Name,()=>openCollection(item.Name,music?'MusicAlbum,Audio':null,null,null,{genre:id(item.Id)}),'browse-tile','music');
+  tile.style.setProperty('--tile-tone',String(index%6));tile.dataset.tone=String(index%6);
+  if(item.ImageTags?.Primary||item.BackdropImageTags?.length)bindArtwork(tile,item,true);
+  grid.append(tile);
+ });return grid;
+}
+function musicLibraryView(main){
+ const browse=node('div',undefined,'music-browse');
+ const entries=[
+  ['Playlists','queue',()=>openCollection('Playlists','Playlist')],
+  ['Artists','artist',()=>openCollection('Artists','MusicArtist')],
+  ['Albums','album',()=>openCollection('Albums','MusicAlbum')],
+  ['Songs','music',()=>openCollection('Songs','Audio')],
+  ['Favorites','star',()=>openCollection('Favorites','MusicAlbum,Audio',null,null,{favorite:true})],
+  ['Music Videos','shows',()=>openCollection('Music Videos','MusicVideo')],
+  ['Genres','genres',async()=>{state.back.push({...state.route});state.route={kind:'genres',title:'Genres'};await loadRoute();}],
+  ['On This Device','download',openLocalMusic]
+ ];
+ for(const [name,symbol,task]of entries){
+  const entry=action(name,task,'library-link',symbol),chevron=icon('chevron');chevron.setAttribute('class','chevron');entry.append(chevron);browse.append(entry);
+ }
+ main.append(browse);
+ for(const section of state.shelves)main.append(shelf(section.title,section.items,'square'));
+ if(!state.shelves.some(section=>section.items.length)&&!state.route.loading)main.append(empty('Your music, together','Albums from your connected library appear here. Open Songs to browse individual tracks.'));
+}
+function pagination(main,route){
+ if(!route.total)return;
+ const nav=node('nav',undefined,'pagination');nav.setAttribute('aria-label','Library pages');
+ if(route.start>0)nav.append(action('Previous',async()=>{route.start=Math.max(0,route.start-100);await loadRoute();},'plain','back'));
+ nav.append(node('span',(route.start||0)+1+'–'+Math.min((route.start||0)+state.rows.length,route.total)+' of '+route.total,'secondary'));
+ if((route.start||0)+state.rows.length<route.total)nav.append(action('Next',async()=>{route.start=(route.start||0)+100;await loadRoute();},'plain','chevron'));
+ main.append(nav);
+}
+function collectionView(main,route){
+ const audio=route.type==='Audio',header=route.headerItem;
+ if(header&&['MusicAlbum','Playlist','MusicArtist'].includes(header.Type)){
+  const summary=node('section',undefined,'album-header'),art=cover(header,true),copy=node('div',undefined,'album-heading');
+  copy.append(node('h2',header.Name),node('p',subtitle(header),'secondary'));
+  if(header.Overview)copy.append(node('p',header.Overview,'album-description'));
+  if(audio&&state.rows.length){const controls=node('div',undefined,'actions');controls.append(action('Play',()=>play(state.rows[0],state.rows,0),'primary','play'),action('Shuffle',()=>playShuffled(state.rows),'','shuffle'));copy.append(controls);}
+  summary.append(art,copy);main.append(summary);
+ }else if(audio&&state.rows.length){const controls=node('div',undefined,'actions music-actions');controls.append(action('Play',()=>play(state.rows[0],state.rows,0),'primary','play'),action('Shuffle',()=>playShuffled(state.rows),'','shuffle'));main.append(controls);}
+ const list=node('div',undefined,audio?'group track-list':route.kind==='live'?'group channel-list':'catalog-grid'+(route.type==='Episode'?' episode-grid':''));
+ state.rows.forEach((item,index)=>{
+  if(audio){const entry=row(item,()=>play(item,state.rows,index));if(header){entry.classList.add('album-track');entry.prepend(node('span',String(item.IndexNumber||index+1),'track-number'));}list.append(entry);}
+  else list.append(route.kind==='live'?row(item):poster(item,route.type==='Episode'?'landscape':'poster'));
+ });
+ main.append(list);
+ if(!state.rows.length&&!route.loading)main.append(empty('No items to show','Try another collection or refresh your library.'));
+ if(route.kind==='collection')pagination(main,route);
+}
+function libraryView(){
+ const main=node('main',undefined,'app-main');main.id='content';
+ const route=state.route,title=route.kind==='music'?'Library':route.title||(route.kind==='detail'?route.item.Name:state.tab);
+ main.dataset.page=route.kind;main.append(toolbar(title,state.back.length>0));
+ if(state.back.length&&!['detail','sports_detail'].includes(route.kind))main.append(node('h1',title));
  if(route.kind==='search')main.classList.add('search-screen');
  if(route.kind==='local_music'||route.kind==='local_search')localMusicView(main);
- else if(route.kind==='local_connect'){main.append(empty('Connect to your live TV','Open your server’s Bluefin address or use a device invitation to access its channels.'),action('Connect account',openAccountConnection,'primary'));
- }
+ else if(route.kind==='local_connect'){main.append(empty('Connect to your live TV','Open your server’s Bluefin address or use a device invitation to access its channels.'),action('Connect account',openAccountConnection,'primary'));}
  else if(route.kind==='home'){
-  const feature=state.featured;
-  if(feature){
-   const hero=node('section',undefined,'hero featured'),copy=node('div',undefined,'hero-copy');bindArtwork(hero,feature,true);
-   copy.append(node('small','FEATURED'),node('h2',feature.Name));if(subtitle(feature))copy.append(node('p',subtitle(feature)));
-   const actions=node('div',undefined,'actions');
-   if(['Movie','Episode','Audio','TvChannel'].includes(feature.Type))actions.append(action(resumeTicks(feature)>0?'Resume':'Play',()=>play(feature,[feature],0),'primary','play'));
-   actions.append(action('Details',()=>openItem(feature),'hero-secondary','info'));copy.append(actions);hero.append(copy);main.append(hero);
-  }
-  for(const shelfValue of state.shelves)main.append(shelf(shelfValue.title,shelfValue.items));
-  if(!feature&&!route.loading)main.append(empty('Browse your library','Open Collections to see your libraries.'));
- }
- else if(route.kind==='sports')sportsView(main);
- else if(route.kind==='library'){const collections=group('Collections');for(const item of state.rows)collections.append(row(item));if(!state.rows.length&&!state.busy)collections.append(node('p','No libraries are available to this account.','secondary'));main.append(collections);}
- else if(route.kind==='music'){
-  main.append(node('h2','Your library','music-section-title'));
-  const browse=node('div',undefined,'music-browse');
-  for(const [name,type,symbol]of[['Playlists','Playlist','queue'],['Artists','MusicArtist','account'],['Albums','MusicAlbum','library'],['Songs','Audio','music']]){
-   const entry=action(name,()=>openCollection(name,type,null),'',symbol),chevron=icon('chevron');chevron.setAttribute('class','chevron');entry.append(chevron);browse.append(entry);
-  }
-  const local=action('Music on this device',openLocalMusic,'','download'),chevron=icon('chevron');chevron.setAttribute('class','chevron');local.append(chevron);browse.append(local);main.append(browse);for(const s of state.shelves)main.append(shelf(s.title,s.items));if(!state.shelves.some(s=>s.items.length)&&!state.busy)main.append(empty('Your music, in one place','Albums from your connected library will appear here. Browse Songs to find individual tracks.'));}
+  if(state.featured)main.append(featureView(state.featured,resumeTicks(state.featured)>0?'Continue Watching':'Picked for You'));
+  for(const section of state.shelves)main.append(shelf(section.title,section.items));
+  if(!state.featured&&!route.loading)main.append(empty('Browse your library','Open Collections to see your libraries.'));
+ }else if(route.kind==='catalog'){
+  if(state.featured&&(route.start||0)===0)main.append(featureView(state.featured,'Recently Added'));
+  if(route.favorites?.length&&(route.start||0)===0)main.append(shelf('Your Favorites',route.favorites));
+  if(route.recent?.length&&(route.start||0)===0)main.append(shelf('New to Your Library',route.recent));
+  const section=node('section',undefined,'catalog-section');section.append(node('h2','All '+route.title));
+  const grid=node('div',undefined,'catalog-grid');for(const item of state.rows)grid.append(poster(item));section.append(grid);main.append(section);pagination(main,route);
+ }else if(route.kind==='sports')sportsView(main);
+ else if(route.kind==='sports_detail')sportsDetailView(main);
+ else if(route.kind==='library'){
+  const collections=group();for(const item of state.rows)collections.append(row(item));main.append(collections);
+  if(!state.rows.length&&!route.loading)main.append(empty('Your collections','Libraries available to your account will appear here.'));
+ }else if(route.kind==='music')musicLibraryView(main);
+ else if(route.kind==='genres'){main.append(genreGrid(state.rows,true));if(!state.rows.length&&!route.loading)main.append(empty('No genres yet','Genres appear when music in your library includes genre metadata.'));}
  else if(route.kind==='search')searchView(main);
  else if(route.kind==='programme')programmeView(main,route.item);
- else if(route.kind==='collection'||route.kind==='live'){if(route.kind==='live'&&state.mode!=='mesh')main.append(node('p','You can browse channels here. Live TV playback is not yet available on this server’s web connection.','secondary'));const audio=route.type==='Audio';if(audio&&state.rows.length){const a=node('div',undefined,'actions');a.append(action('Play',()=>play(state.rows[0],state.rows,0),'','play'),action('Shuffle',()=>playShuffled(state.rows),'','shuffle'));main.append(a);}const list=node('div',undefined,audio||route.kind==='live'?'group':'catalog-grid');for(const item of state.rows)list.append(audio||route.kind==='live'?row(item):poster(item));main.append(list);if(!state.rows.length&&!state.busy)main.append(empty('No items to show','Try another collection or refresh your library.'));if(route.kind==='collection'){const a=node('div',undefined,'actions');if(route.start>0)a.append(action('Previous page',async()=>{route.start=Math.max(0,route.start-100);await loadRoute();}));if(route.start+state.rows.length<route.total)a.append(action('Next page',async()=>{route.start+=100;await loadRoute();}));main.append(a);}}
- else if(route.kind==='detail'){const item=route.item;main.append(cover(item,item.Type==='Audio'));main.lastChild.style.maxWidth='360px';main.append(node('h2',item.Name),node('p',subtitle(item),'secondary'));if(item.Type==='TvChannel'&&state.mode!=='mesh')main.append(node('p','Live TV playback is not yet available on this server’s web connection.','secondary'));else if(['Movie','Episode','Audio','TvChannel'].includes(item.Type))main.append(action(resumeTicks(item)>0?'Resume':'Play',()=>play(item,[item],0),'primary','play'));main.append(node('p',item.Overview||''));}
- if(state.busy||route.loading)main.append(node('p',route.kind==='search'?'Searching your account…':'Loading your library…','loading'));main.append(status());if(state.error)main.append(action('Try again',loadRoute));return main;}
+ else if(route.kind==='collection'||route.kind==='live'){
+  if(route.kind==='live'&&state.mode!=='mesh')main.append(node('p','Browse your channels. Use the paired Bluefin app to play live TV.','secondary'));
+  collectionView(main,route);
+ }else if(route.kind==='detail'){
+  const item=route.item;main.append(featureView(item));
+  if(item.Type==='TvChannel'&&state.mode!=='mesh')main.append(node('p','Use the paired Bluefin app to play this live channel.','secondary'));
+  const information=node('section',undefined,'detail-information');information.append(node('h2','About'),node('p',item.Overview||'No description is available for this title.'));
+  if(item.Genres?.length)information.append(node('p',item.Genres.join(' · '),'secondary'));main.append(information);
+ }
+ if(route.loading&&!state.rows.length&&!state.shelves.length&&!state.featured){const skeleton=node('div',undefined,'loading-skeleton');skeleton.setAttribute('aria-hidden','true');for(let i=0;i<4;i++)skeleton.append(node('div'));main.append(skeleton);}
+ if(state.busy||route.loading)main.append(node('p',route.kind==='search'?'Searching your account…':'Loading your library…','loading'));
+ main.append(status());if(state.error)main.append(action('Try again',loadRoute));return main;
+}
 function tabbar(){
  const nav=node('nav',undefined,'tabbar');nav.setAttribute('aria-label','Categories');
  const brand=node('div',undefined,'nav-brand');brand.append(icon('waves'),node('strong','Bluefin'));nav.append(brand);
@@ -1128,6 +1521,7 @@ async function stopPlayback(remote=true){
  clearInterval(leaseRenew);clearInterval(progressTimer);clearInterval(meshPoll);
  leaseRenew=progressTimer=meshPoll=null;playbackGeneration++;
  let failure=clearOutput(previous);
+ try{await retireSing(previous);}catch(error){failure=failure||error;}
  try{
   if(previous?.mode==='mesh'){
    const engine=runtime()?.ready();
@@ -1150,7 +1544,7 @@ async function play(item,queue=[item],index=0,original=null){
  const epoch=state.epoch,session=state.session,mode=state.mode,base=state.base,preserve=queue===state.queue&&state.player?.mode===state.mode,presentation={expanded:state.expanded,panel:state.nowPanel};assertLive(epoch,session);
  if(!session)throw Error('Sign in to play your library.');
  if(mode!=='mesh'&&item.Type==='TvChannel')throw Error('Live TV playback is not yet available on this server’s web connection.');
- if(!['Audio','Movie','Episode','TvChannel'].includes(item.Type))return openItem(item);
+ if(!['Audio','Movie','Episode','MusicVideo','TvChannel'].includes(item.Type))return openItem(item);
  await stopPlayback();assertLive(epoch,session);
  const generation=playbackGeneration;
  const current=()=>{assertLive(epoch,session);if(generation!==playbackGeneration)throw Error('Playback was canceled.');};
@@ -1200,7 +1594,7 @@ async function play(item,queue=[item],index=0,original=null){
   }else{media.src=route.url;media.load();}
   leaseRenew=setInterval(async()=>{
    if(pageRetired||generation!==playbackGeneration||session!==state.session)return;
-   try{if(lease.kind==='cookie')await leaseRequest(lease.renewUrl,'POST',session);else if(!media.paused)await leaseRequest(lease.mediaUrl,'HEAD',session,false,'tv');}
+   try{if(lease.kind==='cookie')await leaseRequest(lease.renewUrl,'POST',session);else if(!playbackPaused())await leaseRequest(lease.mediaUrl,'HEAD',session,false,'tv');}
    catch(_){if(pageRetired||generation!==playbackGeneration||session!==state.session)return;
     await stopPlayback(false).catch(()=>{});state.error='Playback stopped because its access lease could not be renewed.';render();}
   },60000);
@@ -1212,12 +1606,170 @@ async function play(item,queue=[item],index=0,original=null){
   document.body.classList.toggle('audio-playing',item.Type==='Audio');
  document.body.classList.toggle('video-playing',item.Type!=='Audio');document.body.classList.add('with-player');render();
 }
-async function reportProgress(phase){const p=state.player;if(!p||p.mode!=='https'||p.session!==state.session||!p.reportingReady)return;await api('Sessions/Playing'+(phase==='started'?'':phase==='stopped'?'/Stopped':'/Progress'),'POST',{ItemId:p.item.Id,PlaySessionId:p.lease.playSessionId,PositionTicks:Math.floor(playbackTimeline().position*10000000),IsPaused:media.paused,CanSeek:p.item.Type!=='TvChannel',PlayMethod:'Transcode'});}
+async function reportProgress(phase){const p=state.player;if(!p||p.mode!=='https'||p.session!==state.session||!p.reportingReady)return;await api('Sessions/Playing'+(phase==='started'?'':phase==='stopped'?'/Stopped':'/Progress'),'POST',{ItemId:p.item.Id,PlaySessionId:p.lease.playSessionId,PositionTicks:Math.floor(playbackTimeline().position*10000000),IsPaused:playbackPaused(),CanSeek:p.item.Type!=='TvChannel',PlayMethod:'Transcode'});}
 async function skip(forward,automatic=false){if(!state.player||!state.queue.length)return;let next=state.queueIndex+(forward?1:-1);if(automatic&&state.repeat==='one')next=state.queueIndex;if(next>=state.queue.length){if(state.repeat!=='all')return stopPlayback();next=0;}if(next<0){if(state.repeat!=='all')next=0;else next=state.queue.length-1;}await play(state.queue[next],state.queue,next);}
-function toggle(){if(media.paused)media.play().catch(()=>{state.error='Press Play in the media controls.';render();});else media.pause();updatePlayback();}
+function toggle(){const player=state.player;if(player?.sing?.active){runSing(player,singPosition(player.sing),!player.sing.paused).catch(error=>{state.error=String(error.message||error);render();});return;}if(media.paused)media.play().catch(()=>{state.error='Press Play in the media controls.';render();});else media.pause();updatePlayback();}
 
 // Lyrics use the authenticated library route and the current media clock. Word
 // timing is rendered only when the server supplies real, valid UTF-16 cues.
+function playbackPaused(){const player=state.player;return player?.sing?.active?player.sing.paused:player?.mode==='mesh'&&player.snapshot?player.snapshot.paused!==false:media.paused;}
+function singSupported(player){return player?.mode!=='local'&&player?.item.Type==='Audio'&&(state.capabilities?.karaokePreparation?.enabled===true||!!player.sing);}
+function validateSingManifest(value,item,sourceId){
+ const hash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+ if(!value||!uuid(value.itemId)||id(value.itemId)!==id(item.Id)||!hash(value.revision)||!Number.isFinite(value.durationSeconds)||value.durationSeconds<=0||value.durationSeconds>14400)throw Error('Invalid Sing package.');
+ if(!uuid(sourceId)||!uuid(value.mediaSourceId)||id(value.mediaSourceId)!==id(sourceId))throw Error('Sing audio does not match the playing version.');
+ for(const role of['accompaniment','leadVocal'])if(!hash(value[role]?.sha256)||!Number.isSafeInteger(value[role]?.bytes)||value[role].bytes<46||value[role].bytes>64*1024*1024)throw Error('Invalid Sing stem.');
+ if(value.timingKind==='none'){if(value.timeline!=null)throw Error('Unexpected Sing timing.');}
+ else if(![undefined,'word','syllable'].includes(value.timingKind)||!value.timeline)throw Error('Invalid Sing timing.');
+ return value;
+}
+function singPcm(bytes,duration){
+ if(!(bytes instanceof Uint8Array)||bytes.length<46||bytes.length>64*1024*1024)throw Error('Invalid Sing audio.');
+ const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength),text=(start,end)=>String.fromCharCode(...bytes.slice(start,end)),rate=view.getUint32(24,true),channels=view.getUint16(22,true),size=view.getUint32(40,true);
+ if(text(0,4)!=='RIFF'||text(8,16)!=='WAVEfmt '||text(36,40)!=='data'||view.getUint32(16,true)!==16||view.getUint16(20,true)!==1||![1,2].includes(channels)||rate<8000||rate>192000||view.getUint16(34,true)!==16||view.getUint16(32,true)!==channels*2||view.getUint32(28,true)!==rate*channels*2||size+44!==bytes.length||view.getUint32(4,true)+8!==bytes.length||size%(channels*2)!==0)throw Error('Sing audio is not supported PCM.');
+ const frames=size/(channels*2);if(Math.abs(frames/rate-duration)>.05)throw Error('Sing audio does not match the song duration.');return {rate,channels,frames};
+}
+function singLyrics(manifest){
+ if(manifest.timingKind==='none')return null;
+ const timeline=manifest.timeline;
+ if(!Number.isFinite(timeline?.offsetSeconds)||!Array.isArray(timeline.lines)||!timeline.lines.length||timeline.lines.length>4096)throw Error('Invalid Sing lyrics.');
+ let lastStart=-1,totalTokens=0;const ids=new Set();
+ const lines=timeline.lines.map(line=>{
+  if(typeof line.id!=='string'||!line.id||line.id.length>128||ids.has(line.id)||!Array.isArray(line.tokens)||!line.tokens.length||line.tokens.length>1000||(totalTokens+=line.tokens.length)>16384)throw Error('Invalid Sing lyric line.');
+  ids.add(line.id);let text='',end=0;const cues=[];
+  for(const token of line.tokens){
+   if(typeof token.text!=='string'||!token.text||token.text.length>4096||!Number.isFinite(token.start)||!Number.isFinite(token.end)||token.start<end||token.end<=token.start||token.end+timeline.offsetSeconds>manifest.durationSeconds+.05)throw Error('Invalid Sing lyric token.');
+   const from=text.length;text+=token.text;cues.push({Position:from,EndPosition:text.length,Start:Math.round(token.start*10000000),End:Math.round(token.end*10000000)});end=token.end;
+  }
+  if(line.tokens[0].start<lastStart)throw Error('Sing lyric lines are out of order.');lastStart=line.tokens[0].start;
+  return {Text:text,Start:cues[0].Start,Cues:cues};
+ });
+ return {...normalizeLyrics({Metadata:{Offset:Math.round(timeline.offsetSeconds*10000000)},Lyrics:lines}),status:'ready',follow:true,controller:new AbortController()};
+}
+async function singStem(player,sing,manifest,role){
+ const stem=manifest[role==='lead-vocal'?'leadVocal':'accompaniment'],query=manifest.mediaSourceId?[['MediaSourceId',manifest.mediaSourceId]]:[];
+ let bytes;
+ if(player.mode==='mesh'){
+  const engine=await runtime().engine();sing.current();
+  if(typeof engine.webMeshKaraokeStem!=='function')throw Error('Reload Bluefin to use Sing over this connection.');
+  bytes=await engine.webMeshKaraokeStem(player.handle,id(player.item.Id),manifest.mediaSourceId||undefined,manifest.revision,role,stem.bytes);
+ }else bytes=await authenticatedBytes('Bluefin/Karaoke/'+id(player.item.Id)+'/'+manifest.revision+'/Stems/'+role,query,player.session,sing.controller.signal,64*1024*1024,stem.bytes,60000);
+ sing.current();if(!(bytes instanceof Uint8Array))bytes=new Uint8Array(bytes);
+ if(bytes.byteLength!==stem.bytes)throw Error('The Sing download was incomplete.');
+ const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),actual=Array.from(digest,value=>value.toString(16).padStart(2,'0')).join('');sing.current();
+ if(actual!==stem.sha256)throw Error('The Sing download did not pass verification. Try again.');return bytes;
+}
+function singDelay(ms,signal){return new Promise((resolve,reject)=>{const cancel=()=>{clearTimeout(timer);reject(aborted());};const timer=setTimeout(()=>{signal.removeEventListener('abort',cancel);resolve();},ms);signal.addEventListener('abort',cancel,{once:true});if(signal.aborted)cancel();});}
+async function prepareSing(player){
+ if(state.player!==player||!singSupported(player)||['loading','queued','preparing','ready'].includes(player.sing?.status))return;
+ const selection=player.mode==='mesh'?player.snapshot?.mediaSourceId:player.lease?.mediaSourceId;
+ if(!uuid(selection)){state.error='This server must identify the playing version before Sing can start. Refresh Bluefin and try again.';render();return;}
+ if(player.sing)await retireSing(player);if(state.player!==player)return;
+ const Context=globalThis.AudioContext||globalThis.webkitAudioContext;
+ if(!Context||!crypto.subtle){state.error='This browser cannot start the Sing audio engine.';render();return;}
+ const epoch=state.epoch,session=state.session,generation=playbackGeneration;
+ const sing=player.sing={status:'loading',active:false,paused:true,position:0,vocalLevel:.15,controller:new AbortController(),context:new Context({latencyHint:'interactive'}),base:state.base,requestId:null,transportRevision:0,buffers:null};
+ sing.current=()=>{if(pageRetired||state.player!==player||player.sing!==sing||epoch!==state.epoch||session!==state.session||generation!==playbackGeneration||sing.controller.signal.aborted)throw aborted();};
+ render();
+ try{
+  await sing.context.resume();sing.current();await sing.context.suspend();sing.current();
+  let manifest;const query=[['MediaSourceId',id(selection)]];
+  try{manifest=await api('Bluefin/Karaoke/'+id(player.item.Id),'GET',undefined,query,sing.controller.signal);}
+  catch(error){
+   sing.current();if(!notFound(error))throw error;
+   if(state.capabilities?.karaokePreparation?.enabled!==true)throw Error('Sing is not available for this song.');
+   sing.requestId=crypto.randomUUID();let status=await api('Bluefin/Karaoke/'+id(player.item.Id)+'/Preparation','POST',{requestId:sing.requestId,...(selection?{mediaSourceId:selection}:{})},[],sing.controller.signal);
+   const deadline=Date.now()+15*60*1000;
+   for(;;){
+    sing.current();
+    if(!uuid(status?.itemId)||id(status.itemId)!==id(player.item.Id)||!uuid(status?.jobId)||id(status.jobId)!==id(sing.requestId)||!['queued','preparing','ready','unavailable','failed','cancelling','cancelled'].includes(status.state))throw Error('Invalid Sing preparation response.');
+    if(status.state==='ready'){
+     sing.preparationFinished=true;
+     if(!uuid(status.mediaSourceId)||id(status.mediaSourceId)!==id(selection))throw Error('Sing preparation selected a different version of this song.');
+     break;
+    }
+    if(!['queued','preparing'].includes(status.state))throw Error(({durationUnsupported:'This song is too long for automatic Sing preparation.',unsupportedSource:'Sing is unavailable for this version of the song.',busy:'The server is preparing another song. Try again shortly.',timingRequired:'This server needs supplied Sing timing for this song.'})[status.reason]||'Sing preparation could not finish. Your song can keep playing.');
+    sing.status=status.state;render();if(Date.now()>deadline)throw Error('Sing preparation is taking too long. Try again.');
+    await singDelay(Math.min(10000,Math.max(1000,Number(status.retryAfterMilliseconds)||2000)),sing.controller.signal);sing.current();
+    status=await api('Bluefin/Karaoke/'+id(player.item.Id)+'/Preparation/'+sing.requestId,'GET',undefined,[],sing.controller.signal);
+   }
+   sing.current();
+   manifest=await api('Bluefin/Karaoke/'+id(player.item.Id),'GET',undefined,query,sing.controller.signal);
+  }
+  sing.current();sing.manifest=validateSingManifest(manifest,player.item,selection);sing.preparedLyrics=singLyrics(manifest);sing.status='loading';render();
+  const files=await Promise.all(['accompaniment','lead-vocal'].map(role=>singStem(player,sing,manifest,role)));sing.current();
+  const formats=files.map(bytes=>singPcm(bytes,manifest.durationSeconds));
+  if(formats[0].rate!==formats[1].rate||formats[0].channels!==formats[1].channels||formats[0].frames!==formats[1].frames)throw Error('The Sing tracks are not synchronized.');
+  if(manifest.durationSeconds*sing.context.sampleRate*formats[0].channels*4*2>256*1024*1024)throw Error('This Sing package is too large for browser playback. Open it in the Bluefin app.');
+  const buffers=await Promise.all(files.map(bytes=>sing.context.decodeAudioData(bytes.buffer)));sing.current();
+  if(buffers.some(buffer=>buffer.numberOfChannels!==formats[0].channels||Math.abs(buffer.duration-manifest.durationSeconds)>.05)||buffers[0].length!==buffers[1].length||buffers[0].sampleRate!==buffers[1].sampleRate)throw Error('The Sing audio clocks do not match.');
+  sing.buffers=buffers;sing.duration=buffers[0].duration;sing.status='ready';render();
+ }catch(error){
+  if(player.sing===sing&&state.player===player&&!sing.controller.signal.aborted){sing.status='error';sing.message=String(error.message||error);await disposeSingAudio(sing);render();await cancelSingPreparation(player,sing);}
+ }
+}
+function singPosition(sing){return Math.min(sing.duration||0,Math.max(0,sing.position+(sing.paused?0:Math.max(0,sing.context.currentTime-sing.startedAt))));}
+function stopSingNodes(sing){sing.transportRevision++;for(const source of sing.nodes||[]){source.onended=null;try{source.stop();}catch(_){}source.disconnect();}sing.nodes=[];}
+async function runSing(player,position,paused=false){
+ const sing=player.sing;if(!sing?.active||!sing.buffers)return;
+ sing.current();sing.position=Math.max(0,Math.min(sing.duration,position));sing.paused=true;stopSingNodes(sing);
+ const revision=sing.transportRevision;
+ if(paused){await sing.context.suspend();updatePlayback();return;}
+ await sing.context.resume();sing.current();if(revision!==sing.transportRevision)return;
+ const when=sing.context.currentTime+.035;
+ const vocal=sing.vocalGain=sing.context.createGain(),backing=sing.context.createGain();vocal.gain.value=sing.vocalLevel;backing.gain.value=1;vocal.connect(sing.context.destination);backing.connect(sing.context.destination);
+ sing.gains?.forEach(gain=>gain.disconnect());sing.gains=[backing,vocal];
+ sing.nodes=sing.buffers.map((buffer,index)=>{const source=sing.context.createBufferSource();source.buffer=buffer;source.connect(index?vocal:backing);return source;});
+ sing.nodes[0].onended=()=>{if(state.player!==player||player.sing!==sing||revision!==sing.transportRevision||sing.paused)return;sing.position=sing.duration;sing.paused=true;updatePlayback();skip(true,true).catch(error=>{state.error=String(error.message||error);render();});};
+ sing.startedAt=when;sing.paused=false;for(const source of sing.nodes)source.start(when,sing.position);updatePlayback();
+}
+async function activateSing(player){
+ const sing=player.sing;if(state.player!==player||sing?.status!=='ready')return;
+ const position=playbackTimeline().position;sing.current();
+ if(player.mode==='mesh')runtime().ready().webMeshControl(player.handle,'pause',1);else media.pause();
+ sing.active=true;sing.originalLyrics=player.lyrics;if(sing.preparedLyrics)player.lyrics=sing.preparedLyrics;
+ state.nowPanel='lyrics';state.expanded=true;await runSing(player,position);sing.current();
+ sing.timer=setInterval(()=>{if(state.player===player&&player.sing===sing&&!document.hidden)updatePlayback();},250);render();
+}
+async function disposeSingAudio(sing){stopSingNodes(sing);clearInterval(sing.timer);sing.gains?.forEach(gain=>gain.disconnect());sing.gains=[];sing.buffers=null;try{await sing.context.close();}catch(_){}}
+async function cancelSingPreparation(player,sing){
+ if(!sing.requestId||sing.preparationFinished||sing.preparationCancelled)return;
+ sing.preparationCancelled=true;
+ const path='Bluefin/Karaoke/'+id(player.item.Id)+'/Preparation/'+sing.requestId;
+ try{if(player.mode==='mesh'){const engine=await runtime().engine();await engine.webMeshRequest(player.handle,'DELETE',path,'[]',undefined);}
+ else await http(path,'DELETE',undefined,[],player.session,true,true,sing.base);}catch(_){}
+}
+async function retireSing(player){
+ const sing=player?.sing;if(!sing)return;sing.controller.abort();sing.active=false;await disposeSingAudio(sing);
+ await cancelSingPreparation(player,sing);
+ if(player.sing===sing)player.sing=null;
+}
+async function leaveSing(player){
+ const sing=player.sing;if(!sing)return;const position=sing.active?singPosition(sing):null,paused=sing.paused,lyrics=sing.originalLyrics;
+ await retireSing(player);if(state.player!==player)return;if(lyrics)player.lyrics=lyrics;
+ if(position!==null){
+  if(player.mode==='https'&&position<(player.offset||0)){
+   const item={...player.item,UserData:{...player.item.UserData,PlaybackPositionTicks:Math.floor(position*10000000)}};await play(item,state.queue,state.queueIndex);if(paused)media.pause();
+  }else{seekPlayback(position);if(player.mode==='mesh')runtime().ready().webMeshControl(player.handle,'pause',paused?1:0);else if(!paused)await media.play();}
+ }
+ render();
+}
+function singControls(player){
+ const sing=player.sing;if(!sing)return document.createDocumentFragment();
+ const panel=node('section',undefined,'sing-controls');
+ if(sing.active){
+  const label=node('label','Lead vocal'),value=node('span',Math.round(sing.vocalLevel*100)+'%');label.htmlFor='bluefin-vocal-level';label.append(value);
+  const range=node('input');range.id='bluefin-vocal-level';range.type='range';range.min='0';range.max='1';range.step='.01';range.value=String(sing.vocalLevel);range.setAttribute('aria-label','Lead vocal level');
+  range.oninput=()=>{if(player.sing!==sing)return;sing.vocalLevel=Number(range.value);value.textContent=Math.round(sing.vocalLevel*100)+'%';if(sing.vocalGain)sing.vocalGain.gain.setTargetAtTime(sing.vocalLevel,sing.context.currentTime,.015);};
+  panel.append(label,range);
+ }else{
+  const message=sing.status==='ready'?'Ready to sing':sing.status==='queued'?'Waiting to prepare this song…':sing.status==='preparing'?'Preparing vocals on your server…':sing.status==='error'?sing.message:'Loading Sing audio…';panel.append(node('p',message,'sing-status'));
+  if(sing.status==='ready')panel.append(button('Start Sing',()=>activateSing(player).catch(error=>{state.error=String(error.message||error);render();}),'primary','mic'));
+  else if(sing.status!=='error')panel.append(button('Cancel',()=>leaveSing(player),'plain'));
+ }
+ return panel;
+}
+
 function normalizeLyrics(value){
  if(!value||!Array.isArray(value.Lyrics)||value.Lyrics.length>4096)throw Error('Invalid lyrics.');
  const offset=value.Metadata?.Offset??0;if(!Number.isSafeInteger(offset))throw Error('Invalid lyric offset.');
@@ -1266,7 +1818,7 @@ async function loadLyrics(player,force=false){
  if(current()&&state.expanded&&state.nowPanel==='lyrics')render();
 }
 function lyricsPosition(){
- const p=state.player;
+ const p=state.player;if(p?.sing?.active)return playbackTimeline().position;
  // The mesh decoder owns this same media element. Read its exact clock once
  // the current plan is ready instead of animating between periodic snapshots.
  if(p?.mode==='mesh'&&p.snapshot?.plan&&media.__bluefinOutputOwner&&Number.isFinite(media.currentTime))return (p.offset||0)+media.currentTime;
@@ -1301,7 +1853,7 @@ function updateLyrics(force=false){
  view.follow.hidden=lyrics.follow;
 }
 function syncLyricsAnimation(){
- const active=()=>!pageRetired&&document.visibilityState!=='hidden'&&state.expanded&&state.nowPanel==='lyrics'&&lyricsView?.player===state.player&&state.player?.lyrics?.status==='ready'&&state.player.lyrics.timed.length>0&&!media.paused;
+ const active=()=>!pageRetired&&document.visibilityState!=='hidden'&&state.expanded&&state.nowPanel==='lyrics'&&lyricsView?.player===state.player&&state.player?.lyrics?.status==='ready'&&state.player.lyrics.timed.length>0&&!playbackPaused();
  if(!active()){if(lyricsFrame!==null)globalThis.cancelAnimationFrame?.(lyricsFrame);lyricsFrame=null;return;}
  if(lyricsFrame!==null||typeof globalThis.requestAnimationFrame!=='function')return;
  const frame=()=>{lyricsFrame=null;if(!active())return;updateLyrics();lyricsFrame=globalThis.requestAnimationFrame(frame);};
@@ -1313,7 +1865,7 @@ async function seekLyric(player,index){
  const position=Math.max(0,line.start+lyrics.offset);lyrics.follow=true;
  // A resumed audio lease starts at an offset. Earlier lyrics require a fresh
  // scoped lease so tapping a line always seeks to that line, not the old start.
- if(player.mode==='https'&&position<(player.offset||0)){
+ if(!player.sing?.active&&player.mode==='https'&&position<(player.offset||0)){
   const item={...player.item,UserData:{...player.item.UserData,PlaybackPositionTicks:Math.floor(position*10000000)}};
   await play(item,state.queue,state.queueIndex);
  }else seekPlayback(position);
@@ -1371,30 +1923,29 @@ function miniPlayer(){
  const p=state.player;if(!p||p.item.Type!=='Audio')return document.createDocumentFragment();
  const e=node('section',undefined,'mini-player');e.setAttribute('aria-label','Now playing');e.append(cover(p.item,true));
  const title=button('',()=>{state.expanded=true;render();},'grow');title.setAttribute('aria-label','Open Now Playing for '+p.item.Name);title.append(node('strong',p.item.Name),node('small',p.item.AlbumArtist||p.item.Artists?.join(', ')||subtitle(p.item)));e.append(title);
- const playButton=button('',toggle,'plain',media.paused?'play':'pause');playButton.setAttribute('aria-label',media.paused?'Play':'Pause');playButton.dataset.playToggle='';e.append(playButton);
+ const playButton=button('',toggle,'plain',playbackPaused()?'play':'pause');playButton.setAttribute('aria-label',playbackPaused()?'Play':'Pause');playButton.dataset.playToggle='';e.append(playButton);
  const next=action('',()=>skip(true),'plain','next');next.setAttribute('aria-label','Next track');next.disabled=state.busy||(state.repeat!=='all'&&state.queueIndex+1>=state.queue.length);e.append(next);return e;
 }
 function nowPlaying(){
- const p=state.player;if(!p){state.expanded=false;return document.createDocumentFragment();}
- const e=node('section',undefined,'sheet now-playing-sheet');e.setAttribute('role','dialog');e.setAttribute('aria-modal','true');e.setAttribute('aria-label','Now Playing');e.id='bluefin-dialog';e.tabIndex=-1;
+ const player=state.player;if(!player){state.expanded=false;return document.createDocumentFragment();}
+ const sheet=node('section',undefined,'sheet now-playing-sheet');sheet.setAttribute('role','dialog');sheet.setAttribute('aria-modal','true');sheet.setAttribute('aria-label','Now Playing');sheet.id='bluefin-dialog';sheet.tabIndex=-1;
+ const ambience=node('div',undefined,'now-ambience');ambience.setAttribute('aria-hidden','true');bindArtwork(ambience,player.item);
  const inner=node('div',undefined,'now-playing'),bar=node('div',undefined,'toolbar');
  const close=button('',()=>{state.expanded=false;render();},'plain','down');close.setAttribute('aria-label','Close Now Playing');
- bar.append(close,node('span','NOW PLAYING','now-caption'),action('Stop',()=>stopPlayback(),'plain'));inner.append(bar);
- const layout=node('div',undefined,'now-layout'),stage=node('div',undefined,'now-stage');
- if(state.nowPanel==='lyrics')stage.append(lyricPanel(p));
- else if(state.nowPanel==='queue')stage.append(queuePanel());
- else{const art=node('div',undefined,'now-art');art.id='now-playing-panel';art.append(icon('music'));bindArtwork(art,p.item);stage.append(art);}
- layout.append(stage);
+ bar.append(close,node('span',player.sing?.active?'BLUEFIN SING':'NOW PLAYING','now-caption'),action('Stop',()=>stopPlayback(),'plain'));inner.append(bar);
+ const layout=node('div',undefined,'now-layout'),primary=node('div',undefined,'now-primary'),stage=node('div',undefined,'now-stage'),art=node('div',undefined,'now-art');
+ layout.dataset.panel=state.nowPanel;
+ if(state.nowPanel==='artwork')art.id='now-playing-panel';
+ art.append(icon('music'));bindArtwork(art,player.item);stage.append(art);primary.append(stage);
  const controls=node('div',undefined,'now-controls'),title=node('div',undefined,'now-track-title');
- title.append(node('h1',p.item.Name),node('p',p.item.AlbumArtist||p.item.Artists?.join(', ')||''));
- controls.append(title);if(p.item.Album||p.mode==='local')controls.append(node('p',p.mode==='local'?'Local file · '+p.item.Album:p.item.Album,'now-source'));
- const timeline=playbackTimeline(),seek=node('input');seek.type='range';seek.min=String(timeline.minimum);seek.max=String(Math.max(timeline.duration,timeline.minimum+1));seek.step='.1';
- seek.value=String(timeline.position);seek.disabled=p.item.Type==='TvChannel'||timeline.duration<=0;seek.setAttribute('aria-label','Playback position');seek.dataset.seek='';seek.oninput=()=>seekPlayback(Number(seek.value));
- const times=node('div',undefined,'time-row'),position=node('span',time(timeline.position)),remaining=node('span','−'+time(timeline.duration-timeline.position));
- position.dataset.position='';remaining.dataset.remaining='';times.append(position,remaining);controls.append(seek,times);
+ title.append(node('h1',player.item.Name),node('p',player.item.AlbumArtist||player.item.Artists?.join(', ')||''));controls.append(title);
+ if(player.mode==='local')controls.append(node('p','Local file'+(player.item.Album?' · '+player.item.Album:''),'now-source'));
+ const timeline=playbackTimeline(),seek=node('input');seek.type='range';seek.min=String(timeline.minimum);seek.max=String(Math.max(timeline.duration,timeline.minimum+1));seek.step='.1';seek.value=String(timeline.position);seek.disabled=timeline.duration<=0;
+ seek.setAttribute('aria-label','Playback position');seek.dataset.seek='';seek.oninput=()=>seekPlayback(Number(seek.value));
+ const times=node('div',undefined,'time-row'),position=node('span',time(timeline.position)),remaining=node('span','−'+time(timeline.duration-timeline.position));position.dataset.position='';remaining.dataset.remaining='';times.append(position,remaining);controls.append(seek,times);
  const transport=node('div',undefined,'transport'),shuffle=button('',toggleShuffle,state.shuffle?'on':'','shuffle');shuffle.setAttribute('aria-label','Shuffle');shuffle.setAttribute('aria-pressed',String(state.shuffle));shuffle.disabled=state.queue.length<2;
  const previous=action('',()=>skip(false),'','previous');previous.setAttribute('aria-label','Previous track');
- const toggleButton=button('',toggle,'main-play',media.paused?'play':'pause');toggleButton.dataset.playToggle='';toggleButton.setAttribute('aria-label',media.paused?'Play':'Pause');
+ const toggleButton=button('',toggle,'main-play',playbackPaused()?'play':'pause');toggleButton.dataset.playToggle='';toggleButton.setAttribute('aria-label',playbackPaused()?'Play':'Pause');
  const next=action('',()=>skip(true),'','next');next.setAttribute('aria-label','Next track');next.disabled=state.busy||(state.repeat!=='all'&&state.queueIndex+1>=state.queue.length);
  const repeat=button('',()=>{state.repeat=({off:'all',all:'one',one:'off'})[state.repeat];syncLocalQueue();render();},state.repeat==='off'?'':'on','repeat');repeat.setAttribute('aria-label','Repeat: '+state.repeat);repeat.setAttribute('aria-pressed',String(state.repeat!=='off'));
  transport.append(shuffle,previous,toggleButton,next,repeat);controls.append(transport);
@@ -1402,12 +1953,21 @@ function nowPlaying(){
  for(const [label,panel,symbol]of[['Lyrics','lyrics','lyrics'],['Queue','queue','queue']]){
   const choice=button(label,()=>{state.nowPanel=state.nowPanel===panel?'artwork':panel;render();},'',symbol);choice.setAttribute('aria-pressed',String(state.nowPanel===panel));choice.setAttribute('aria-controls','now-playing-panel');options.append(choice);
  }
- if(typeof media.webkitShowPlaybackTargetPicker==='function'){const output=button('AirPlay',()=>media.webkitShowPlaybackTargetPicker(),'','airplay');output.setAttribute('aria-label','Choose AirPlay speakers');options.append(output);}
- controls.append(options);layout.append(controls);inner.append(layout,status());e.append(inner);return e;
+ if(singSupported(player)){
+  const sing=button('Sing',()=>{
+   const task=player.sing?.active?leaveSing(player):player.sing?.status==='ready'?activateSing(player):prepareSing(player);
+   Promise.resolve(task).catch(error=>{if(state.player===player){state.error=String(error.message||error);render();}});
+  },'','mic');
+  sing.setAttribute('aria-pressed',String(!!player.sing?.active));sing.disabled=['loading','queued','preparing'].includes(player.sing?.status);options.append(sing);
+ }
+ if(typeof media.webkitShowPlaybackTargetPicker==='function'&&!player.sing?.active){const output=button('AirPlay',()=>media.webkitShowPlaybackTargetPicker(),'','airplay');output.setAttribute('aria-label','Choose AirPlay speakers');options.append(output);}
+ controls.append(options,singControls(player));primary.append(controls);layout.append(primary);
+ if(state.nowPanel==='lyrics'||state.nowPanel==='queue'){const secondary=node('div',undefined,'now-secondary');secondary.append(state.nowPanel==='lyrics'?lyricPanel(player):queuePanel());layout.append(secondary);}
+ inner.append(layout,status());sheet.append(ambience,inner);return sheet;
 }
 function updatePlayback(){
  const timeline=playbackTimeline();
- for(const b of document.querySelectorAll('[data-play-toggle]')){b.replaceChildren(icon(media.paused?'play':'pause'));b.setAttribute('aria-label',media.paused?'Play':'Pause');}
+ for(const b of document.querySelectorAll('[data-play-toggle]')){b.replaceChildren(icon(playbackPaused()?'play':'pause'));b.setAttribute('aria-label',playbackPaused()?'Play':'Pause');}
  for(const e of document.querySelectorAll('[data-position]'))e.textContent=time(timeline.position);
  for(const e of document.querySelectorAll('[data-remaining]'))e.textContent='−'+time(timeline.duration-timeline.position);
  for(const e of document.querySelectorAll('[data-seek]')){e.min=String(timeline.minimum);e.max=String(Math.max(timeline.duration,timeline.minimum+1));e.disabled=!timeline.duration;if(document.activeElement!==e)e.value=String(timeline.position);}
@@ -1427,12 +1987,12 @@ async function signOut(){
  state.mode='https';state.base=hostedBase();state.server=null;state.options={};state.remember=false;
  if(cleanup)throw Error('Signed out in this tab. Remote cleanup is not confirmed; '+String(cleanup.message||cleanup));
 }
-function clearImages(){state.imageEpoch++;clearTimeout(artworkScrollTimer);for(const controller of imageControllers)controller.abort();imageControllers.clear();artworkPending.clear();artworkMissing.clear();for(const url of state.images.values())URL.revokeObjectURL(url);state.images.clear();}
+function clearImages(){state.imageEpoch++;clearTimeout(artworkScrollTimer);clearTimeout(artworkRetryTimer);for(const controller of imageControllers)controller.abort();imageControllers.clear();artworkPending.clear();artworkMissing.clear();artworkRetries.clear();for(const url of state.images.values())URL.revokeObjectURL(url);state.images.clear();}
 function render(){
  if(pageRetired)return;
  lyricsView=null;
  const active=document.activeElement,activeId=active?.id,activeKey=active?.dataset?.focusKey;
- const selection=activeId==='bluefin-search'?[active.selectionStart,active.selectionEnd,active.selectionDirection]:null;
+ const selection=active?.tagName==='INPUT'&&['search','text'].includes(active.type)?[active.selectionStart,active.selectionEnd,active.selectionDirection]:null;
  const videoModal=!state.capability&&!!state.player&&state.player.item.Type!=='Audio'&&!state.sheet&&!state.expanded;
  const modal=!!state.capability||!!state.sheet||state.expanded||videoModal;
  if(modal&&!modalWasOpen)focusReturn={id:activeId,key:activeKey};
@@ -1513,15 +2073,15 @@ media.addEventListener('loadedmetadata',applyMediaMetadata);
 media.addEventListener('durationchange',applyMediaMetadata);
 media.addEventListener('canplay',applyMediaMetadata);
 media.addEventListener('encrypted',()=>{if(state.player?.mode!=='local'||pageRetired)return;stopPlayback(false).catch(()=>{});state.error='This file is protected. Play it through its licensed provider or choose an unprotected local file.';render();});
-media.addEventListener('ended',()=>{if(pageRetired||!state.player||!media.ended)return;perform(async()=>{await reportProgress('stopped').catch(()=>{});await skip(true,true);});});
-media.addEventListener('error',()=>{if(pageRetired||!media.getAttribute('src'))return;if(state.player?.mode==='local'){stopPlayback(false).catch(()=>{});state.error='This local file could not play. Its format may be unsupported or protected. Choose another file.';}else state.error='This media could not play. Try another title or refresh your library.';render();});
+media.addEventListener('ended',()=>{if(pageRetired||!state.player||state.player.sing?.active||!media.ended)return;perform(async()=>{await reportProgress('stopped').catch(()=>{});await skip(true,true);});});
+media.addEventListener('error',()=>{if(pageRetired||state.player?.sing?.active||!media.getAttribute('src'))return;if(state.player?.mode==='local'){stopPlayback(false).catch(()=>{});state.error='This local file could not play. Its format may be unsupported or protected. Choose another file.';}else state.error='This media could not play. Try another title or refresh your library.';render();});
 window.addEventListener('pagehide',()=>{
  if(pageRetired)return;
  const p=state.player,session=state.session,mode=state.mode,base=state.base;
  pageRetired=true;state.epoch++;state.pairingView++;playbackGeneration++;
  for(const controller of requestControllers)controller.abort();requestControllers.clear();
  clearTimeout(state.inviteTimer);clearInterval(leaseRenew);clearInterval(progressTimer);clearInterval(meshPoll);
- state.player=null;retireLyrics(p);clearOutput(p);
+ state.player=null;retireLyrics(p);clearOutput(p);retireSing(p).catch(()=>{});
  try{runtime()?.ready()?.webMeshPageExit();}catch(_){}
  if(mode!=='mesh'){
   if(p?.lease)releaseLease(p.lease,p.session,true).catch(()=>{});

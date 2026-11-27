@@ -9,6 +9,7 @@ const source=name=>fs.readFileSync(path.join(__dirname,'..',name),'utf8');
 class Element{
  constructor(tag){this.tagName=tag.toUpperCase();this.children=[];this.dataset={};this.style={setProperty(name,value){this[name]=String(value);},getPropertyValue(name){return this[name]||'';}};this.attributes={};this.listeners={};this.value='';this.text='';this.className='';this.classList={add(){},remove(){},toggle(){}};}
  append(...values){this.children.push(...values);}
+ prepend(...values){this.children.unshift(...values);}
  replaceChildren(...values){this.children=values;}
  setAttribute(k,v){this.attributes[k]=String(v);}
  getAttribute(k){return this.attributes[k]||null;}
@@ -72,7 +73,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  Object.defineProperty(context,'localStorage',{get(){throw Error('Default view touched localStorage');}});
  Object.defineProperty(context,'sessionStorage',{get(){throw Error('Default view touched sessionStorage');}});
  vm.runInContext(source('local-music.js'),context);
- const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={loadLyrics,pumpArtwork,clearImages,state,connect,signIn,navigate,openItem,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,startSearch,openSearch,searchCall,loadMoreSearch,loadSearchFacets,recordHomeSearch,clearHomeSearchHistory,importInvitationImage:readInvitationImage};})();');
+ const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={lookupSearchFacet,artworkSource,artKey,validateSingManifest,singPcm,singLyrics,prepareSing,activateSing,retireSing,runSing,seekLyric,sportsLogo,followSportsTeam,loadLyrics,pumpArtwork,clearImages,state,connect,signIn,navigate,openItem,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,startSearch,openSearch,searchCall,loadMoreSearch,loadSearchFacets,recordHomeSearch,clearHomeSearchHistory,importInvitationImage:readInvitationImage};})();');
  vm.runInContext(script,context);
  return {context,ui:context.contract,root,video,requests,events,item,pending};
 }
@@ -698,9 +699,13 @@ test('public TV discovery works without any connected peer and keeps catalog req
  assert(t.root.textContent.includes('Streaming availability for these results is unverified.'));
  assert(!findElement(t.root,e=>String(e.src).includes('unrelated.test')));
  await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
- await t.ui.startSearch('stage');
+ await t.ui.startSearch('private library title');
+ await t.ui.startSearch('private TV title',{scope:'tvShows'});
+ assert.equal(t.requests.filter(r=>new URL(r.url).hostname==='api.tvmaze.com').length,1);
+ await t.ui.startSearch('stage',{scope:'publicTv'});
  const publicRequests=t.requests.filter(r=>new URL(r.url).hostname==='api.tvmaze.com');
  assert.equal(publicRequests.length,2);
+ assert.equal(new URL(publicRequests[1].url).searchParams.get('q'),'stage');
  assert(publicRequests.every(r=>r.options.headers===undefined&&r.options.credentials==='omit'));
 });
 
@@ -771,12 +776,14 @@ test('refinements stay lazy and publish studios while tags are still loading',as
   await until(()=>t.ui.state.facets.studios.length===1);
   assert.equal(t.ui.state.facets.loading,true);
   const studioMenu=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-studio');
-  const tagMenu=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-tag');
+  const tagInput=findElement(t.root,e=>e.tagName==='INPUT'&&e.id==='bluefin-tag-refinement');
   assert(studioMenu.children.some(option=>option.textContent==='Account studio'));
-  assert.equal(studioMenu.disabled,false);assert.equal(tagMenu.disabled,true);
+  assert.equal(studioMenu.disabled,false);assert.notEqual(tagInput.disabled,true);
+  assert.equal(findElement(t.root,e=>e.tagName==='DATALIST'&&e.id==='bluefin-tag-options').children.length,0);
  }finally{finishTags?.();await loading;}
  assert.equal(t.ui.state.facets.loading,false);
- assert.equal(findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-tag').disabled,false);
+ assert.notEqual(findElement(t.root,e=>e.tagName==='INPUT'&&e.id==='bluefin-tag-refinement').disabled,true);
+ assert(findElement(t.root,e=>e.tagName==='DATALIST'&&e.id==='bluefin-tag-options').children.some(option=>option.value==='Service: Account'));
  await t.ui.loadSearchFacets();assert.equal(t.requests.filter(isFacet).length,3);
 });
 
@@ -794,13 +801,12 @@ test('pending refinements survive a search route change and preserve selected fi
   assert.equal(signals[0].aborted,false);
   assert.equal(t.requests.filter(request=>new URL(request.url).pathname==='/Items/Filters2').length,1);
   const studioMenu=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-studio');
-  const tagMenu=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-tag');
-  assert.equal(studioMenu.value,studio);assert.equal(tagMenu.value,'Service: Account');
-  assert(tagMenu.children.some(option=>option.value==='Service: Account'));
+  const tagInput=findElement(t.root,e=>e.tagName==='INPUT'&&e.id==='bluefin-tag-refinement');
+  assert.equal(studioMenu.value,studio);assert.equal(tagInput.value,'Service: Account');
   assert.equal(t.ui.state.route.filters.studioID,studio);assert.equal(t.ui.state.route.filters.tag,'Service: Account');
  }finally{for(const release of releases)release();await loading;await new Promise(setImmediate);}
  assert.equal(findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-studio').value,studio);
- assert.equal(findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-tag').value,'Service: Account');
+ assert.equal(findElement(t.root,e=>e.tagName==='INPUT'&&e.id==='bluefin-tag-refinement').value,'Service: Account');
  assert.equal(t.ui.state.facets.tags[0],'Service: Account');
 });
 
@@ -956,4 +962,197 @@ test('lyrics use the authenticated mesh request and its owned audio clock withou
  assert.equal(lyricLine(t.root,1).getAttribute('aria-current'),'true');assert.equal(lyricLine(t.root,2).getAttribute('aria-current'),null);
  missing=true;await t.ui.loadLyrics(player,true);assert.equal(player.lyrics.status,'missing');assert.equal(t.requests.length,0);
  await t.ui.signOut();
+});
+
+
+function singFixture({onRequest,manifestChange}={}){
+ const sourceId='99999999999949998999999999999999',bytes=new Uint8Array(16044),view=new DataView(bytes.buffer);
+ const put=(at,text)=>{for(let i=0;i<text.length;i++)bytes[at+i]=text.charCodeAt(i);};
+ put(0,'RIFF');view.setUint32(4,bytes.length-8,true);put(8,'WAVEfmt ');view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,8000,true);view.setUint32(28,16000,true);view.setUint16(32,2,true);view.setUint16(34,16,true);put(36,'data');view.setUint32(40,16000,true);
+ const hash=require('node:crypto').createHash('sha256').update(bytes).digest('hex');
+ const manifest={itemId:'22222222222242228222222222222222',mediaSourceId:sourceId,revision:'a'.repeat(64),durationSeconds:1,timingKind:'none',accompaniment:{bytes:bytes.length,sha256:hash},leadVocal:{bytes:bytes.length,sha256:hash}};
+ manifestChange?.(manifest);
+ const contexts=[];
+ class AudioContext{
+  constructor(){this.currentTime=10;this.sampleRate=8000;this.state='suspended';this.sources=[];this.destination={};contexts.push(this);}
+  async resume(){this.state='running';}
+  async suspend(){this.state='suspended';}
+  async close(){this.state='closed';}
+  async decodeAudioData(buffer){const data=new DataView(buffer),channels=data.getUint16(22,true),sampleRate=data.getUint32(24,true),length=data.getUint32(40,true)/(channels*2);return {numberOfChannels:channels,sampleRate,length,duration:length/sampleRate};}
+  createGain(){return {gain:{value:1,setTargetAtTime(value){this.value=value;}},connect(){},disconnect(){}};}
+  createBufferSource(){const source={connect(){},disconnect(){},stop(){this.stopped=true;},start(when,position){this.started={when,position};}};this.sources.push(source);return source;}
+ }
+ const t=setup({apiResponse:async(u,o)=>{
+  const custom=await onRequest?.(u,o,{manifest,bytes,sourceId});if(custom!==undefined)return custom;
+  if(u.pathname==='/Bluefin/Capabilities')return jsonReply({protocolVersion:1,karaokePreparation:{enabled:true,supportsStemOnly:true,requiresSuppliedTiming:false}});
+  if(u.pathname==='/Bluefin/Web/v1/leases'&&o.method==='POST')return jsonReply({version:1,mediaSourceId:sourceId,mediaUrl:'/Bluefin/Web/v1/media/'+'a'.repeat(64)+'/0',releaseUrl:'/Bluefin/Web/v1/leases/'+'a'.repeat(64),renewUrl:'/Bluefin/Web/v1/leases/'+'a'.repeat(64),expiresInSeconds:300,idleSeconds:90,playSessionId:'33333333333343338333333333333333'});
+  if(u.pathname==='/Bluefin/Karaoke/'+manifest.itemId)return jsonReply(manifest);
+  if(u.pathname.includes('/Stems/'))return new Response(bytes,{headers:{'Content-Type':'audio/wav'}});
+  if(u.pathname.endsWith('/Lyrics'))return lyricsResponse([{Text:'An original line',Start:0},{Text:'A second line',Start:5000000}]);
+ }});
+ t.context.AudioContext=AudioContext;t.video.duration=1;
+ return {...t,sourceId,bytes,manifest,contexts};
+}
+async function playSingFixture(t,item=t.item){
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);await t.ui.play(item);
+ await until(()=>t.ui.state.player?.lyrics?.status==='ready');return t.ui.state.player;
+}
+test('Sing verifies the playing source and hashes before starting two stems on one clock',async()=>{
+ const t=singFixture(),p=await playSingFixture(t,{...t.item,RunTimeTicks:10000000,UserData:{PlaybackPositionTicks:4000000}});
+ t.video.duration=.6;t.video.currentTime=.1;await t.ui.prepareSing(p);
+ assert.equal(p.sing.status,'ready');assert.equal(t.video.paused,false);assert.equal(p.sing.active,false);
+ const lyrics=p.lyrics;await t.ui.activateSing(p);
+ assert.equal(p.lyrics,lyrics);assert.equal(t.video.paused,true);
+ const context=t.contexts[0],sources=context.sources;
+ assert.equal(sources.length,2);assert.equal(sources[0].started.when,sources[1].started.when);assert.equal(sources[0].started.position,.5);
+ context.currentTime+=.285;assert(Math.abs(t.ui.playbackTimeline().position-.75)<.00001);
+ const leases=t.requests.filter(r=>new URL(r.url).pathname==='/Bluefin/Web/v1/leases'&&r.options.method==='POST').length;
+ await t.ui.seekLyric(p,0);await until(()=>context.sources.length===4);
+ assert.equal(t.ui.state.player,p);assert.equal(context.sources[2].started.position,0);
+ assert.equal(t.requests.filter(r=>new URL(r.url).pathname==='/Bluefin/Web/v1/leases'&&r.options.method==='POST').length,leases);
+ const stems=t.requests.filter(r=>r.url.includes('/Stems/'));
+ assert.equal(stems.length,2);assert(stems.every(r=>new URL(r.url).searchParams.get('MediaSourceId')===t.sourceId));
+ assert(stems.every(r=>r.options.headers.Authorization.includes('synthetic-private-bearer')&&!r.url.includes('synthetic-private-bearer')));
+ await t.ui.signOut();assert.equal(context.state,'closed');assert.equal(t.ui.state.player,null);
+});
+test('Sing refuses a different edition or a missing playback source without disturbing the song',async()=>{
+ for(const missing of [false,true]){
+  const t=singFixture({manifestChange:value=>value.mediaSourceId='88888888888848888888888888888888'}),p=await playSingFixture(t);
+  if(missing)delete p.lease.mediaSourceId;
+  await t.ui.prepareSing(p);
+  assert.equal(t.video.paused,false);assert(!p.sing?.active);assert.equal(t.requests.filter(r=>r.url.includes('/Stems/')).length,0);
+  if(!missing)assert.match(p.sing.message,/playing version/);else assert.match(t.ui.state.error,/playing version/);
+  await t.ui.signOut();
+ }
+});
+test('a failed Sing hash leaves ordinary playback running and releases decoded audio resources',async()=>{
+ const t=singFixture({onRequest:(u,_o,{bytes})=>{
+  if(u.pathname.endsWith('/Stems/accompaniment')){const damaged=bytes.slice();damaged[100]^=1;return new Response(damaged);}
+ }}),p=await playSingFixture(t);
+ await t.ui.prepareSing(p);assert.equal(p.sing.status,'error');assert.match(p.sing.message,/verification/);
+ assert.equal(t.video.paused,false);assert.equal(t.contexts[0].state,'closed');assert.equal(t.contexts[0].sources.length,0);
+ await t.ui.signOut();
+});
+test('sign-out aborts Sing downloads and a late response cannot restore buffers or playback',async()=>{
+ const releases=[],signals=[],t=singFixture({onRequest:async(u,o,{bytes})=>{
+  if(u.pathname.includes('/Stems/')){signals.push(o.signal);await new Promise(resolve=>releases.push(resolve));return new Response(bytes);}
+ }}),p=await playSingFixture(t);
+ const loading=t.ui.prepareSing(p);await until(()=>releases.length===2);
+ await t.ui.signOut();assert(signals.every(signal=>signal.aborted));assert.equal(t.contexts[0].state,'closed');
+ releases.forEach(resolve=>resolve());await loading;
+ assert.equal(t.ui.state.player,null);assert.equal(p.sing,null);assert.equal(t.contexts[0].sources.length,0);
+});
+test('failed automatic preparation is cancelled using its exact request and current source',async()=>{
+ const t=singFixture({onRequest:(u,o,{manifest,sourceId})=>{
+  if(u.pathname==='/Bluefin/Karaoke/'+manifest.itemId)return jsonReply({},404);
+  if(u.pathname.endsWith('/Preparation')&&o.method==='POST'){const body=JSON.parse(o.body);assert.equal(body.mediaSourceId,sourceId);return jsonReply({itemId:manifest.itemId,jobId:body.requestId,mediaSourceId:sourceId,state:'failed',reason:'preparationFailed'});}
+ }}),p=await playSingFixture(t);
+ await t.ui.prepareSing(p);
+ assert.equal(p.sing.status,'error');assert.equal(t.video.paused,false);
+ const posted=t.requests.find(r=>r.url.endsWith('/Preparation')&&r.options.method==='POST'),request=JSON.parse(posted.options.body).requestId;
+ assert.equal(t.requests.filter(r=>r.url.endsWith('/Preparation/'+request)&&r.options.method==='DELETE').length,1);
+ await t.ui.signOut();assert.equal(t.requests.filter(r=>r.url.endsWith('/Preparation/'+request)&&r.options.method==='DELETE').length,1);
+});
+test('rapid Sing seeks cannot restart an obsolete audio position after a delayed resume',async()=>{
+ const t=singFixture(),p=await playSingFixture(t);await t.ui.prepareSing(p);await t.ui.activateSing(p);
+ const context=t.contexts[0],resumes=[];context.resume=()=>new Promise(resolve=>resumes.push(resolve));
+ const old=t.ui.runSing(p,.2),latest=t.ui.runSing(p,.7);assert.equal(resumes.length,2);
+ resumes[1]();await latest;resumes[0]();await old;
+ assert.equal(context.sources.length,4);assert.equal(context.sources[2].started.position,.7);assert.equal(context.sources[3].started.position,.7);
+ await t.ui.signOut();
+});
+test('Sing PCM and real token timing reject incompatible data and preserve exact token text',()=>{
+ const t=singFixture();assert.equal(t.ui.singPcm(t.bytes,1).frames,8000);
+ assert.throws(()=>t.ui.singPcm(t.bytes,.4),/duration/);
+ const bad=t.bytes.slice();new DataView(bad.buffer).setUint16(22,3,true);assert.throws(()=>t.ui.singPcm(bad,1),/PCM/);
+ const manifest={...t.manifest,timingKind:'word',timeline:{offsetSeconds:0,lines:[{id:'line',tokens:[{text:'Go ',start:0,end:.2},{text:'🎵',start:.2,end:.4}]}]}};
+ const lyrics=t.ui.singLyrics(manifest);assert.equal(lyrics.lines[0].text,'Go 🎵');
+ assert.equal(lyrics.lines[0].cues[1].from,3);assert.equal(lyrics.lines[0].cues[1].to,5);
+ assert.throws(()=>t.ui.validateSingManifest({...t.manifest,timeline:manifest.timeline},t.item,t.sourceId),/Unexpected Sing timing/);
+ assert.throws(()=>t.ui.singLyrics({...manifest,timeline:{...manifest.timeline,lines:[{id:'line',tokens:[{text:'Bad timing',start:.8,end:1.2}]}]}}),/token/);
+});
+const sportsPrefs=()=>({schema:1,sports:['ice_hockey'],leagues:['espn:nhl'],conferences:[],teams:[],players:[],all_conferences:true,all_teams:true,all_players:true,home:true,away:true,native_home:'home',auto_record:false,sports_only:false,completed:true});
+function sportsFixtureEvent(){return {id:'401892781',league:'nhl',name:'Fixture Away at Fixture Home',date:'2026-11-27T20:00:00Z',status:{state:'post',detail:'Final',period:3,clock:'0:00'},home:{id:'1',name:'Fixture Home',shortName:'Home',abbreviation:'HOM',score:'3'},away:{id:'2',name:'Fixture Away',shortName:'Away',abbreviation:'AWY',score:'4'},stats:[],plays:[],broadcasts:[]};}
+test('Sports scores do not depend on Live TV access and followed teams use fresh account CAS',async()=>{
+ let revision=8,preferences=sportsPrefs();const event=sportsFixtureEvent();
+ const t=setup({apiResponse:(u,o)=>{
+  if(u.pathname==='/sports/api/v1/home')return jsonReply({},403);
+  if(u.pathname==='/sports/api/v1/scoreboard')return jsonReply({schema:1,provider:'ESPN',league:'nhl',events:[event]});
+  if(u.pathname==='/sports/api/v1/preferences'){
+   if(o.method==='PUT'){assert.equal(o.headers['If-Match'],'"8"');assert(o.headers.Authorization.includes('synthetic-private-bearer'));preferences=JSON.parse(o.body);revision++;return jsonReply({version:revision,preferences});}
+   return jsonReply({version:revision,preferences});
+  }
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);await t.ui.navigate('Sports');
+ assert.equal(t.ui.state.route.board.events[0].home.score,'3');assert.match(t.root.textContent,/4 – 3/);
+ await t.ui.followSportsTeam(event.home,'nhl');
+ assert.deepEqual(preferences.teams,['espn:nhl:1']);assert.deepEqual(preferences.leagues,['espn:nhl']);assert.equal(preferences.native_home,'home');assert.equal(preferences.all_teams,false);
+ assert.equal(t.ui.state.sportsPreferences.version,9);await t.ui.signOut();
+});
+test('a stale Sports preference write refetches without overwriting another device',async()=>{
+ let reads=0,puts=0;const base=sportsPrefs(),latest={...sportsPrefs(),teams:['espn:nhl:2'],all_teams:false};
+ const t=setup({apiResponse:(u,o)=>{
+  if(u.pathname==='/sports/api/v1/preferences'){
+   if(o.method==='PUT'){puts++;return jsonReply({},412);}
+   reads++;return jsonReply({version:reads===1?4:5,preferences:reads===1?base:latest});
+  }
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await assert.rejects(t.ui.followSportsTeam({id:'1'},'nhl'),/another device/);
+ assert.equal(puts,1);assert.equal(t.ui.state.sportsPreferences.version,5);assert.deepEqual(Array.from(t.ui.state.sportsPreferences.preferences.teams),['espn:nhl:2']);
+ await t.ui.signOut();
+});
+test('Sports logos accept only the authenticated server asset path',()=>{
+ const t=setup(),hash='a'.repeat(64);
+ assert.equal(t.ui.sportsLogo({logo:'https://provider.invalid/logo.png'}).dataset.artKey,undefined);
+ assert.equal(t.ui.sportsLogo({logo:'/sports/api/v1/logos/'+hash+'?token=secret'}).dataset.artKey,undefined);
+ assert.equal(t.ui.sportsLogo({logo:'/sports/api/v1/logos/'+hash}).dataset.artKey,'sports:'+hash);
+});
+test('track artwork uses the authorized album identity and changes cache key when its art revision changes',()=>{
+ const t=setup(),album='77777777777747778777777777777777',track={...t.item,AlbumId:album,AlbumPrimaryImageTag:'revision-one'};
+ assert.equal(t.ui.artworkSource(track).item,album);assert.equal(t.ui.artworkSource(track).backdrop,false);
+ assert.equal(t.ui.artKey(track),t.ui.artKey({...track,Id:'88888888888848888888888888888888'}));
+ assert.notEqual(t.ui.artKey(track),t.ui.artKey({...track,AlbumPrimaryImageTag:'revision-two'}));
+ assert.equal(t.ui.artworkSource({...track,ImageTags:{Primary:'track-art'}}).item,t.item.Id);
+});
+
+
+test('Home publishes available shelves while account recommendations are still loading',async()=>{
+ let hold=false,release;const recommendation={Id:'66666666666646668666666666666666',Type:'Movie',Name:'Account recommendation'};
+ const t=setup({apiResponse:async u=>{
+  if(u.pathname==='/Bluefin/Home/Recommendations'){if(hold)await new Promise(resolve=>release=resolve);return jsonReply({recommendations:[{title:'Because you liked a favorite',items:[recommendation]}]});}
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ hold=true;const loading=t.ui.loadRoute();await until(()=>release);
+ await until(()=>t.ui.state.shelves.some(shelf=>shelf.title==='Recently Added'));
+ assert.equal(t.ui.state.route.loading,true);assert.match(t.root.textContent,/Original test tone/);
+ release();await loading;assert.equal(t.ui.state.featured.Id,recommendation.Id);await t.ui.signOut();
+});
+test('studio lookup reaches names beyond the first page and fences an obsolete lookup',async()=>{
+ const oldId='44444444444444448444444444444444',newId='55555555555545558555555555555555';let release,oldSignal;
+ const t=setup({apiResponse:async(u,o)=>{
+  if(u.pathname==='/Studios'){
+   if(u.searchParams.get('SearchTerm')==='earlier'){oldSignal=o.signal;await new Promise(resolve=>release=resolve);return jsonReply({Items:[{Id:oldId,Name:'Earlier studio',Type:'Studio'}],TotalRecordCount:1});}
+   if(u.searchParams.get('SearchTerm')==='beyond first page'){assert.equal(u.searchParams.get('UserId'),'11111111111141118111111111111111');return jsonReply({Items:[{Id:newId,Name:'Beyond first page',Type:'Studio'}],TotalRecordCount:1});}
+   return jsonReply({Items:[],TotalRecordCount:300});
+  }
+  if(u.pathname==='/Items/Filters2')return jsonReply({Tags:[]});
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);await t.ui.openSearch();
+ t.ui.state.route.refine=true;await t.ui.loadSearchFacets();
+ const old=t.ui.lookupSearchFacet('studios','earlier');await until(()=>release);
+ await t.ui.lookupSearchFacet('studios','beyond first page');assert.equal(oldSignal.aborted,true);
+ release();await old;assert.equal(t.ui.state.facets.studios[0].id,newId);
+ const select=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-studio');assert(select.children.some(e=>e.value===newId));
+ await t.ui.signOut();
+});
+test('a custom service tag beyond initial suggestions can be applied exactly without an external search',async()=>{
+ const tags=Array.from({length:700},(_,i)=>'Service '+String(i).padStart(3,'0'));
+ const t=setup({apiResponse:u=>u.pathname==='/Items/Filters2'?jsonReply({Tags:tags}):undefined});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);await t.ui.openSearch();t.ui.state.route.refine=true;await t.ui.loadSearchFacets();
+ const input=findElement(t.root,e=>e.id==='bluefin-tag-refinement');input.value='Service 699';input.oninput();
+ const suggestions=findElement(t.root,e=>e.id==='bluefin-tag-options');assert(suggestions.children.some(option=>option.value==='Service 699'));
+ const apply=findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent==='Apply');apply.listeners.click();await until(()=>t.ui.state.route.filters.tag==='Service 699'&&!t.ui.state.route.loading);
+ const request=t.requests.map(r=>new URL(r.url)).find(u=>u.searchParams.get('Tags')==='Service 699');assert(request);assert.equal(request.origin,'https://bluefin.test');
+ assert(!t.requests.some(r=>new URL(r.url).hostname==='api.tvmaze.com'));await t.ui.signOut();
 });
