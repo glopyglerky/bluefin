@@ -462,7 +462,7 @@ private struct PublicTVSearchSection: View {
             let requested = term
             guard requested.count >= 2 else { page = nil; failed = false; completedQuery = ""; return }
             do {
-                try await Task.sleep(for: .milliseconds(650))
+                try await Task.sleep(nanoseconds: 650_000_000)
                 let response: Page = try await RustBridge.call("publicTvSearch", fields: ["query": requested])
                 try Task.checkCancellation()
                 page = response
