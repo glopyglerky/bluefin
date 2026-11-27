@@ -915,7 +915,10 @@ async function loadRoute(onUsable){
  }finally{if(controller===routeController)route.loading=false;}
 }
 async function navigate(tab){
- if(tab==='Search')return openSearch();
+ if(tab==='Search'){
+  if(!state.session&&state.local){state.route={kind:'local_search',title:'Search'};state.back=[];return loadRoute();}
+  return openSearch();
+ }
  if(tab==='Library'||tab==='Collections'){
   state.route={kind:'library',title:'Collections'};state.back=[];return loadRoute();
  }
@@ -1431,6 +1434,7 @@ async function enrichAllOfferRegions(route,identity,signal,current){
   route.offerProgress={completed:0,total:0,failed:0,registryUnavailable:true};render();return;
  }
  const progress=route.offerProgress={completed:0,total:codes.length,failed:0,stopped:false};
+ render();
  const baseSources=route.offers.sources||[],sourcesByCountry=new Map();
  let next=0,pauseUntil=0;
  const transient=new Set(['denied','rateLimited','unavailable','invalidResponse','identityMismatch']);
