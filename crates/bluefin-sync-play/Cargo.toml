@@ -6,4 +6,11 @@ license = "GPL-3.0-only"
 publish = false
 description = "Portable client scheduling for Bluefin synchronized playback"
 
+[features]
+default = []
+requests = ["dep:serde", "dep:serde_json", "dep:uuid"]
+
 [dependencies]
+serde = { version = "1", default-features = false, features = ["alloc", "derive"], optional = true }
+serde_json = { version = "1", default-features = false, features = ["alloc"], optional = true }
+uuid = { version = "1", default-features = false, features = ["serde"], optional = true }

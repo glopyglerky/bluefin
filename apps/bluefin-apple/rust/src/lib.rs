@@ -21,6 +21,7 @@ mod mesh_connection;
 mod mesh_proxy;
 mod mesh_discovery;
 mod karaoke;
+mod room_requests;
 mod native_server;
 mod native_video;
 mod offline;
@@ -544,6 +545,7 @@ fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
 /// JSON interface, also useful for non-FFI hosts. Synchronous and bounded.
 pub fn call(v: &Value) -> Result<Value> {
     let op = text(v, "operation")?;
+    if op == "syncPlay" { return room_requests::call(v); }
     if op == "publicTvSearch" {
         return public_catalog::public_tv_search(v);
     }

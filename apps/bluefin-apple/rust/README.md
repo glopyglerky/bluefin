@@ -287,8 +287,13 @@ privacy or linked-app acceptance claim.
 
 Public search is available before pairing. The native Rust dispatcher owns
 `publicMusicSearch`, `publicMusicDetail`, `publicCatalogOffers`, and
-`publicCatalogCountries`. Apple and Android pass the same typed catalog identities;
-they do not need a private Bluefin server for these operations.
+`publicCatalogCountries`. Apple and Android pass the same typed catalog identities.
+Unpaired requests run through the public catalog clients. Paired Apple availability
+uses the existing authenticated account transport, including mesh: structured Offers
+POST preserves every asserted ID, and Providers GET supplies one exact title context
+or a generic registry when the identity has multiple assertions. Invalid or retired
+account metadata never falls back to an anonymous request. Swift request identity
+includes the account lifetime, media identity, country and refresh attempt.
 
 MusicBrainz supplies artist, release-group, release and recording identities,
 descriptive metadata, related entities and actual service URL relationships. The
@@ -304,9 +309,10 @@ An external provider URL never supplies a Bluefin playback entitlement. Existing
 authorized library playback stays ahead of external provider destinations.
 
 The region picker starts with a valid device-region code, with no US fallback.
-For video, the explicit all-regions view reads the upstream country dataset and
-schedules at most three regional requests at a time. Changing region or leaving
-the view cancels further scheduling. Progress, partial coverage and interrupted
+For unpaired video, the explicit all-regions view reads the upstream country dataset
+and schedules at most three regional requests at a time. Paired all-regions access
+makes one structured Offers request with a null country; a registry is not treated
+as evidence of offers. Changing region, account or view cancels further scheduling. Progress, partial coverage and interrupted
 sources remain visible. MusicBrainz links have unknown region; an explicitly
 selected storefront can add exact-ID iTunes purchase/catalog listings. New provider
 names and URLs are rendered from source evidence, including query-bearing links.
