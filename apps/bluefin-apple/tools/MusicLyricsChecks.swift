@@ -18,6 +18,11 @@ import Foundation
 
 @main struct MusicLyricsChecks {
     @MainActor static func main() async throws {
+        let programme = try JSONDecoder().decode(MediaItem.self, from: Data(#"{"Id":"programme","Type":"Program","StartDate":"2026-11-27T01:00:00Z","EndDate":"2026-11-27T02:00:00.000Z"}"#.utf8))
+        precondition(programme.start != nil && programme.end?.timeIntervalSince(programme.start!) == 3600)
+        let unscheduled = try JSONDecoder().decode(MediaItem.self, from: Data(#"{"Id":"programme","Type":"Program","StartDate":"bad","EndDate":"bad"}"#.utf8))
+        precondition(unscheduled.start == nil && unscheduled.end == nil, "Do not invent a live broadcast window")
+
         let fixture = #"{"Metadata":{"IsSynced":true,"Offset":3000000},"Lyrics":[{"Text":"Go 🎵 now","Start":20000000,"Cues":[{"Position":0,"EndPosition":3,"Start":20000000,"End":25000000},{"Position":3,"EndPosition":5,"Start":25000000,"End":30000000},{"Position":5,"EndPosition":9,"Start":30000000,"End":40000000}]},{"Text":"Next line","Start":50000000}]}"#
         let lyrics = try JSONDecoder().decode(BluefinLyrics.self, from: Data(fixture.utf8))
         precondition(lyrics.activeIndex(at: 2.299) == nil)

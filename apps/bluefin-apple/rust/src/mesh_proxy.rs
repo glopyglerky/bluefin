@@ -19,6 +19,8 @@ pub(super) fn media_path(path:&str)->bool{
     let parts:Vec<_>=route.split('/').filter(|p|!p.is_empty()).collect();
     if parts.len()>12||parts.iter().any(|p|*p=="."||*p==".."){return false;}
     match parts.as_slice(){
+        ["sports","api","v1","logos",hash] if hash.len()==64 && hash.bytes().all(|b|b.is_ascii_hexdigit())
+            && path==format!("/sports/api/v1/logos/{hash}")=>true,
         ["Items",id,"Images",..] if !id.is_empty()=>true,
         ["Items",id,"Download"] if !id.is_empty()=>true,
         ["Videos",id,tail @ ..]|["Audio",id,tail @ ..] if !id.is_empty()&&!tail.is_empty()=>true,
@@ -163,4 +165,22 @@ pub(super) fn stop(id:u64)->Result<()>{
 pub(super) fn stop_all()->Result<()>{
     let ids:Vec<_>=proxies().lock().map_err(|_|failure())?.keys().copied().collect();
     for id in ids{stop(id)?;}Ok(())
+}
+
+#[cfg(test)]
+mod sports_logo_tests {
+    use super::media_path;
+    #[test]
+    fn admits_only_canonical_authenticated_logo_hash() {
+        let hash="a".repeat(64);
+        assert!(media_path(&format!("/sports/api/v1/logos/{hash}")));
+        for path in [
+            "/sports/api/v1/logos/bad".to_owned(),
+            format!("/sports/api/v1/logos/{hash}?url=https://example.com"),
+            format!("/sports/api/v1/logos//{hash}"),
+            format!("/sports/api/v1/logos/{hash}/extra"),
+            format!("/sports/api/v1/logos/{}","g".repeat(64)),
+            "/sports/api/v1/standings/nhl".to_owned(),
+        ] { assert!(!media_path(&path), "{path}"); }
+    }
 }

@@ -4,27 +4,25 @@ import AVFoundation
 struct KaraokeLyricsView: View {
     @ObservedObject var playback: PlaybackController
     @ObservedObject var audio: KaraokeAudio
+    let timeline: KaraokeTimeline
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var following = true
-    @State private var leaving = false
-    @State private var microphoneVisible = false
     var body: some View {
         VStack(spacing: 0) {
             // Read AVPlayer's actual clock each frame. Never extrapolate through pause/buffering.
             TimelineView(.animation(minimumInterval: reduceMotion ? 1.0 / 8 : 1.0 / 30, paused: !playback.isPlaying)) { _ in
                 let time = playback.lyricPositionSeconds
-                let active = audio.package.timeline.activeLines(at: time)
+                let active = timeline.activeLines(at: time)
                 ScrollViewReader { reader in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 30) {
-                            ForEach(audio.package.timeline.lines) { line in
+                            ForEach(timeline.lines) { line in
                                 let singing = active.contains { $0.id == line.id }
-                                Button { playback.seek(seconds: max(0, line.start + audio.package.timeline.offsetSeconds)) } label: {
+                                Button { playback.seek(seconds: max(0, line.start + timeline.offsetSeconds)) } label: {
                                     VStack(alignment: line.voice == .partner ? .trailing : .leading, spacing: 8) {
                                         Text(voiceLabel(line.voice)).font(.caption.weight(.semibold)).textCase(.uppercase)
                                             .foregroundColor(tint(line.voice)).opacity(singing ? 1 : 0.5)
-                                        words(line, at: time - audio.package.timeline.offsetSeconds)
+                                        words(line, at: time - timeline.offsetSeconds)
                                             .font(.system(.title, design: .rounded).weight(.bold))
                                             .multilineTextAlignment(line.voice == .partner ? .trailing : .leading)
                                     }.frame(maxWidth: .infinity, alignment: line.voice == .partner ? .trailing : .leading)
@@ -58,6 +56,36 @@ struct KaraokeLyricsView: View {
                     }
                 }
             }
+            KaraokePlaybackControls(playback: playback, audio: audio, following: $following, hasTimedLyrics: true)
+        }
+        .background(MusicPlayerBackground(item: playback.item))
+        .onDisappear { playback.stopKaraokeMicrophones() }
+    }
+    private func tint(_ voice: KaraokeLine.Voice) -> Color { voice == .partner ? .mint : voice == .backing ? .orange : BluefinStyle.accent }
+    private func voiceLabel(_ voice: KaraokeLine.Voice) -> String {
+        switch voice { case .lead: return "Voice 1"; case .partner: return "Voice 2"; case .together: return "Together"; case .backing: return "Backing vocals" }
+    }
+    private func words(_ line: KaraokeLine, at seconds: Double) -> some View {
+        // Canvas wraps measured tokens and clips each colored overlay using its
+        // supplied timing. No word boundaries or timing are inferred from line text.
+        return TimedLyricsWordFill(runs: line.tokens.map { .init(text: $0.text, start: $0.start, end: $0.end) },
+                                   seconds: seconds, color: tint(line.voice), rightAligned: line.voice == .partner)
+            .accessibilityHidden(true)
+
+    }
+}
+
+/// The same real audio controls serve word-timed, line-timed and untimed lyrics.
+struct KaraokePlaybackControls: View {
+    @ObservedObject var playback: PlaybackController
+    @ObservedObject var audio: KaraokeAudio
+    @Binding var following: Bool
+    var hasTimedLyrics: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var leaving = false
+    @State private var microphoneVisible = false
+
+    var body: some View {
             ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
@@ -75,7 +103,7 @@ struct KaraokeLyricsView: View {
                 }
                 #endif
                 #if os(tvOS)
-                Button(following ? "Browse lyrics" : "Follow lyrics") { following.toggle() }
+                if hasTimedLyrics { Button(following ? "Browse lyrics" : "Follow lyrics") { following.toggle() } }
                 #endif
                 HStack {
                     Button("Instrumental") { audio.setVocalLevel(0) }
@@ -100,21 +128,6 @@ struct KaraokeLyricsView: View {
             }.padding(20).frame(maxWidth: 760).frame(maxWidth: .infinity)
             }.frame(maxHeight: dynamicTypeSize.isAccessibilitySize || microphoneVisible ? 340 : 220)
                 .modifier(BluefinGlassSurface(cornerRadius: 28)).padding(.horizontal, 16).padding(.bottom, 12)
-        }
-        .background(BluefinBackground())
-        .onDisappear { playback.stopKaraokeMicrophones() }
-    }
-    private func tint(_ voice: KaraokeLine.Voice) -> Color { voice == .partner ? .mint : voice == .backing ? .orange : BluefinStyle.accent }
-    private func voiceLabel(_ voice: KaraokeLine.Voice) -> String {
-        switch voice { case .lead: return "Voice 1"; case .partner: return "Voice 2"; case .together: return "Together"; case .backing: return "Backing vocals" }
-    }
-    private func words(_ line: KaraokeLine, at seconds: Double) -> some View {
-        // Canvas wraps measured tokens and clips each colored overlay using its
-        // supplied timing. No word boundaries or timing are inferred from line text.
-        return TimedLyricsWordFill(runs: line.tokens.map { .init(text: $0.text, start: $0.start, end: $0.end) },
-                                   seconds: seconds, color: tint(line.voice), rightAligned: line.voice == .partner)
-            .accessibilityHidden(true)
-
     }
 }
 

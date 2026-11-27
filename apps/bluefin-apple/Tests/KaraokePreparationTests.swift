@@ -18,6 +18,25 @@ final class KaraokePreparationTests: XCTestCase {
         XCTAssertThrowsError(try manifest(["revision":"bad"]).validate(itemID:"synthetic-item"))
         XCTAssertThrowsError(try manifest(["durationSeconds":0]).validate(itemID:"synthetic-item"))
     }
+    func testStemOnlyManifestRequiresExplicitMarkerAndKeepsSourceBinding() throws {
+        let changes: [String: Any] = ["timingKind": "none", "timeline": NSNull(),
+            "processing": "modelSeparatedStems", "processingReference": "test-model",
+            "mediaSourceId": "selected-source"]
+        let audio = try manifest(changes)
+        try audio.validate(itemID: "synthetic-item", mediaSourceID: "selected-source")
+        XCTAssertNil(audio.timeline)
+        XCTAssertEqual(audio.timingKind, KaraokeTimingKind.none)
+        XCTAssertThrowsError(try audio.validate(itemID: "other-item", mediaSourceID: "selected-source"))
+        XCTAssertThrowsError(try audio.validate(itemID: "synthetic-item", mediaSourceID: "other-source"))
+        XCTAssertThrowsError(try manifest(["timeline": NSNull()]).validate(itemID: "synthetic-item"))
+        XCTAssertThrowsError(try manifest(["timingKind": "none"]).validate(itemID: "synthetic-item"))
+        for kind in ["word", "syllable"] {
+            try manifest(["timingKind": kind]).validate(itemID: "synthetic-item")
+            XCTAssertThrowsError(try manifest(["timingKind": kind, "timeline": NSNull()]).validate(itemID: "synthetic-item"))
+        }
+        XCTAssertThrowsError(try manifest(["timingKind": "guessed"]))
+    }
+
     func testLeaseDeletesOnlyAfterLastConsumer() throws {
         var lease: KaraokePreparationLease? = try KaraokePreparationLease()
         let directory = try XCTUnwrap(lease?.directory)

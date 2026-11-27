@@ -10,7 +10,8 @@ struct KaraokePreparationManifest: Decodable {
     let mediaSourceId: String?
     let accompaniment: Stem
     let leadVocal: Stem
-    let timeline: KaraokeTimeline
+    let timeline: KaraokeTimeline?
+    let timingKind: KaraokeTimingKind?
     var processingKind: KaraokePackage.Processing { processing == "modelSeparatedStems" ? .modelSeparated : .suppliedStems }
     func validate(itemID: String, mediaSourceID: String? = nil) throws {
         guard KaraokeIdentity.sameItem(itemId, itemID), ["suppliedStems", "modelSeparatedStems"].contains(processing),
@@ -25,7 +26,7 @@ struct KaraokePreparationManifest: Decodable {
         for stem in [accompaniment, leadVocal] {
             guard stem.bytes > 44, stem.bytes <= 64 * 1024 * 1024, KaraokeIdentity.digest(stem.sha256) else { throw KaraokeError.invalidStems }
         }
-        try timeline.validate(duration: durationSeconds)
+        try KaraokeTimingKind.validate(timingKind, timeline: timeline, duration: durationSeconds)
     }
 }
 

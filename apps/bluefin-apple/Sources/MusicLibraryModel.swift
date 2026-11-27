@@ -22,7 +22,7 @@ enum MusicSort: String, CaseIterable, Identifiable {
     var hasNext: Bool { pageCount > 0 && start + pageCount < total }
     var hasPrevious: Bool { start > 0 }
 
-    func load(store: LibraryStore, type: String, parent: MediaItem?, start: Int = 0, query: String = "", sort: MusicSort = .name, favorites: Bool = false, fromLetter: String = "") async {
+    func load(store: LibraryStore, type: String, parent: MediaItem?, start: Int = 0, query: String = "", sort: MusicSort = .name, favorites: Bool = false, fromLetter: String = "", genre: String = "") async {
         let identity = UUID()
         request = identity
         loading = true; problem = nil
@@ -30,7 +30,7 @@ enum MusicSort: String, CaseIterable, Identifiable {
         items = []; pageCount = 0; total = 0; self.start = start
         defer { if request == identity { loading = false } }
         do {
-            let page = try await store.musicItems(type: type, parent: parent, start: start, query: query, sort: parent?.Type == "MusicAlbum" ? "IndexNumber" : sort.key, descending: parent?.Type == "MusicAlbum" ? false : sort != .name, favorites: favorites, fromLetter: fromLetter)
+            let page = try await store.musicItems(type: type, parent: parent, start: start, query: query, sort: parent?.Type == "MusicAlbum" ? "IndexNumber" : sort.key, descending: parent?.Type == "MusicAlbum" ? false : sort != .name, favorites: favorites, fromLetter: fromLetter, genre: genre)
             try Task.checkCancellation()
             guard identity == request else { return }
             items = page.Items

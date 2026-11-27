@@ -45,7 +45,7 @@ import ObjectiveC
               abs(duration - package.durationSeconds) <= 1 / a.processingFormat.sampleRate + duration.ulp * 4 else {
             throw KaraokeError.invalidStems
         }
-        try package.timeline.validate(duration: duration)
+        try KaraokeTimingKind.validate(package.timingKind, timeline: package.timeline, duration: duration)
         let composition = AVMutableComposition()
         var inserted: [AVMutableCompositionTrack] = []
         for url in urls {

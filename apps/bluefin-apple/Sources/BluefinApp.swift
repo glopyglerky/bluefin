@@ -303,13 +303,22 @@ struct LibraryTabs: View {
 
     @ViewBuilder private var navigation: some View {
         #if os(tvOS)
-        TabView(selection: tabSelection) {
-            ForEach(BluefinCategory.allCases) { category in
-                categoryNavigation(category)
-                    .tabItem { Label(category.title, systemImage: category.symbol) }
-                    .tag(category.rawValue)
-            }
+        HStack(alignment: .top, spacing: 0) {
+            televisionSidebar
+            ZStack {
+                ForEach(BluefinCategory.allCases) { category in
+                    if visitedTabs.contains(category.rawValue) {
+                        categoryNavigation(category)
+                            .opacity(selectedTab == category.rawValue ? 1 : 0)
+                            .allowsHitTesting(selectedTab == category.rawValue)
+                            .accessibilityHidden(selectedTab != category.rawValue)
+                            .disabled(selectedTab != category.rawValue)
+                            .zIndex(selectedTab == category.rawValue ? 1 : 0)
+                    }
+                }
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .background(BluefinStyle.background)
         .safeAreaInset(edge: .bottom, spacing: 0) { miniPlayer }
         #else
         GeometryReader { geometry in
@@ -361,6 +370,7 @@ struct LibraryTabs: View {
             #endif
         }
         .id(category == .home ? homeVisit.uuidString : category.title)
+        .environment(\.bluefinCategoryIsActive, selectedTab == category.rawValue)
     }
 
     @ViewBuilder private func categoryContent(_ category: BluefinCategory) -> some View {
@@ -394,7 +404,7 @@ struct LibraryTabs: View {
             LiveTVView()
             #endif
         case .music:
-            MusicLibraryView()
+            MusicHubView()
         }
     }
 
@@ -433,33 +443,61 @@ struct LibraryTabs: View {
     }
 
     private var compactCategories: some View {
-        HStack(alignment: .top, spacing: 0) {
+        HStack(spacing: 0) {
             ForEach(BluefinCategory.allCases) { category in
                 Button { select(category.rawValue) } label: {
-                    VStack(spacing: 5) {
-                        Image(systemName: category.symbol).font(.system(size: 20))
-                        Text(category.title).font(.caption2).lineLimit(2)
-                            .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    VStack(spacing: 4) {
+                        Image(systemName: category.symbol)
+                            .font(.system(size: 20, weight: selectedTab == category.rawValue ? .semibold : .regular))
+                        Text(category.title).font(.system(size: 10, weight: .semibold))
+                            .lineLimit(2).multilineTextAlignment(.center)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 52, alignment: .top)
-                    .padding(.vertical, 6)
-                    .foregroundStyle(selectedTab == category.rawValue ? BluefinStyle.accent : BluefinStyle.secondaryText)
+                    .frame(maxWidth: .infinity, minHeight: 56)
+                    .foregroundStyle(selectedTab == category.rawValue ? BluefinStyle.accent : BluefinStyle.text)
                     .background {
                         if selectedTab == category.rawValue {
-                            RoundedRectangle(cornerRadius: 10).fill(BluefinStyle.brand.opacity(0.15))
+                            Capsule().fill(BluefinStyle.text.opacity(0.10))
                         }
                     }
-                    .contentShape(Rectangle())
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(selectedTab == category.rawValue ? .isSelected : [])
                 .accessibilityIdentifier("category-\(category.rawValue)")
             }
         }
-        .padding(.horizontal, 4).padding(.vertical, 4)
-        .background(BluefinStyle.secondaryBackground)
-        .overlay(alignment: .top) { Rectangle().fill(BluefinStyle.decorativeLine).frame(height: 1) }
+        .padding(5)
+        .modifier(BluefinGlassSurface(cornerRadius: 38))
+        .padding(.horizontal, 10).padding(.top, 5).padding(.bottom, 7)
+        .accessibilityElement(children: .contain)
     }
+
+    #if os(tvOS)
+    private var televisionSidebar: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(spacing: 6) {
+                BluefinMark().frame(width: 40, height: 40)
+                Text("Bluefin").font(.system(size: 26, weight: .bold, design: .rounded))
+            }.padding(.bottom, 24)
+            ForEach(BluefinCategory.allCases) { category in
+                Button { select(category.rawValue) } label: {
+                    Label(category.title, systemImage: category.symbol)
+                        .font(.system(size: 20, weight: .semibold))
+                        .frame(width: 178, height: 40, alignment: .leading)
+                }
+                .buttonStyle(.bordered)
+                .tint(selectedTab == category.rawValue ? BluefinStyle.primaryFill : BluefinStyle.secondaryBackground)
+                .foregroundStyle(selectedTab == category.rawValue ? BluefinStyle.onPrimary : BluefinStyle.text)
+                .accessibilityAddTraits(selectedTab == category.rawValue ? .isSelected : [])
+                .accessibilityIdentifier("category-\(category.rawValue)")
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 20).padding(.top, 38).frame(width: 260)
+        .frame(maxHeight: .infinity).focusSection()
+        .background(BluefinStyle.secondaryBackground.opacity(0.4))
+    }
+    #endif
 
     private var categorySidebar: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -525,8 +563,8 @@ struct HomeView: View {
             LazyVStack(alignment: .leading, spacing: 30) {
                 if store.preview { Label("Preview library", systemImage: "sparkles").font(.caption.bold()).foregroundStyle(.secondary).padding(.horizontal, 24) }
                 if let featured = store.home.featured { FeaturedItem(item: featured) }
-                if !store.home.resume.isEmpty { MediaShelf(title: "Continue watching", items: store.home.resume) }
-                if !store.home.nextUp.isEmpty { MediaShelf(title: "Up next", items: store.home.nextUp) }
+                if !store.home.resume.isEmpty { MediaShelf(title: "Continue watching", items: store.home.resume, landscape: true) }
+                if !store.home.nextUp.isEmpty { MediaShelf(title: "Up next", items: store.home.nextUp, landscape: true) }
                 ForEach(store.home.recommendations) { shelf in
                     if !shelf.items.isEmpty { MediaShelf(title: shelf.title, items: shelf.items) }
                 }
@@ -556,7 +594,7 @@ struct HomeView: View {
         .background(BluefinBackground())
         .navigationTitle("Home")
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.large)
         #endif
         .bluefinRefresh { await store.refresh(); await sports.connect(store.session) }
     }
@@ -614,18 +652,29 @@ struct FeaturedItem: View {
 struct MediaShelf: View {
     let title: String
     let items: [MediaItem]
+    var landscape = false
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(title).font(.title2.bold()).padding(.horizontal, 24).accessibilityAddTraits(.isHeader)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 16) {
                     ForEach(items) { item in
-                        MediaNavigationLink(destination: .detail(item)) { Poster(item: item).frame(width: posterWidth) }
+                        MediaNavigationLink(destination: .detail(item)) {
+                            if landscape { LandscapeMediaTile(item: item).frame(width: landscapeWidth) }
+                            else { Poster(item: item).frame(width: posterWidth) }
+                        }
                             .buttonStyle(.plain)
                     }
                 }.padding(.horizontal, 24).padding(.vertical, 8)
             }
         }
+    }
+    private var landscapeWidth: CGFloat {
+        #if os(tvOS)
+        390
+        #else
+        280
+        #endif
     }
     private var posterWidth: CGFloat {
         #if os(tvOS)
@@ -643,34 +692,56 @@ struct Poster: View {
     @Environment(\.isFocused) private var focused
     #endif
     var body: some View {
-        Artwork(item: item)
-            .aspectRatio(item.Type == "MusicAlbum" ? 1 : 2 / 3, contentMode: .fit)
-            .overlay {
-                LinearGradient(colors: [.clear, .black.opacity(0.9)], startPoint: .center, endPoint: .bottom)
-            }
-            .overlay(alignment: .bottomLeading) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(item.title).font(.subheadline.weight(.semibold))
-                        .lineLimit(dynamicType.isAccessibilitySize ? 3 : 2)
-                    if !item.subtitle.isEmpty {
-                        Text(item.subtitle).font(.caption).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
-                    }
+        VStack(alignment: .leading, spacing: 10) {
+            Artwork(item: item)
+                .aspectRatio(["Audio", "MusicAlbum", "MusicArtist", "Playlist"].contains(item.Type ?? "") ? 1 : 2 / 3, contentMode: .fit)
+                .overlay(alignment: .bottom) {
                     if item.progress > 0 {
-                        ProgressView(value: item.progress).tint(BluefinStyle.brand)
-                            .accessibilityHidden(true)
+                        ProgressView(value: item.progress).tint(BluefinStyle.accent).padding(10).accessibilityHidden(true)
                     }
                 }
-                .foregroundStyle(.white).padding(12)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                #if os(tvOS)
+                .overlay {
+                    if focused { RoundedRectangle(cornerRadius: 14).strokeBorder(BluefinStyle.accent, lineWidth: 3) }
+                }
+                #endif
+            Text(item.title).font(.subheadline.weight(.semibold))
+                .lineLimit(dynamicType.isAccessibilitySize ? 3 : 2)
+            if !item.subtitle.isEmpty {
+                Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            #if os(tvOS)
-            .overlay {
-                if focused { RoundedRectangle(cornerRadius: 12).strokeBorder(BluefinStyle.accent, lineWidth: 3) }
-            }
-            #endif
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(item.title + (item.subtitle.isEmpty ? "" : ", " + item.subtitle))
-            .accessibilityValue(item.progress > 0 ? "\(Int(item.progress * 100)) percent watched" : "")
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(item.title + (item.subtitle.isEmpty ? "" : ", " + item.subtitle))
+        .accessibilityValue(item.progress > 0 ? "\(Int(item.progress * 100)) percent watched" : "")
+    }
+}
+
+struct LandscapeMediaTile: View {
+    let item: MediaItem
+    #if os(tvOS)
+    @Environment(\.isFocused) private var focused
+    #endif
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Artwork(item: item, backdrop: true, thumbnailWidth: 640)
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .overlay(alignment: .bottom) {
+                    if item.progress > 0 {
+                        ProgressView(value: item.progress).tint(.white).padding(12)
+                            .background(LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .top, endPoint: .bottom))
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                #if os(tvOS)
+                .overlay {
+                    if focused { RoundedRectangle(cornerRadius: 16).strokeBorder(BluefinStyle.accent, lineWidth: 3) }
+                }
+                #endif
+            Text(item.title).font(.headline).lineLimit(1)
+            if !item.subtitle.isEmpty { Text(item.subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
+        }.accessibilityElement(children: .combine)
     }
 }
 

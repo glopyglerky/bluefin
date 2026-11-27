@@ -10,7 +10,67 @@ fn revision(tag: &str) -> Option<u64> {
     (tag == format!("\"{version}\"")).then_some(version)
 }
 
+fn provider_call(api: &Api<'_>, operation: &str) -> Result<Value> {
+    let league = text(api.v, "league")?;
+    if !["nhl", "nfl", "nba", "mlb", "wnba", "epl", "mls"].contains(&league) {
+        return Err(err("Unsupported sports league"));
+    }
+    let value = match operation {
+        "sportsScoreboard" => {
+            let date = text(api.v, "date")?;
+            if !valid_date(date) { return Err(err("Invalid sports date")); }
+            api.get(&["sports", "api", "v1", "scoreboard"],
+                    vec![("league", league.to_owned()), ("date", date.to_owned())])?
+        }
+        "sportsEvent" => {
+            let id = text(api.v, "eventId")?;
+            if id.is_empty() || id.len() > 20 || !id.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(err("Invalid sports event"));
+            }
+            api.get(&["sports", "api", "v1", "events", league, id], vec![])?
+        }
+        "sportsStandings" => api.get(&["sports", "api", "v1", "standings", league], vec![])?,
+        _ => return Err(err("Unsupported sports operation")),
+    };
+    let content_valid = match operation {
+        "sportsScoreboard" => value["events"].is_array(),
+        "sportsEvent" => value["event"].is_object()
+            && value["event"]["id"].as_str() == api.v["eventId"].as_str()
+            && value["event"]["league"].as_str() == Some(league),
+        "sportsStandings" => value["groups"].is_array(),
+        _ => false,
+    };
+    if value["schema"] != 1 || value["provider"] != "ESPN"
+        || value["league"].as_str() != Some(league) || !content_valid {
+        return Err(err("Unsupported sports response"));
+    }
+    Ok(value)
+}
+
+fn valid_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-'
+        || !bytes.iter().enumerate().all(|(i,b)| i == 4 || i == 7 || b.is_ascii_digit()) {
+        return false;
+    }
+    let year = value[..4].parse::<u32>().unwrap_or(0);
+    let month = value[5..7].parse::<u32>().unwrap_or(0);
+    let day = value[8..].parse::<u32>().unwrap_or(0);
+    if !(1900..=2200).contains(&year) { return false; }
+    let max = match month {
+        1|3|5|7|8|10|12 => 31,
+        4|6|9|11 => 30,
+        2 => if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) { 29 } else { 28 },
+        _ => return false,
+    };
+    (1..=max).contains(&day)
+}
+
 pub(super) fn call(api: &Api<'_>, operation: &str) -> Result<Value> {
+    if matches!(operation, "sportsScoreboard" | "sportsEvent" | "sportsStandings") {
+        return provider_call(api, operation);
+    }
+
     let preferences = operation != "sportsHome";
     let url = api
         .base
@@ -255,4 +315,49 @@ mod tests {
             .unwrap()
             .starts_with("GET /media/sports/api/v1/home HTTP/1.1"));
     }
+    #[test]
+    fn provider_routes_keep_mount_and_auth_and_bind_response() {
+        for (op, resource, content) in [
+            ("sportsScoreboard", "scoreboard?league=nhl&date=2026-11-27", json!({"events":[]})),
+            ("sportsEvent", "events/nhl/401000123", json!({"event":{"id":"401000123","league":"nhl"}})),
+            ("sportsStandings", "standings/nhl", json!({"groups":[]})),
+        ] {
+            let mut body=json!({"schema":1,"provider":"ESPN","league":"nhl","fetchedAt":"2026-11-27T00:00:00Z","stale":false});
+            body.as_object_mut().unwrap().extend(content.as_object().unwrap().clone());
+            let (mut request, observed)=fixture("200 OK",None,body);
+            request["league"]=json!("nhl"); request["date"]=json!("2026-11-27");
+            request["eventId"]=json!("401000123");
+            assert!(call(&Api::new(&request).unwrap(),op).is_ok());
+            let observed=observed.join().unwrap();
+            assert!(observed.starts_with(&format!("GET /media/sports/api/v1/{resource} HTTP/1.1")));
+            assert!(observed.to_ascii_lowercase().contains("authorization: mediabrowser"));
+            assert!(!observed.lines().next().unwrap().contains("viewer-token"));
+        }
+        let (mut request, observed)=fixture("200 OK",None,json!({"schema":1,"provider":"ESPN","league":"nfl","events":[]}));
+        request["league"]=json!("nhl");request["date"]=json!("2026-11-27");
+        assert!(call(&Api::new(&request).unwrap(),"sportsScoreboard").is_err());
+        observed.join().unwrap();
+    }
+
+    #[test]
+    fn provider_routes_reject_invalid_selectors_before_network() {
+        let mut request=json!({"server":"http://127.0.0.1:1/media","allowLocalHttp":true,"token":"viewer-token","league":"nhl","date":"2026-11-27","eventId":"401000123"});
+        for date in ["2026-02-29","2026-04-31","2026-00-01","2026-11-00","2026-1-01","2026-11-27&url=evil","２０２６-11-27"] {
+            request["date"]=json!(date);
+            assert_eq!(call(&Api::new(&request).unwrap(),"sportsScoreboard").unwrap_err(),"Invalid sports date");
+        }
+        assert!(valid_date("2024-02-29"));
+        assert!(!valid_date("2100-02-29"));
+        request["date"]=json!("2026-11-27");
+        for league in ["NHL","hockey/nhl","../nhl","https://example.com"] {
+            request["league"]=json!(league);
+            assert_eq!(call(&Api::new(&request).unwrap(),"sportsScoreboard").unwrap_err(),"Unsupported sports league");
+        }
+        request["league"]=json!("nhl");
+        for id in ["","1/2","%2e%2e","１２３","123?x=1"] {
+            request["eventId"]=json!(id);
+            assert_eq!(call(&Api::new(&request).unwrap(),"sportsEvent").unwrap_err(),"Invalid sports event");
+        }
+    }
+
 }

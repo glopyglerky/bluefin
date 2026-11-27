@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Standalone destination for the parent's Sports tab or shortcut.
-struct SportsDashboard: View {
+struct SportsGuideDashboard: View {
     @ObservedObject var sports: SportsStore
     @EnvironmentObject private var store: LibraryStore
     @State private var day = Date()

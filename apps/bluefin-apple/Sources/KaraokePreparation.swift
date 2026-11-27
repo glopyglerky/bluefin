@@ -69,7 +69,7 @@ import AVFoundation
                                      accompaniment: backing, leadVocal: vocal,
                                      rightsReference: "Authenticated server admission", processing: manifest.processingKind,
                                      processingReference: manifest.processingReference ?? "",
-                                     durationSeconds: manifest.durationSeconds, timeline: manifest.timeline)
+                                     durationSeconds: manifest.durationSeconds, timeline: manifest.timeline, timingKind: manifest.timingKind)
         try await playback.enableKaraoke(package, retaining: lease, isCurrent: current)
         if Task.isCancelled || !current() { await playback.disableKaraoke(); throw KaraokeError.stale }
         }, onCancel: {

@@ -22,7 +22,7 @@ struct MusicLibraryView: View {
                     MusicEmptyState(title: "Your music, in one place", message: store.preview ? "Connect your music library to explore albums, artists and playlists." : "Albums from your connected library will appear here. Browse Songs to find individual tracks.")
                 }
             }.padding().frame(maxWidth: BluefinStyle.contentWidth).frame(maxWidth: .infinity)
-        }.background(BluefinBackground()).navigationTitle("Music").modifier(MusicNavigationTitle(large: true))
+        }.background(BluefinBackground()).navigationTitle("Library").modifier(MusicNavigationTitle(large: true))
         .task(id: "\(store.session?.server ?? "")|\(store.session?.userId ?? "")") {
             await recent.load(store: store, type: "MusicAlbum", parent: nil, sort: .added)
             await favorites.load(store: store, type: "MusicAlbum", parent: nil, favorites: true)
@@ -33,6 +33,15 @@ struct MusicLibraryView: View {
         browse("Artists", type: "MusicArtist", symbol: "music.mic")
         browse("Albums", type: "MusicAlbum", symbol: "square.stack")
         browse("Songs", type: "Audio", symbol: "music.note")
+        NavigationLink(destination: MusicCollection(title: "Favorite songs", initialFavorites: true)) {
+            navigationLabel("Made for You", symbol: "person.crop.square")
+        }
+        NavigationLink(destination: ItemGrid(title: "Music Videos", parent: nil, includeItemTypes: "MusicVideo")) {
+            navigationLabel("Music Videos", symbol: "play.rectangle")
+        }
+        NavigationLink(destination: MusicGenreBrowser()) {
+            navigationLabel("Genres", symbol: "guitars")
+        }
         NavigationLink(destination: DownloadsView(offline: store.offline)) {
             navigationLabel("Downloads", symbol: "arrow.down.circle")
         }
@@ -50,13 +59,13 @@ struct MusicLibraryView: View {
     private func navigationLabel(_ title: String, symbol: String) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 20) {
-                Image(systemName: symbol).font(.title2).frame(width: 32).foregroundStyle(BluefinStyle.accent)
-                Text(title).font(.title3)
+                Image(systemName: symbol).font(.system(size: 28, weight: .regular)).frame(width: 38).foregroundStyle(BluefinStyle.text)
+                Text(title).font(.title2)
                 Spacer()
                 Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-            }.frame(maxWidth: .infinity, minHeight: 58).padding(.vertical, 7).contentShape(Rectangle())
+            }.frame(maxWidth: .infinity, minHeight: 68).padding(.vertical, 8).contentShape(Rectangle())
             #if !os(tvOS)
-            Divider().padding(.leading, 52)
+            Divider().padding(.leading, 58)
             #endif
         }
     }
@@ -97,6 +106,7 @@ struct MusicCollection: View {
     var parent: MediaItem?
     var initialSort: MusicSort = .name
     var initialFavorites = false
+    var genre = ""
     @EnvironmentObject private var store: LibraryStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var model = MusicLibraryModel()
@@ -107,8 +117,13 @@ struct MusicCollection: View {
     @State private var playlistSettings = false
     @State private var selectedTracks: [MediaItem] = []
     @State private var refresh = UUID()
-    @State private var configured = false
     @State private var fromLetter = ""
+    init(title: String, type: String = "Audio", parent: MediaItem? = nil,
+         initialSort: MusicSort = .name, initialFavorites: Bool = false, genre: String = "") {
+        self.title = title; self.type = type; self.parent = parent
+        self.initialSort = initialSort; self.initialFavorites = initialFavorites; self.genre = genre
+        _sort = State(initialValue: initialSort); _favorites = State(initialValue: initialFavorites)
+    }
     private var isAlbum: Bool { parent?.Type == "MusicAlbum" }
     private var isPlaylist: Bool { parent?.Type == "Playlist" }
     private var isTracks: Bool { type == "Audio" }
@@ -196,9 +211,13 @@ struct MusicCollection: View {
                 }
                 .sheet(isPresented: $playlistPicker, onDismiss: { refresh = UUID() }) { MusicPlaylistPicker(items: selectedTracks).environmentObject(store) }
                 .sheet(isPresented: $playlistSettings, onDismiss: { refresh = UUID() }) { if let parent { MusicPlaylistSettings(playlist: parent).environmentObject(store) } }
-                .onAppear { if !configured { sort = initialSort; favorites = initialFavorites; configured = true } }
                 .task(id: requestKey) {
-                    do { try await Task.sleep(nanoseconds: 250_000_000); try Task.checkCancellation(); await load() } catch {}
+                    do {
+                        if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            try await Task.sleep(nanoseconds: 250_000_000)
+                        }
+                        try Task.checkCancellation(); await load()
+                    } catch {}
                 }
         }
     }
@@ -229,7 +248,7 @@ struct MusicCollection: View {
         }
     }
     private func load(start: Int = 0) async {
-        await model.load(store: store, type: type, parent: parent, start: start, query: isPlaylist ? "" : query, sort: sort, favorites: isPlaylist ? false : favorites, fromLetter: isPlaylist || isAlbum || sort != .name ? "" : fromLetter)
+        await model.load(store: store, type: type, parent: parent, start: start, query: isPlaylist ? "" : query, sort: sort, favorites: isPlaylist ? false : favorites, fromLetter: isPlaylist || isAlbum || sort != .name ? "" : fromLetter, genre: genre)
     }
 }
 
@@ -297,19 +316,25 @@ struct MusicPlayer: View {
     private var duration: Double { max(1, Double(playback.item.RunTimeTicks ?? 0) / 10_000_000) }
     var body: some View {
         GeometryReader { geometry in
-            ScrollView {
-                VStack(spacing: 16) {
-                    playerHeader
-                    playerLayout(size: geometry.size)
-                }.padding(.horizontal, 20).padding(.vertical, 12).frame(maxWidth: .infinity)
-            }
+            VStack(spacing: 0) {
+                playerHeader.padding(.horizontal, 20).padding(.vertical, 12)
+                if lyricsVisible {
+                    lyricLayout(size: geometry.size)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        playerLayout(size: geometry.size)
+                            .padding(.horizontal, 28).padding(.top, 18).padding(.bottom, 24)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(BluefinBackground())
+        .background(MusicPlayerBackground(item: playback.item))
         .onAppear { favorite = playback.item.UserData?.IsFavorite == true }
         .onChange(of: playback.item.Id) { _ in favorite = playback.isFavorite }
         .onChange(of: playback.isFavorite) { favorite = $0 }
         .sheet(isPresented: $queueVisible) { queue.environmentObject(store) }
-        .sheet(isPresented: $lyricsVisible) { MusicLyricsView(playback: playback).environmentObject(store) }
         .sheet(isPresented: $addToPlaylist) { MusicPlaylistPicker(items: [playback.item]).environmentObject(store) }
         .sheet(isPresented: $qualityVisible) { AudioQualityView(playback: playback) }
         .sheet(isPresented: $integrationsVisible) {
@@ -320,12 +345,28 @@ struct MusicPlayer: View {
         }
         .alert("Music", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) { Button("OK") { problem = nil } } message: { Text(problem ?? "") }
     }
+    @ViewBuilder private func lyricLayout(size: CGSize) -> some View {
+        #if os(tvOS)
+        HStack(spacing: 34) {
+            ScrollView {
+                VStack(spacing: 24) { cover.frame(maxWidth: 330); controls }
+                    .frame(maxWidth: 480).padding(24)
+            }.frame(maxWidth: 520)
+            MusicLyricsView(playback: playback, embedded: true)
+        }.padding(.horizontal, 24)
+        #else
+        MusicLyricsView(playback: playback, embedded: true)
+        #endif
+    }
     private var playerHeader: some View {
         HStack {
-            Button { dismiss() } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }
-                .buttonStyle(.plain).modifier(BluefinGlassSurface(cornerRadius: 22)).accessibilityLabel("Close Now Playing")
+            Button { if lyricsVisible { lyricsVisible = false } else { dismiss() } } label: {
+                Image(systemName: lyricsVisible ? "chevron.left" : "chevron.down").frame(width: 44, height: 44)
+            }.buttonStyle(.plain).modifier(BluefinGlassSurface(cornerRadius: 22))
+                .accessibilityLabel(lyricsVisible ? "Back to album artwork" : "Close Now Playing")
             Spacer()
-            Text("NOW PLAYING").font(.caption.weight(.semibold)).tracking(2).foregroundStyle(.secondary)
+            Text(lyricsVisible ? (playback.karaoke == nil ? "LYRICS" : "SING") : "NOW PLAYING")
+                .font(.caption.weight(.semibold)).tracking(2).foregroundStyle(.secondary)
             Spacer()
             headerActions
         }.frame(maxWidth: 1100)
@@ -356,7 +397,7 @@ struct MusicPlayer: View {
         #else
         let wide = (size.width >= 760 || (size.width >= 600 && size.width > size.height)) && !dynamicTypeSize.isAccessibilitySize
         let artworkSize = max(120, min(wide ? (size.width - 76) * 0.45 : size.width - 40,
-                                        wide ? size.height - 140 : size.height * 0.32, 420))
+                                        wide ? size.height - 140 : max(220, size.height - 460), 480))
         if #available(iOS 16, *) {
             let layout = wide ? AnyLayout(HStackLayout(alignment: .top, spacing: 36)) : AnyLayout(VStackLayout(spacing: 30))
             layout { cover.frame(width: artworkSize, height: artworkSize); controls.frame(maxWidth: 520) }

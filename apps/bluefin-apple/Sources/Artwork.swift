@@ -178,12 +178,6 @@ struct Artwork: View {
     }
 
     nonisolated private static func fetch(source: Source, session: AccountSession, width: Int, key: String, generation: UUID) async -> UIImage? {
-        let cache = SameOriginImages.shared
-        let cacheKey = key as NSString
-        if let file = cache.cachedFile(key), let diskImage = decode(file, width: width),
-           !Task.isCancelled, cache.cacheImage(diskImage, key: cacheKey, generation: generation) {
-            return diskImage
-        }
         guard !Task.isCancelled, var components = URLComponents(string: session.server), components.host != nil,
               source.id.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil else { return nil }
         while components.path.hasSuffix("/") { components.path.removeLast() }
@@ -191,6 +185,16 @@ struct Artwork: View {
         components.queryItems = [URLQueryItem(name: "maxWidth", value: String(width)), URLQueryItem(name: "quality", value: "85")]
         if let tag = source.tag { components.queryItems?.append(URLQueryItem(name: "tag", value: tag)) }
         guard let url = components.url else { return nil }
+        return await fetchResource(url: url, session: session, width: width, key: key, generation: generation)
+    }
+
+    nonisolated private static func fetchResource(url: URL, session: AccountSession, width: Int,
+                                                  key: String, generation: UUID) async -> UIImage? {
+        let cache = SameOriginImages.shared
+        let cacheKey = key as NSString
+        if let file = cache.cachedFile(key), let diskImage = decode(file, width: width),
+           !Task.isCancelled, cache.cacheImage(diskImage, key: cacheKey, generation: generation) { return diskImage }
+        guard !Task.isCancelled, generation == cache.generation() else { return nil }
         if session.meshSessionId != nil {
             do {
                 let response: MeshArtworkBytes = try await RustBridge.call("meshImage", session: session,
@@ -234,6 +238,33 @@ struct Artwork: View {
             let data = transparent ? image.pngData() : image.jpegData(compressionQuality: 0.82)
             if let data { SameOriginImages.shared.storeFile(data, key: key, generation: generation) }
         }
+    }
+
+    @MainActor static func nativeSportsLogo(resource: String?, session: AccountSession) async -> UIImage? {
+        guard let hash = SportsLogoResource.hash(resource),
+              var components = URLComponents(string: session.server), components.host != nil else { return nil }
+        while components.path.hasSuffix("/") { components.path.removeLast() }
+        components.path += "/sports/api/v1/logos/" + hash
+        components.query = nil; components.fragment = nil
+        guard let url = components.url else { return nil }
+        let cache = SameOriginImages.shared
+        let generation = cache.generation()
+        let key = "\(session.server)/\(session.userId)/\(session.meshSessionId ?? "https")/sports-logo/\(hash)/192"
+        if let image = cache.cachedImage(key as NSString, generation: generation) { return image }
+        if let pending = inFlight[key] {
+            let image = await pending.value
+            guard !Task.isCancelled, generation == cache.generation() else { return nil }
+            return image
+        }
+        let pending = Task.detached(priority: .userInitiated) {
+            await fetchResource(url: url, session: session, width: 192, key: key, generation: generation)
+        }
+        inFlight[key] = pending
+        let image = await pending.value
+        guard generation == cache.generation() else { return nil }
+        inFlight[key] = nil
+        guard !Task.isCancelled else { return nil }
+        return image
     }
 
     @MainActor static func prefetch(items: [MediaItem], session: AccountSession) async {

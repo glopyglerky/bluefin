@@ -862,8 +862,8 @@ struct TVHomeView: View {
                 if (store.loading || (!store.initialHomeLoaded && !store.preview)) && store.home.latest.isEmpty && store.home.resume.isEmpty && store.home.nextUp.isEmpty {
                     ProgressView("Loading your library").padding(.horizontal, 32)
                 }
-                if !store.home.resume.isEmpty { MediaShelf(title: "Continue watching", items: store.home.resume) }
-                if !store.home.nextUp.isEmpty { MediaShelf(title: "Up next", items: store.home.nextUp) }
+                if !store.home.resume.isEmpty { MediaShelf(title: "Continue watching", items: store.home.resume, landscape: true) }
+                if !store.home.nextUp.isEmpty { MediaShelf(title: "Up next", items: store.home.nextUp, landscape: true) }
                 ForEach(store.home.recommendations) { shelf in
                     if !shelf.items.isEmpty { MediaShelf(title: shelf.title, items: shelf.items) }
                 }
@@ -902,8 +902,11 @@ private struct TVFeaturedItem: View {
                            startPoint: .bottomLeading, endPoint: .topTrailing)
             VStack(alignment: .leading, spacing: 14) {
                 Text("FEATURED").font(.caption.weight(.semibold)).tracking(1.5)
-                Text(item.title).font(.largeTitle.bold()).lineLimit(2)
+                Text(item.title).font(.system(size: 50, weight: .bold)).lineLimit(2)
                 if !item.subtitle.isEmpty { Text(item.subtitle).font(.callout).foregroundStyle(.white.opacity(0.8)) }
+                if let overview = item.Overview, !overview.isEmpty {
+                    Text(overview).font(.system(size: 22)).foregroundStyle(.white.opacity(0.85)).lineLimit(2).frame(maxWidth: 780, alignment: .leading)
+                }
                 HStack(spacing: 20) {
                     if !item.isContainer {
                         Button { Task { await store.play(item) } } label: {
@@ -915,7 +918,7 @@ private struct TVFeaturedItem: View {
                     }.buttonStyle(.bordered).tint(.white).foregroundStyle(.white)
                 }
             }.foregroundStyle(.white).padding(42)
-        }.frame(height: 370).clipShape(RoundedRectangle(cornerRadius: 26))
+        }.frame(height: 520).clipShape(RoundedRectangle(cornerRadius: 28))
             .padding(.horizontal, 32)
     }
 }

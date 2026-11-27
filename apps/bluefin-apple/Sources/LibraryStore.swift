@@ -361,11 +361,12 @@ import CryptoKit
         return page
     }
 
-    func musicItems(type: String, parent: MediaItem? = nil, start: Int = 0, query: String = "", sort: String = "SortName", descending: Bool = false, favorites: Bool = false, fromLetter: String = "") async throws -> ItemPage {
+    func musicItems(type: String, parent: MediaItem? = nil, start: Int = 0, query: String = "", sort: String = "SortName", descending: Bool = false, favorites: Bool = false, fromLetter: String = "", genre: String = "", limit: Int = 60) async throws -> ItemPage {
         if preview {
             let source: [MediaItem] = type == "MusicAlbum" ? [.previewAlbum] : type == "MusicArtist" ? [.previewArtist] : type == "Audio" ? [.previewAudio] : []
             let values = source.filter {
                 (!favorites || $0.UserData?.IsFavorite == true) &&
+                (genre.isEmpty || $0.Genres?.contains(where: { $0.caseInsensitiveCompare(genre) == .orderedSame }) == true) &&
                 (query.isEmpty || $0.title.localizedCaseInsensitiveContains(query)) &&
                 (fromLetter.isEmpty || $0.title.localizedStandardCompare(fromLetter) != .orderedAscending)
             }
@@ -374,9 +375,10 @@ import CryptoKit
         guard let session else { throw BluefinError.message("Sign in to browse music.") }
         let generation = accountGeneration
         let kinds = ["Audio": "songs", "MusicAlbum": "albums", "MusicArtist": "artists", "Playlist": "playlists"]
-        var fields: [String: Any] = ["kind": kinds[type] ?? "songs", "startIndex": start, "limit": 60, "sortBy": sort, "sortOrder": descending ? "Descending" : "Ascending"]
+        var fields: [String: Any] = ["kind": kinds[type] ?? "songs", "startIndex": start, "limit": min(60, max(1, limit)), "sortBy": sort, "sortOrder": descending ? "Descending" : "Ascending"]
         if !query.isEmpty { fields["searchTerm"] = query }
         if favorites { fields["isFavorite"] = true }
+        if !genre.isEmpty { fields["genres"] = genre }
         if !fromLetter.isEmpty { fields["nameStartsWithOrGreater"] = fromLetter }
         if let parent {
             switch parent.Type {

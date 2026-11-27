@@ -40,6 +40,7 @@ struct MediaItem: Codable, Identifiable, Hashable {
     var Name: String?
     var `Type`: String?
     var Overview: String?
+    var Genres: [String]?
     var ProductionYear: Int?
     var RunTimeTicks: Int64?
     var SeriesName: String?
@@ -53,6 +54,8 @@ struct MediaItem: Codable, Identifiable, Hashable {
     var Number: String?
     var CurrentProgram: LiveProgram?
     var ChannelId: String?
+    var StartDate: String?
+    var EndDate: String?
     var ParentIndexNumber: Int?
     var IndexNumber: Int?
     var ImageTags: [String: String]?
@@ -97,6 +100,12 @@ struct MediaItem: Codable, Identifiable, Hashable {
         if let series = SeriesName { return "\(series) · S\(ParentIndexNumber ?? 1) E\(IndexNumber ?? 1)" }
         if Type == "Audio" || Type == "MusicAlbum" { return Artists?.joined(separator: ", ") ?? AlbumArtist ?? Album ?? "" }
         return [ProductionYear.map(String.init), RunTimeTicks.map { "\(max(1, $0 / 600_000_000)) min" }].compactMap { $0 }.joined(separator: " · ")
+    }
+    var start: Date? { StartDate.flatMap(Self.scheduleDate) }
+    var end: Date? { EndDate.flatMap(Self.scheduleDate) }
+    private static func scheduleDate(_ value: String) -> Date? {
+        (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value))
+            ?? (try? Date.ISO8601FormatStyle().parse(value))
     }
     var resumeTicks: Int64 {
         guard let value = UserData?.PlaybackPositionTicks, value > 0 else { return 0 }

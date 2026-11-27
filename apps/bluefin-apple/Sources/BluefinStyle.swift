@@ -33,9 +33,8 @@ enum BluefinStyle {
     /// Keep system list containers in the same palette as custom library views.
     @MainActor static func configureChrome() {
         let background = adaptiveUIColor(light: 0xA3ACB1, dark: 0x061727)
-        let raised = adaptiveUIColor(light: 0xCCD0D3, dark: 0x102435)
         UITableView.appearance().backgroundColor = background
-        UITableViewCell.appearance().backgroundColor = raised
+        UITableViewCell.appearance().backgroundColor = .clear
         UICollectionView.appearance().backgroundColor = background
     }
 }
@@ -56,7 +55,7 @@ struct BluefinGlassSurface: ViewModifier {
         if !enabled { content }
         else if reduceTransparency || reduceMotion {
             content.background(BluefinStyle.secondaryBackground, in: shape)
-                .overlay(shape.strokeBorder(BluefinStyle.border.opacity(0.3), lineWidth: 0.5))
+                .overlay(shape.strokeBorder(BluefinStyle.controlBorder.opacity(0.3), lineWidth: 0.5))
         } else {
             #if !os(visionOS)
             if #available(iOS 26.0, tvOS 26.0, macOS 26.0, watchOS 26.0, *) {
@@ -98,5 +97,14 @@ struct BluefinMark: View {
         }
         .aspectRatio(1, contentMode: .fit)
         .accessibilityHidden(true)
+    }
+}
+
+
+private struct BluefinCategoryActiveKey: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues {
+    var bluefinCategoryIsActive: Bool {
+        get { self[BluefinCategoryActiveKey.self] }
+        set { self[BluefinCategoryActiveKey.self] = newValue }
     }
 }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MusicLyricsView: View {
     @ObservedObject var playback: PlaybackController
+    var embedded = false
     @EnvironmentObject private var store: LibraryStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -21,32 +22,46 @@ struct MusicLyricsView: View {
     private var hasWordTiming: Bool { lyricRuns.contains { $0.contains { $0.start != nil && $0.end != nil } } }
 
     var body: some View {
-        NavigationView {
-            Group {
+        Group {
+            if embedded { content }
+            else {
+                NavigationView {
+                    content.navigationTitle(playback.karaoke == nil ? "Lyrics" : "Sing")
+                        .toolbar { ToolbarItem(placement: .primaryAction) { Button("Done") { dismiss() } } }
+                }.navigationViewStyle(.stack)
+            }
+        }
+        .task(id: identity + "|preparedLyrics=\(playback.karaoke?.package.timeline != nil)") {
+            guard playback.karaoke?.package.timeline == nil else { return }
+            let request = UUID(); lyricRequest = request
+            loading = true; failure = nil; lyrics = nil; lyricRuns = []; following = true
+            defer { if lyricRequest == request { loading = false } }
+            do {
+                let value = try await store.lyrics(item: playback.item)
+                try Task.checkCancellation()
+                guard lyricRequest == request else { return }
+                lyrics = value; lyricRuns = value.Lyrics.map(\.displayRuns)
+            } catch is CancellationError {} catch {
+                if lyricRequest == request && !Task.isCancelled { failure = error.localizedDescription }
+            }
+        }
+        .onChange(of: identity) { _ in cancelPreparation(); playback.stopKaraokeMicrophones() }
+        .onDisappear { cancelPreparation(); playback.stopKaraokeMicrophones() }
+    }
+
+    @ViewBuilder private var content: some View {
+        if let karaoke = playback.karaoke, let timeline = karaoke.package.timeline {
+            KaraokeLyricsView(playback: playback, audio: karaoke, timeline: timeline)
+        } else {
+            VStack(spacing: 0) {
+                trackHeader
+                lyricContent
                 if let karaoke = playback.karaoke {
-                    KaraokeLyricsView(playback: playback, audio: karaoke)
-                } else {
-                    VStack(spacing: 0) { trackHeader; lyricContent; singingBar }.background(BluefinBackground())
-                }
-            }.navigationTitle(playback.karaoke == nil ? "Lyrics" : "Sing")
-                .toolbar { ToolbarItem(placement: .primaryAction) { Button("Done") { dismiss() } } }
-                .task(id: identity + "|karaoke=\(playback.karaoke != nil)") {
-                    guard playback.karaoke == nil else { return }
-                    let request = UUID(); lyricRequest = request
-                    loading = true; failure = nil; lyrics = nil; lyricRuns = []; following = true
-                    defer { if lyricRequest == request { loading = false } }
-                    do {
-                        let value = try await store.lyrics(item: playback.item)
-                        try Task.checkCancellation()
-                        guard lyricRequest == request else { return }
-                        lyrics = value; lyricRuns = value.Lyrics.map(\.displayRuns)
-                    } catch is CancellationError {} catch {
-                        if lyricRequest == request && !Task.isCancelled { failure = error.localizedDescription }
-                    }
-                }
-        }.navigationViewStyle(.stack)
-            .onChange(of: identity) { _ in cancelPreparation(); playback.stopKaraokeMicrophones() }
-            .onDisappear { cancelPreparation(); playback.stopKaraokeMicrophones() }
+                    KaraokePlaybackControls(playback: playback, audio: karaoke, following: $following,
+                                            hasTimedLyrics: lyrics?.isSynced == true)
+                } else { singingBar }
+            }.background(MusicPlayerBackground(item: playback.item))
+        }
     }
     private var trackHeader: some View {
         HStack(spacing: 14) {
@@ -110,7 +125,7 @@ struct MusicLyricsView: View {
                     Image(systemName: "quote.bubble").font(.system(size: 42)).foregroundStyle(.secondary)
                     Text(failure == nil ? "Lyrics aren’t available for this song." : "Lyrics couldn’t load.").font(.title3.bold())
                     if let failure { Text(failure).font(.callout).foregroundStyle(.secondary) }
-                    Text("You can still sing along with the original track.").font(.callout).foregroundStyle(.secondary)
+                    Text(playback.karaoke == nil ? "You can still sing along with the original track." : "Vocal controls are ready. Lyrics are not available for this song.").font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
             }.multilineTextAlignment(.center).padding(28).frame(maxWidth: .infinity)
@@ -155,7 +170,7 @@ struct MusicLyricsView: View {
                         }.disabled(store.session == nil && preparing == nil)
                         if let preparationStatus { ProgressView(preparationStatus) }
                         else if let karaokeFailure { Text(karaokeFailure).font(.callout).foregroundStyle(.secondary) }
-                        else { Text("Vocal controls need prepared audio and timing from your server.").font(.caption).foregroundStyle(.secondary) }
+                        else { Text("Your server prepares separate vocals and accompaniment. Lyrics follow the timing available for this song.").font(.caption).foregroundStyle(.secondary) }
                     }.padding(.bottom, 4)
                 }.frame(maxHeight: dynamicTypeSize.isAccessibilitySize ? 320 : 230)
             }

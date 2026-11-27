@@ -88,6 +88,41 @@ import CryptoKit
         XCTAssertFalse(requests.contains { $0.path.contains(session.token) })
     }
 
+    func testExplicitStemOnlyPreparationPlaysAndRestoresOriginalWithoutInventedTiming() async throws {
+        fixture.timingKind = "none"
+        fixture.includeTimeline = false
+        let controller = try await controller()
+        let original = try XCTUnwrap(controller.player.currentItem)
+        try await KaraokePreparation.enable(playback: controller, session: session,
+            currentSession: { self.session }, status: { _ in })
+        let sing = try XCTUnwrap(controller.karaoke)
+        XCTAssertNil(sing.package.timeline)
+        XCTAssertEqual(sing.package.timingKind, KaraokeTimingKind.none)
+        try await ready(controller.player)
+        sing.setVocalLevel(0)
+        XCTAssertEqual(sing.vocalLevel, 0)
+        controller.resume()
+        try await clock(controller.player, after: 0.25)
+        controller.player.pause()
+        let position = controller.player.currentTime().seconds
+        await controller.disableKaraoke()
+        XCTAssertTrue(controller.player.currentItem === original)
+        XCTAssertEqual(controller.player.currentTime().seconds, position, accuracy: 0.05)
+    }
+
+    func testLegacyPackageWithMissingTimingIsRejectedBeforeDownloadingStems() async throws {
+        fixture.includeTimeline = false
+        let controller = try await controller()
+        do {
+            try await KaraokePreparation.enable(playback: controller, session: session,
+                currentSession: { self.session }, status: { _ in })
+            XCTFail("A corrupt legacy word package was treated as stem-only audio")
+        } catch KaraokeError.invalidTiming {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertNil(controller.karaoke)
+        let requests = await api.requests()
+        XCTAssertFalse(requests.contains { $0.path.contains("/Stems/") })
+    }
+
     func testCancellationReachesServerBeforeDelayedPreparationReply() async throws {
         let controller = try await controller()
         let began = expectation(description: "Preparation POST held by server")
@@ -214,6 +249,8 @@ import CryptoKit
 /// State is confined to NativePlaybackHTTP.queue after configuration, before each task starts.
 private final class KaraokeProtocolFixture {
     var holdPreparation = false
+    var timingKind: String?
+    var includeTimeline = true
     var onStart: (() -> Void)?
     var onCancel: (() -> Void)?
     private var job: String?
@@ -285,12 +322,16 @@ private final class KaraokeProtocolFixture {
             func descriptor(_ bytes: Data) -> [String: Any] {
                 ["bytes": bytes.count, "sha256": SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()]
             }
-            json(["itemId": "audio", "mediaSourceId": "audio", "revision": revision,
+            var manifest: [String: Any] = ["itemId": "audio", "mediaSourceId": "audio", "revision": revision,
                   "durationSeconds": 4.0, "processing": "modelSeparatedStems",
                   "processingReference": "deezer/spleeter/2stems@v1.4.0",
-                  "accompaniment": descriptor(accompaniment), "leadVocal": descriptor(vocal),
-                  "timeline": ["offsetSeconds": 0.0, "lines": [["id": "original", "voice": "lead",
-                      "tokens": [["text": "Original test tone", "start": 0.0, "end": 1.0]]]]]])
+                  "accompaniment": descriptor(accompaniment), "leadVocal": descriptor(vocal)]
+            if includeTimeline {
+                manifest["timeline"] = ["offsetSeconds": 0.0, "lines": [["id": "original", "voice": "lead",
+                    "tokens": [["text": "Original test tone", "start": 0.0, "end": 1.0]]]]]
+            }
+            if let timingKind { manifest["timingKind"] = timingKind }
+            json(manifest)
         } else if ready && !cancelled && path.hasPrefix("/Bluefin/Karaoke/audio/\(revision)/Stems/") {
             let bytes = path.hasSuffix("/accompaniment") ? accompaniment : vocal
             complete(.init(bytes: bytes, type: "audio/wav"))

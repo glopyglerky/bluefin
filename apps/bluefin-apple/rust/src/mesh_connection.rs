@@ -182,14 +182,28 @@ impl Config{
     }
 }
 pub(super) struct HttpResponse{pub status:u16,pub mime:String,pub bytes:Vec<u8>,pub etag:Option<String>}
+fn request_payload(method:&str,path:&str,headers:&[(String,String)],body:Option<Vec<u8>>,media:bool)->Result<Value>{
+    let bytes=body.unwrap_or_default();
+    if bytes.len()>request_body_limit(method,path){return Err(err("This mesh request is too large."));}
+    let mut request=json!({"method":method,"path":path,"headers":headers,"body":[]});
+    if !media && method=="PUT" && path=="/sports/api/v1/preferences" {
+        let value:Value=serde_json::from_slice(&bytes).map_err(|_|err("Invalid sports preferences"))?;
+        if !value.is_object(){return Err(err("Invalid sports preferences"));}
+        request["json_body"]=value;
+    } else {
+        request["body"]=json!(bytes);
+    }
+    Ok(request)
+}
 pub(super) async fn fetch(_v:&Value,config:&Config,method:&str,path:&str,headers:&[(String,String)],body:Option<Vec<u8>>,media:bool)->Result<HttpResponse>{
+    let request=request_payload(method,path,headers,body,media)?;
     let endpoint=PqcEndpoint::client_with_policy(&config.identity,config.relay_policy.clone()).await.map_err(|_|failure())?;
     let result=tokio::time::timeout(Duration::from_secs(45),async{
         let mut connection=endpoint.connect_server(&config.server).await.map_err(|_|failure())?;
         let result=async{
             connection.send(&json!({"version":1,"body":{"type":if media{"media"}else{"control"},
                 "session_id":config.session_id,"binding":connection.binding(),
-                "request":{"method":method,"path":path,"headers":headers,"body":body.unwrap_or_default()}}}))
+                "request":request}}))
                 .await.map_err(|_|failure())?;
             let head:Value=connection.receive().await.map_err(|_|failure())?;
             if head["version"]!=1||head["body"]["type"]!="response_head"{return Err(failure());}
@@ -217,13 +231,16 @@ pub(super) async fn fetch(_v:&Value,config:&Config,method:&str,path:&str,headers
     endpoint.close().await;
     result?
 }
+fn request_body_limit(method:&str,path:&str)->usize {
+    if method=="PUT" && path=="/sports/api/v1/preferences" {60_000} else {8192}
+}
 pub(super) fn request(v:&Value,method:&str,target:&Url,body:Option<Value>)->Result<Value>{
     request_with_headers(v,method,target,body,Vec::new()).map(|(value,_)|value)
 }
 pub(super) fn request_with_headers(v:&Value,method:&str,target:&Url,body:Option<Value>,mut extra:Vec<(String,String)>)->Result<(Value,Option<String>)>{
     let config=Config::from_request(v)?;let path=config.path(target)?;
     let bytes=body.map(|b|serde_json::to_vec(&b).map_err(|_|failure())).transpose()?;
-    if bytes.as_ref().is_some_and(|b|b.len()>8192){return Err(err("This mesh request is too large."));}
+    if bytes.as_ref().is_some_and(|b|b.len()>request_body_limit(method,&path)){return Err(err("This mesh request is too large."));}
     if bytes.is_some(){extra.push(("content-type".into(),"application/json".into()));}
     let headers=extra;
     let response=runtime()?.block_on(fetch(v,&config,method,&path,&headers,bytes,false))?;
@@ -255,4 +272,38 @@ pub(super) async fn revoke(v:&Value)->Result<Value>{
     }).await.map_err(|_|err("Remote sign-out is not confirmed yet."));
     endpoint.close().await;
     result?
+}
+
+#[cfg(test)]
+mod sports_preference_body_tests {
+    use super::{request_body_limit,request_payload};
+    use serde_json::json;
+    #[test]
+    fn larger_body_requires_the_exact_preference_cas_route() {
+        assert_eq!(request_body_limit("PUT","/sports/api/v1/preferences"),60_000);
+        for (method,path) in [
+            ("POST","/sports/api/v1/preferences"),("GET","/sports/api/v1/preferences"),
+            ("PUT","/sports/api/v1/preferences?userId=other"),("PUT","/sports/api/v1/preferences/"),
+            ("PUT","/Users/preferences"),
+        ] { assert_eq!(request_body_limit(method,path),8192); }
+    }
+    #[test]
+    fn preference_json_fits_existing_mesh_frame_without_byte_array_expansion() {
+        let value=json!({"teams":["x".repeat(59_000)]});
+        let bytes=serde_json::to_vec(&value).unwrap();
+        let headers=vec![("if-match".to_owned(),"\"1\"".to_owned())];
+        let request=request_payload("PUT","/sports/api/v1/preferences",&headers,Some(bytes.clone()),false).unwrap();
+        assert_eq!(request["body"],json!([]));
+        assert_eq!(request["json_body"],value);
+        assert_eq!(request["headers"],json!(headers));
+        let frame=json!({"version":1,"body":{"type":"control","session_id":"s".repeat(64),
+            "binding":"b".repeat(64),"request":request}});
+        assert!(serde_json::to_vec(&frame).unwrap().len()<65_536);
+        assert!(request_payload("POST","/sports/api/v1/preferences",&headers,Some(bytes),false).is_err());
+        let ordinary=request_payload("POST","/Sessions/Playing",&[],Some(b"{}".to_vec()),false).unwrap();
+        assert!(ordinary.get("json_body").is_none());
+        assert_eq!(ordinary["body"],json!([123,125]));
+        assert!(request_payload("PUT","/sports/api/v1/preferences",&headers,Some(b"null".to_vec()),false).is_err());
+    }
+
 }

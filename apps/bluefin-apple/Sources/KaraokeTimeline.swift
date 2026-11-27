@@ -52,6 +52,21 @@ struct KaraokeTimeline: Codable, Equatable {
     }
 }
 
+/// An absent marker is the original word-timed package contract.
+/// Stem-only audio must opt in explicitly, so corrupt legacy packages fail closed.
+enum KaraokeTimingKind: String, Codable {
+    case none, word, syllable
+
+    static func validate(_ kind: Self?, timeline: KaraokeTimeline?, duration: Double) throws {
+        if kind == KaraokeTimingKind.none {
+            guard timeline == nil else { throw KaraokeError.invalidTiming }
+        } else {
+            guard let timeline else { throw KaraokeError.invalidTiming }
+            try timeline.validate(duration: duration)
+        }
+    }
+}
+
 enum KaraokeError: LocalizedError {
     case invalidTiming, unauthorized, invalidStems, unavailable, stale
     var errorDescription: String? {
@@ -80,5 +95,16 @@ struct KaraokePackage {
     let processingReference: String
     /// Duration of the admitted PCM stems, not optional catalog/container metadata.
     let durationSeconds: Double
-    let timeline: KaraokeTimeline
+    let timeline: KaraokeTimeline?
+    let timingKind: KaraokeTimingKind?
+
+    init(itemID: String, accountUserID: String, accountServer: String,
+         accompaniment: URL, leadVocal: URL, rightsReference: String,
+         processing: Processing, processingReference: String,
+         durationSeconds: Double, timeline: KaraokeTimeline?, timingKind: KaraokeTimingKind? = nil) {
+        self.itemID = itemID; self.accountUserID = accountUserID; self.accountServer = accountServer
+        self.accompaniment = accompaniment; self.leadVocal = leadVocal; self.rightsReference = rightsReference
+        self.processing = processing; self.processingReference = processingReference
+        self.durationSeconds = durationSeconds; self.timeline = timeline; self.timingKind = timingKind
+    }
 }

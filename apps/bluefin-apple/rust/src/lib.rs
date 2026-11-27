@@ -674,7 +674,7 @@ pub fn call(v: &Value) -> Result<Value> {
     }
     if matches!(
         op,
-        "sportsPreferences" | "saveSportsPreferences" | "sportsHome"
+        "sportsPreferences" | "saveSportsPreferences" | "sportsHome" | "sportsScoreboard" | "sportsEvent" | "sportsStandings"
     ) {
         return sports::call(&api, op);
     }
