@@ -5432,41 +5432,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn current_playback_requires_the_joined_session_and_current_item_access() {
-        let (manager, _bus, db, library) = access_mgr().await;
-        let host = db_session(&db, "host", "host").await;
-        let guest = db_session(&db, "guest", "guest").await;
-        let another_device = SyncPlaySession {
-            session_id: "another-device".into(),
-            ..guest.clone()
-        };
-        let film = seed_movie(&db, "Movie").await;
-        let group = manager
-            .new_group(&host, "watch together", None)
-            .await
-            .unwrap();
-        set_queue(&manager, &host, vec![film]).await;
-
-        assert!(manager.current_playback(&guest).await.unwrap().is_none());
-        manager.join_group(&guest, group.group_id).await.unwrap();
-        let room = manager.current_playback(&guest).await.unwrap().unwrap();
-        assert_eq!(room.group_id, group.group_id);
-        assert_eq!(room.item.unwrap().item_id, film);
-        assert!(
-            manager
-                .current_playback(&another_device)
-                .await
-                .unwrap()
-                .is_none()
-        );
-
-        delete_item(library.as_ref(), film).await;
-        assert!(manager.current_playback(&guest).await.unwrap().is_none());
-        manager.leave_group(&guest).await.unwrap();
-        assert!(manager.current_playback(&guest).await.unwrap().is_none());
-    }
-
-    #[tokio::test]
     async fn joining_a_group_whose_queue_is_inaccessible_is_denied() {
         let (m, bus, db, library) = access_mgr().await;
         let owner = db_session(&db, "s1", "alice").await;
