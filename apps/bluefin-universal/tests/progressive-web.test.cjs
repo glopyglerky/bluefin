@@ -680,37 +680,210 @@ test('sports search opens the scheduled programme without tuning to a different 
  assert(!t.requests.some(r=>new URL(r.url).pathname.endsWith('/leases')));
 });
 
-test('public TV discovery works without any connected peer and keeps catalog requests credential-free',async()=>{
- const t=setup({apiResponse:u=>u.origin==='https://api.tvmaze.com'?jsonReply([
-  {show:{id:47,name:'Unowned Stage',url:'https://unrelated.test/title',premiered:'2025-04-01',
-   image:{medium:'https://static.tvmaze.com/uploads/images/medium_portrait/2/47.jpg'}}},
-  {show:{id:48,name:'No Poster',image:{medium:'https://unrelated.test/image.jpg'}}},
- ]):undefined});
- await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search movies and shows')).listeners.click();
- await t.ui.startSearch('unowned stage',{scope:'tvShows'});
- assert.equal(t.requests.length,1);
- const request=t.requests[0],url=new URL(request.url);
- assert.equal(url.origin,'https://api.tvmaze.com');assert.equal(url.searchParams.get('q'),'unowned stage');
- assert.equal(request.options.credentials,'omit');assert.equal(request.options.referrerPolicy,'no-referrer');
- assert.equal(request.options.headers,undefined);
+test('default public search discovers TV, movies, music, credited people, and dated sports without account credentials',async()=>{
+ const statement=value=>({mainsnak:{datavalue:{value}}});
+ const entity=(label,kind,extra={})=>({labels:{en:{value:label}},claims:{P31:[statement({id:kind})],...extra}});
+ const t=setup({apiResponse:url=>{
+  if(url.href.startsWith('https://api.tvmaze.com/search/shows'))return jsonReply([
+   {show:{id:47,name:'Screen Fixture',url:'https://unrelated.test/title',premiered:'2025-04-01',
+    image:{medium:'https://static.tvmaze.com/uploads/images/medium_portrait/2/47.png'},
+    officialSite:'https://www.netflix.com/title/80057281'}},
+   {show:{id:48,name:'No Poster',image:{medium:'https://unrelated.test/image.jpg'}}},
+  ]);
+  if(url.href.startsWith('https://api.tvmaze.com/search/people'))return jsonReply([{person:{id:73,name:'TV Crew Fixture'}}]);
+  if(url.hostname==='www.wikidata.org'){
+   if(url.searchParams.get('action')==='wbsearchentities')return jsonReply({search:[...['Q1','Q2','Q3','Q4','Q5'].map(id=>({id})),{id:'https://unrelated.test/'}]});
+   assert.equal(url.searchParams.get('ids'),'Q1|Q2|Q3|Q4|Q5');
+   return jsonReply({entities:{
+    Q1:entity('Film Fixture','Q20650540'),Q2:entity('Album Fixture','Q482994'),
+    Q3:entity('Person Fixture','Q5',{P106:['Q33999','Q2526255','Q28389'].map(id=>statement({id}))}),
+    Q4:entity('Upcoming Cup Fixture','Q16510064',{P585:[statement({time:'+2030-04-02T00:00:00Z'})]}),
+    Q5:entity('Not media','Q42'),
+   }});
+  }
+ }});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
+ await t.ui.startSearch('fixture');
+ assert.equal(t.requests.filter(request=>new URL(request.url).hostname!=='bluefin.test').length,4);
+ assert.equal(t.requests.filter(request=>new URL(request.url).pathname==='/Bluefin/Catalog/Search').length,6);
  assert.equal(t.ui.state.session,null);
- assert(findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Unowned Stage')));
- assert(!findElement(t.root,e=>String(e.href).startsWith('https://www.tvmaze.com')));
+ assert.match(t.root.textContent,/Film Fixture.*Album Fixture.*Person Fixture.*Actor, Film director, Screenwriter.*Upcoming Cup Fixture.*2030-04-02/);
+ assert.match(t.root.textContent,/TV Crew Fixture/);
+ assert(!t.root.textContent.includes('Not media'));
+ assert(findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Screen Fixture')));
+ assert(findElement(t.root,e=>e.src==='https://static.tvmaze.com/uploads/images/medium_portrait/2/47.png'));
+ assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Open on Netflix').href,'https://www.netflix.com/title/80057281');
+ assert(!findElement(t.root,e=>String(e.href).includes('/shows/47')));
  assert(!findElement(t.root,e=>String(e.src).includes('unrelated.test')));
+ assert(t.requests.every(r=>r.options.headers===undefined&&r.options.credentials==='omit'&&r.options.referrerPolicy==='no-referrer'));
+});
+
+test('public film search uses a bounded close-match lookup when the exact catalog misses',async()=>{
+ const t=setup({apiResponse:url=>{
+  if(url.hostname==='api.tvmaze.com')return jsonReply([]);
+  if(url.hostname!=='www.wikidata.org')return;
+  const action=url.searchParams.get('action');
+  if(action==='wbsearchentities')return jsonReply({search:[]});
+  if(action==='query'){
+   if(url.searchParams.get('srsearch').endsWith(' haswbstatement:P31=Q11424'))return jsonReply({query:{search:[]}});
+   assert.equal(url.searchParams.get('srsearch'),'spirted~1 away~1');
+   assert.equal(url.searchParams.get('srlimit'),'16');
+   return jsonReply({query:{search:[{title:'Q155653'},{title:'https://unrelated.test/'}]}});
+  }
+  assert.equal(url.searchParams.get('ids'),'Q155653');
+  return jsonReply({entities:{Q155653:{labels:{en:{value:'Spirited Away'}},claims:{P31:[
+   {mainsnak:{datavalue:{value:{id:'Q20650540'}}}}
+  ]}}}});
+ }});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
+ await t.ui.startSearch('Spirted Away',{scope:'movies'});
+ assert.match(t.root.textContent,/Spirited Away.*Anime film/);
+ assert.equal(t.requests.filter(request=>new URL(request.url).hostname==='www.wikidata.org').length,4);
+ assert(t.requests.every(r=>r.options.credentials==='omit'));
+});
+
+test('broad account search includes connected catalog and a close upcoming sports match, with a private library scope',async()=>{
+ const t=setup({apiResponse:url=>{
+  if(url.hostname==='api.tvmaze.com')return jsonReply([]);
+  if(url.hostname==='www.wikidata.org')return jsonReply(url.searchParams.get('action')==='query'?{query:{search:[]}}:{search:[]});
+  if(url.pathname==='/Bluefin/Web/Discovery/Search')return jsonReply({results:[url.searchParams.get('scope')==='music'
+   ?{title:'Track from connected catalog',kind:'track'}:{title:'Film from connected catalog',kind:'movie'}]});
+  if(url.pathname==='/sports/api/v1/home')return jsonReply({schema:1,presentation_only:true,local_broadcasts:[],
+   games:[{event:{name:'Boston Celtics at Toronto',date:'2030-04-02T19:30:00Z',
+    competitors:[{name:'Boston Celtics'},{name:'Toronto Raptors'}]}}]});
+ }});
  await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
- await t.ui.startSearch('stage');
- const publicRequests=t.requests.filter(r=>new URL(r.url).hostname==='api.tvmaze.com');
- assert.equal(publicRequests.length,2);
- assert(publicRequests.every(r=>r.options.headers===undefined&&r.options.credentials==='omit'));
+ await t.ui.startSearch('celitcs');
+ assert.match(t.root.textContent,/Boston Celtics at Toronto/);
+ assert.match(t.root.textContent,/Film from connected catalog/);
+ assert.match(t.root.textContent,/Track from connected catalog/);
+ assert(t.requests.some(r=>new URL(r.url).pathname==='/Persons'&&new URL(r.url).searchParams.get('PersonTypes')==='Actor,Director,Writer,GuestStar'));
+ const before=t.requests.length;
+ await t.ui.startSearch('private title',{scope:'library'});
+ assert(t.requests.slice(before).every(r=>new URL(r.url).hostname==='bluefin.test'&&!new URL(r.url).pathname.includes('/Discovery/Search')));
 });
 
 const claim=(value,rank='normal')=>({rank,mainsnak:{snaktype:'value',datavalue:{value}}});
+test('public music uses the specialist catalog without a library and opens credit details from a stable identity',async()=>{
+ const artist='a74b1b7f-71a5-4011-9441-d0b5e4122711',album='b168aa16-81a2-43cb-99de-54d940ab4541';
+ const record=(kind,value,title,fields={})=>({id:{kind,value},title,...fields});
+ const artistRecord=record('musicBrainzArtist',artist,'Radiohead');
+ const albumRecord=record('musicBrainzReleaseGroup',album,'OK Computer',{
+  artwork:{url:'https://coverartarchive.org/release-group/'+album+'/front-250',credit:'Cover Art Archive',
+   sourceUrl:'https://musicbrainz.org/release-group/'+album+'/cover-art'},
+  credits:[{id:artistRecord.id,name:'Radiohead',role:'Performer'}],
+ });
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search'&&url.searchParams.get('kind')==='album'){
+   const page=Number(url.searchParams.get('page'));
+   return jsonReply(page===1?{results:[albumRecord],nextPage:2}:{results:[albumRecord],nextPage:null});
+  }
+  if(url.pathname==='/Bluefin/Catalog/Details/album/'+album)return jsonReply(albumRecord);
+  if(url.pathname==='/Bluefin/Catalog/Details/artist/'+artist)return jsonReply(artistRecord);
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('OK Computer',{scope:'music'});
+ const more=findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('More MusicBrainz albums'));
+ await more.listeners.click();
+ const card=findElement(t.root,e=>String(e.dataset.focusKey).includes('musicBrainzReleaseGroup:'+album));
+ await card.listeners.click();
+ assert.equal(t.ui.state.route.title,'OK Computer');
+ assert(findElement(t.root,e=>String(e.src).endsWith('/front-250')));
+ const credit=findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Radiohead'));
+ await credit.listeners.click();
+ assert.equal(t.ui.state.route.title,'Radiohead');
+ assert.equal(t.ui.state.session,null);
+ assert(t.requests.filter(request=>new URL(request.url).pathname.startsWith('/Bluefin/Catalog')).every(request=>request.options.credentials==='omit'));
+});
+test('a specialist title starts with all regions and uses exact destinations without a provider allowlist',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Film Fixture',summary:'Plot',imdbId:'tt0120338'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'597'}]},evidence={source:'Fixture',observedAt:1730000000,regionVerified:true};
+ const countries=[{code:'US',name:'United States'},{code:'GB',name:'United Kingdom'}];
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,countries,sources:[]});
+  if(url.pathname==='/Bluefin/Catalog/Offers'){
+   const country=url.searchParams.get('country');
+   return jsonReply({schemaVersion:1,identity,country,sources:[{source:'Fixture',scope:'regionalAvailability',status:country==='GB'?'noOffers':'complete'}],
+    offers:country==='GB'?[]:[
+     {country:'US',service:{name:'Netflix'},accessType:'subscription',evidence,destinations:[
+      {kind:'title',url:'https://www.netflix.com/title/12345678'},{kind:'player',url:'https://www.netflix.com/watch/12345678'}]},
+     {country:'US',service:{name:'Independent Fixture'},accessType:'rent',quality:'4K',price:{amount:'4.99',currency:'USD'},
+      evidence,destinations:[{kind:'player',url:'https://@'},{kind:'title',url:'https://independent.example/title/597'}]},
+     {country:'US',service:{name:'Expired Fixture'},accessType:'free',evidence:{...evidence,expiresAt:1730000500},
+      destinations:[{kind:'title',url:'https://independent.example/title/old'}]}]});
+  }
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('Film Fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ assert(findElement(t.root,e=>e.href==='https://www.netflix.com/watch/12345678'));
+ assert(!findElement(t.root,e=>e.href==='https://www.netflix.com/title/12345678'));
+ assert(findElement(t.root,e=>e.href==='https://independent.example/title/597'));
+ const initial=t.requests.find(request=>new URL(request.url).pathname==='/Bluefin/Catalog/Offers');
+ assert.equal(new URL(initial.url).searchParams.has('country'),false);
+ assert(t.root.textContent.includes('Rent · 4K · 4.99 USD'));
+ assert(t.root.textContent.includes('Expired'));
+ assert(!findElement(t.root,e=>e.href==='https://independent.example/title/old'));
+ const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ country.value='GB';await country.onchange();
+ assert.equal(new URL(t.requests.at(-1).url).searchParams.get('country'),'GB');
+ assert(t.root.textContent.includes('No offers were reported for this selection.'));
+ assert(!findElement(t.root,e=>e.href==='https://www.netflix.com/watch/12345678'));
+});
+test('a film result displays a licensed Commons poster and exact watch links before opening details',async()=>{
+ const t=setup({apiResponse:u=>{
+  if(u.hostname==='commons.wikimedia.org'){
+   assert.equal(u.searchParams.get('titles'),'File:Film poster.png');
+   return jsonReply({query:{pages:[{title:'File:Film poster.png',imageinfo:[{
+    thumburl:'https://thumb.wikimedia.org/wikipedia/commons/thumb/0/00/Film_poster.png/250px-Film_poster.png?utm_source=commons.wikimedia.org',
+    descriptionurl:'https://commons.wikimedia.org/wiki/File:Film_poster.png',
+    extmetadata:{Artist:{value:'<a>Poster Artist</a>'},LicenseShortName:{value:'CC BY-SA 4.0'},
+     LicenseUrl:{value:'https://creativecommons.org/licenses/by-sa/4.0/'}}
+   }]}]}});
+  }
+  if(u.hostname!=='www.wikidata.org')return;
+  if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[{title:'Q184843'}]}});
+  return jsonReply({entities:{Q184843:{labels:{en:{value:'Film Fixture'}},claims:{
+   P3383:[claim('Film poster.png')],P18:[claim('Secondary artwork.jpg')],
+   P1874:[claim('80112233'),claim('80112234')],P856:[claim('https://www.paramountplus.com/movies/fixture/'),
+    claim('https://www.netflix.com/title/80112233/redirect'),claim('https://www.netflix.com')]
+  }}}});
+ }});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
+ await t.ui.startSearch('Film Fixture',{scope:'movies'});
+ assert(findElement(t.root,e=>e.src==='https://thumb.wikimedia.org/wikipedia/commons/thumb/0/00/Film_poster.png/250px-Film_poster.png'));
+ assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Poster Artist').href,'https://commons.wikimedia.org/wiki/File:Film_poster.png');
+ for(const href of ['https://www.netflix.com/watch/80112233','https://www.netflix.com/watch/80112234',
+  'https://www.paramountplus.com/movies/fixture/'])assert(findElement(t.root,e=>e.href===href));
+ assert(!findElement(t.root,e=>String(e.href).endsWith('/redirect')));
+});
+test('music scope includes solo musicians and keeps album, track and artist destinations distinct',async()=>{
+ const ids=['Q100','Q200','Q300'];
+ const t=setup({apiResponse:u=>{
+  if(u.hostname!=='www.wikidata.org')return;
+  if(u.searchParams.get('action')==='wbsearchentities')return jsonReply({search:ids.map(id=>({id}))});
+  const make=(name,kind,extra)=>({labels:{en:{value:name}},claims:{P31:[claim({id:kind})],...extra}});
+  return jsonReply({entities:{
+   Q100:make('Solo Fixture','Q5',{P106:[claim({id:'Q177220'})],P1902:[claim('A'.repeat(22))]}),
+   Q200:make('Album Fixture','Q482994',{P2205:[claim('B'.repeat(22))]}),
+   Q300:make('Song Fixture','Q7366',{P2207:[claim('C'.repeat(22))]}),
+  }});
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('audio',{scope:'music'});
+ for(const [id,name] of [['Q100','Solo Fixture'],['Q200','Album Fixture'],['Q300','Song Fixture']]){
+  const result=findElement(t.root,e=>e.dataset.focusKey==='public-title|music|'+id);
+  assert(result?.textContent.includes(name));
+ }
+ for(const [kind,id] of [['artist','A'],['album','B'],['track','C']])assert(findElement(t.root,e=>e.href==='https://open.spotify.com/'+kind+'/'+id.repeat(22)));
+});
 test('film selection stays in Bluefin and offers a direct player or exact provider title',async()=>{
  const t=setup({apiResponse:u=>{
   if(u.hostname!=='www.wikidata.org')return undefined;
+  if(u.searchParams.get('action')==='wbsearchentities')return jsonReply({search:[]});
   if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[
    {title:'Q184843'},{title:'Q184843'},{title:'File:Unrelated'}]}});
-  if(u.searchParams.get('props')==='claims')return jsonReply({entities:{Q184843:{claims:{
+  return jsonReply({entities:{Q184843:{labels:{en:{value:'Blade Runner'}},
+   descriptions:{en:{value:'1982 film directed by Ridley Scott'}},claims:{
    P1874:[claim('80234304')],
    P6466:[claim('e47078f3-1c0e-49a8-9da9-c571a7a20fec')],
    P13902:[claim('entity-f6174ebf-cb92-453c-a52b-62bb3576e402')],
@@ -719,17 +892,17 @@ test('film selection stays in Bluefin and offers a direct player or exact provid
    P8298:[claim('movie/../../unrelated.test')],
    P9586:[claim('unused')]
   }}}});
-  return jsonReply({entities:{Q184843:{labels:{en:{value:'Blade Runner'}},
-   descriptions:{en:{value:'1982 film directed by Ridley Scott'}}}}});
  }});
- await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search movies and shows')).listeners.click();
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
  await t.ui.startSearch('Blade Runner',{scope:'movies'});
  assert.equal(t.ui.state.session,null);
  const selection=findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|Q184843');
  assert(selection);
  await selection.listeners.click();
  const lookups=t.requests.filter(r=>new URL(r.url).hostname==='www.wikidata.org');
- assert.equal(lookups.length,3);
+ assert.equal(t.ui.state.route.kind,'public-detail');
+ assert.match(t.root.textContent,/1982 film directed by Ridley Scott.*Where to watch/);
+ assert(lookups.some(r=>new URL(r.url).searchParams.get('props')==='labels|descriptions|claims'));
  assert(lookups.every(r=>r.options.credentials==='omit'&&r.options.referrerPolicy==='no-referrer'));
  const link=label=>findElement(t.root,e=>e.tagName==='A'&&e.textContent===label)?.href;
  assert.equal(link('Watch on Netflix'),'https://www.netflix.com/watch/80234304');
@@ -741,30 +914,43 @@ test('film selection stays in Bluefin and offers a direct player or exact provid
 
 test('series lookup resolves an exact TVmaze identity and goes straight to the provider title',async()=>{
  const t=setup({apiResponse:u=>{
-  if(u.hostname==='api.tvmaze.com')return jsonReply([{show:{id:47,name:'Example series'}}]);
+  if(u.hostname==='api.tvmaze.com'){
+   if(u.pathname==='/shows/47')return jsonReply({id:47,summary:'<p>The series premise</p>',_embedded:{cast:[
+    {person:{id:19,name:'Sample Actor'},character:{name:'Lead Character'}}]}});
+   if(u.pathname.startsWith('/people/19/'))return jsonReply([{type:'Director',_embedded:{show:{id:47,name:'Example series'}}}]);
+   return jsonReply([{show:{id:47,name:'Example series'}}]);
+  }
   if(u.hostname==='www.wikidata.org'){
+   if(u.searchParams.get('action')==='wbsearchentities')return jsonReply({search:[]});
    if(u.searchParams.get('action')==='query'){
-    assert.equal(u.searchParams.get('srsearch'),'haswbstatement:P8600=47');
+    if(u.searchParams.get('srsearch')!=='haswbstatement:P8600=47')return jsonReply({query:{search:[]}});
     return jsonReply({query:{search:[{title:'Q1234'}]}});
    }
    return jsonReply({entities:{Q1234:{claims:{P1874:[claim('80057281')],P6467:[claim('e47078f3-1c0e-49a8-9da9-c571a7a20fec')]}}}});
   }
  }});
- await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search movies and shows')).listeners.click();
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
  await t.ui.startSearch('example',{scope:'tvShows'});
  await findElement(t.root,e=>e.dataset.focusKey==='public-title|series|47').listeners.click();
+ assert.equal(t.ui.state.route.kind,'public-detail');
+ assert.match(t.root.textContent,/The series premise.*Where to watch.*Credits and related media.*Sample Actor.*Lead Character/);
  assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Open on Netflix').href,'https://www.netflix.com/title/80057281');
  assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Open on Hulu').href,
   'https://www.hulu.com/series/e47078f3-1c0e-49a8-9da9-c571a7a20fec');
  assert(!findElement(t.root,e=>String(e.href).includes('/watch/')));
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Sample Actor')).listeners.click();
+ assert.equal(t.ui.state.route.title,'Sample Actor');
+ assert.match(t.root.textContent,/Credits.*Example series.*Director/);
+ await findElement(t.root,e=>e.dataset.focusKey==='back|Back').listeners.click();
+ assert.equal(t.ui.state.route.title,'Example series');
 });
 
 test('public film offers in-app playback only for the exact authorized library title',async()=>{
  const t=setup({apiResponse:u=>{
   if(u.hostname==='www.wikidata.org'){
-   if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[{title:'Q184843'}]}});
-   if(u.searchParams.get('props')==='claims')return jsonReply({entities:{Q184843:{claims:{P345:[claim('tt0083658')]}}}});
-   return jsonReply({entities:{Q184843:{labels:{en:{value:'Blade Runner'}}}}});
+   if(u.searchParams.get('action')==='wbsearchentities')return jsonReply({search:[]});
+  if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[{title:'Q184843'}]}});
+   return jsonReply({entities:{Q184843:{labels:{en:{value:'Blade Runner'}},claims:{P345:[claim('tt0083658')]}}}});
   }
   if(u.pathname.startsWith('/Users/')&&u.pathname.endsWith('/Items')&&u.searchParams.has('SearchTerm')){
    return jsonReply({Items:[
