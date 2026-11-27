@@ -740,6 +740,18 @@ pub fn call(v: &Value) -> Result<Value> {
         ),
         "libraries" => api.get(&["Users", text(v, "userId")?, "Views"], vec![]),
         "searchFilters" => search::facets(&api),
+        "searchPeople" => {
+            let mut query = vec![
+                ("UserId", text(v, "userId")?.into()),
+                ("StartIndex", count(v, "startIndex", 0, 1_000_000)?.to_string()),
+                ("Limit", count(v, "limit", 60, 200)?.to_string()),
+                ("PersonTypes", "Actor,Director,Writer,GuestStar".into()),
+            ];
+            if v.get("searchTerm").is_some_and(|value| !value.is_null()) {
+                query.push(("SearchTerm", text(v, "searchTerm")?.into()));
+            }
+            api.get(&["Persons"], query)
+        }
         "items" => {
             let user = text(v, "userId")?;
             let mut q = vec![

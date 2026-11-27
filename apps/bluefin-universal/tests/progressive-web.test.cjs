@@ -680,32 +680,58 @@ test('sports search opens the scheduled programme without tuning to a different 
  assert(!t.requests.some(r=>new URL(r.url).pathname.endsWith('/leases')));
 });
 
-test('public TV discovery works without any connected peer and keeps catalog requests credential-free',async()=>{
- const t=setup({apiResponse:u=>u.origin==='https://api.tvmaze.com'?jsonReply([
-  {show:{id:47,name:'Unowned Stage',url:'https://unrelated.test/title',premiered:'2025-04-01',
-   image:{medium:'https://static.tvmaze.com/uploads/images/medium_portrait/2/47.jpg'}}},
-  {show:{id:48,name:'No Poster',image:{medium:'https://unrelated.test/image.jpg'}}},
- ]):undefined});
- await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search TV shows')).listeners.click();
- await t.ui.startSearch('unowned stage');
- assert.equal(t.requests.length,1);
- const request=t.requests[0],url=new URL(request.url);
- assert.equal(url.origin,'https://api.tvmaze.com');assert.equal(url.searchParams.get('q'),'unowned stage');
- assert.equal(request.options.credentials,'omit');assert.equal(request.options.referrerPolicy,'no-referrer');
- assert.equal(request.options.headers,undefined);
+test('default public search discovers TV, movies, music, credited people, and dated sports without account credentials',async()=>{
+ const statement=value=>({mainsnak:{datavalue:{value}}});
+ const entity=(label,kind,extra={})=>({labels:{en:{value:label}},claims:{P31:[statement({id:kind})],...extra}});
+ const t=setup({apiResponse:url=>{
+  if(url.href.startsWith('https://api.tvmaze.com/search/shows'))return jsonReply([
+   {show:{id:47,name:'Screen Fixture',url:'https://unrelated.test/title',premiered:'2025-04-01',
+    image:{medium:'https://static.tvmaze.com/uploads/images/medium_portrait/2/47.jpg'}}},
+   {show:{id:48,name:'No Poster',image:{medium:'https://unrelated.test/image.jpg'}}},
+  ]);
+  if(url.href.startsWith('https://api.tvmaze.com/search/people'))return jsonReply([{person:{id:73,name:'TV Crew Fixture'}}]);
+  if(url.hostname==='www.wikidata.org'){
+   if(url.searchParams.get('action')==='wbsearchentities')return jsonReply({search:[...['Q1','Q2','Q3','Q4','Q5'].map(id=>({id})),{id:'https://unrelated.test/'}]});
+   assert.equal(url.searchParams.get('ids'),'Q1|Q2|Q3|Q4|Q5');
+   return jsonReply({entities:{
+    Q1:entity('Film Fixture','Q20650540'),Q2:entity('Album Fixture','Q482994'),
+    Q3:entity('Person Fixture','Q5',{P106:['Q33999','Q2526255','Q28389'].map(id=>statement({id}))}),
+    Q4:entity('Upcoming Cup Fixture','Q16510064',{P585:[statement({time:'+2030-04-02T00:00:00Z'})]}),
+    Q5:entity('Not media','Q42'),
+   }});
+  }
+ }});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
+ await t.ui.startSearch('fixture');
+ assert.equal(t.requests.length,4);
  assert.equal(t.ui.state.session,null);
- assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent.includes('Unowned Stage')).href,'https://www.tvmaze.com/shows/47');
- assert(t.root.textContent.includes('Streaming availability for these results is unverified.'));
+ assert.match(t.root.textContent,/Film Fixture.*Album Fixture.*Person Fixture.*Actor, Film director, Screenwriter.*Upcoming Cup Fixture.*2030-04-02/);
+ assert.match(t.root.textContent,/TV Crew Fixture/);
+ assert(!t.root.textContent.includes('Not media'));
+ assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent.includes('Screen Fixture')).href,'https://www.tvmaze.com/shows/47');
  assert(!findElement(t.root,e=>String(e.src).includes('unrelated.test')));
+ assert(t.requests.every(r=>r.options.headers===undefined&&r.options.credentials==='omit'&&r.options.referrerPolicy==='no-referrer'));
+});
+
+test('broad account search includes connected catalog and a close upcoming sports match, with a private library scope',async()=>{
+ const t=setup({apiResponse:url=>{
+  if(url.hostname==='api.tvmaze.com')return jsonReply([]);
+  if(url.hostname==='www.wikidata.org')return jsonReply({search:[]});
+  if(url.pathname==='/Bluefin/Web/Discovery/Search')return jsonReply({results:[url.searchParams.get('scope')==='music'
+   ?{title:'Track from connected catalog',kind:'track'}:{title:'Film from connected catalog',kind:'movie'}]});
+  if(url.pathname==='/sports/api/v1/home')return jsonReply({schema:1,presentation_only:true,local_broadcasts:[],
+   games:[{event:{name:'Boston Celtics at Toronto',date:'2030-04-02T19:30:00Z',
+    competitors:[{name:'Boston Celtics'},{name:'Toronto Raptors'}]}}]});
+ }});
  await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
- await t.ui.startSearch('private library title');
- await t.ui.startSearch('private TV title',{scope:'tvShows'});
- assert.equal(t.requests.filter(r=>new URL(r.url).hostname==='api.tvmaze.com').length,1);
- await t.ui.startSearch('stage',{scope:'publicTv'});
- const publicRequests=t.requests.filter(r=>new URL(r.url).hostname==='api.tvmaze.com');
- assert.equal(publicRequests.length,2);
- assert.equal(new URL(publicRequests[1].url).searchParams.get('q'),'stage');
- assert(publicRequests.every(r=>r.options.headers===undefined&&r.options.credentials==='omit'));
+ await t.ui.startSearch('celitcs');
+ assert.match(t.root.textContent,/Boston Celtics at Toronto/);
+ assert.match(t.root.textContent,/Film from connected catalog/);
+ assert.match(t.root.textContent,/Track from connected catalog/);
+ assert(t.requests.some(r=>new URL(r.url).pathname==='/Persons'&&new URL(r.url).searchParams.get('PersonTypes')==='Actor,Director,Writer,GuestStar'));
+ const before=t.requests.length;
+ await t.ui.startSearch('private title',{scope:'library'});
+ assert(t.requests.slice(before).every(r=>new URL(r.url).hostname==='bluefin.test'&&!new URL(r.url).pathname.includes('/Discovery/Search')));
 });
 
 test('moonlit explicit search history uses the current account revision and survives a stale write rejection',async()=>{

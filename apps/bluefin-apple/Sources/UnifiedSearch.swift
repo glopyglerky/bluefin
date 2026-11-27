@@ -1,11 +1,13 @@
 import SwiftUI
 
 enum UnifiedSearchScope: String, CaseIterable, Identifiable, Sendable {
-    case all, tvShows, movies, music, liveTv
+    case all, libraryOnly, tvShows, movies, music, people, liveTv
     var id: Self { self }
     var title: String {
         switch self {
         case .all: "All Media"
+        case .libraryOnly: "Library Only"
+        case .people: "People"
         case .tvShows: "TV Shows"
         case .movies: "Movies"
         case .music: "Music"
@@ -17,7 +19,8 @@ enum UnifiedSearchScope: String, CaseIterable, Identifiable, Sendable {
     var includesChannels: Bool { self == .all || self == .liveTv }
     var previewTypes: String? {
         switch self {
-        case .all: nil
+        case .all, .libraryOnly: nil
+        case .people: "Person"
         case .tvShows: "Series,Season,Episode"
         case .movies: "Movie"
         case .music: "Audio,MusicAlbum,MusicArtist,MusicVideo,Playlist"
@@ -42,11 +45,12 @@ struct UnifiedSearchIdentity: Hashable {
 }
 
 enum UnifiedSearchLane: String, CaseIterable, Sendable {
-    case library, artists, programmes, channels
+    case library, artists, people, programmes, channels
     var title: String {
         switch self {
         case .library: "Your library"
         case .artists: "Artists"
+        case .people: "People in your library"
         case .programmes: "On now and upcoming"
         case .channels: "Channels"
         }
@@ -67,8 +71,10 @@ struct UnifiedSearchRequest {
     var lanes: [UnifiedSearchLane] {
         if filters.hasFacets { return [.library] }
         if filters.scope == .liveTv { return [.programmes, .channels] }
+        if filters.scope == .people { return [.people] }
         var values: [UnifiedSearchLane] = [.library]
         if filters.scope.includesArtists { values.append(.artists) }
+        if filters.scope == .all { values.append(.people) }
         if filters.scope.includesChannels { values += [.programmes, .channels] }
         return values
     }
@@ -78,7 +84,7 @@ struct UnifiedSearchRequest {
         if !query.isEmpty { fields["searchTerm"] = query }
         switch lane {
         case .library:
-            fields["searchScope"] = filters.scope.rawValue
+            fields["searchScope"] = filters.scope == .libraryOnly || filters.scope == .people ? "all" : filters.scope.rawValue
             if let id = filters.studioID { fields["studioIds"] = [id] }
             if let tag = filters.tag { fields["tags"] = [tag] }
             if let id = filters.collectionID { fields["parentId"] = id }
@@ -86,6 +92,8 @@ struct UnifiedSearchRequest {
         case .artists:
             fields["kind"] = "artists"
             return ("musicItems", fields)
+        case .people:
+            return ("searchPeople", fields)
         case .programmes:
             fields["minEndDate"] = minEndDate
             return ("livePrograms", fields)
@@ -203,7 +211,7 @@ struct UnifiedSearchFacets: Decodable {
                 return try await store.items(query: request.query, start: start, includeItemTypes: request.filters.scope.previewTypes)
             case .artists:
                 return try await store.musicItems(type: "MusicArtist", start: start, query: request.query)
-            case .programmes, .channels:
+            case .people, .programmes, .channels:
                 return .init(Items: [], TotalRecordCount: 0)
             }
         }
@@ -238,7 +246,6 @@ struct UnifiedSearchResults: View {
     @StateObject private var model = UnifiedSearchModel()
     @State private var filters: UnifiedSearchFilters
     @State private var showFilters = false
-    @State private var publicSearch: UnifiedSearchIdentity?
     init(query: String, initialScope: UnifiedSearchScope = .all) {
         self.query = query
         _filters = State(initialValue: .init(scope: initialScope))
@@ -270,11 +277,7 @@ struct UnifiedSearchResults: View {
             if active {
                 if !store.preview && query.count >= 2 && !filters.hasFacets &&
                     (filters.scope == .all || filters.scope == .tvShows) {
-                    if publicSearch == identity {
-                        PublicTVSearchSection(query: query)
-                    } else {
-                        Button("Search public TV titles on TVmaze") { publicSearch = identity }
-                    }
+                    PublicTVSearchSection(query: query)
                 }
                 if !query.isEmpty && !filters.hasFacets {
                     if filters.scope.includesCatalog { ServerDiscoverySection(query: query, scope: filters.scope) }
@@ -307,7 +310,7 @@ struct UnifiedSearchResults: View {
             } else {
                 Section {
                     Label("Find your next favorite", systemImage: "magnifyingglass").font(.headline)
-                    Text("Search for a title or choose a media type. You can also search the public TV catalog.")
+                    Text("Search your connected media and the public TV catalog.")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -316,7 +319,6 @@ struct UnifiedSearchResults: View {
         .task(id: showFilters ? store.accountContext : nil) {
             if showFilters { await model.loadFacets(store: store) }
         }
-        .onChange(of: identity) { _ in publicSearch = nil }
         .onDisappear { model.cancel() }
     }
 
