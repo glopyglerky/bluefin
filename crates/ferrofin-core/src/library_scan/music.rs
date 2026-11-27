@@ -148,6 +148,8 @@ pub(super) struct MusicFetch {
     audiodb_images: bool,
     /// fanart.tv's album/artist images.
     fanart_images: bool,
+    /// Exact-ID front-cover fallback for an album with no existing Primary.
+    cover_art_archive_images: bool,
     /// A named plugin image provider enabled for this item.
     dynamic_images: bool,
     /// How the remote image providers fill the item's images.
@@ -162,7 +164,10 @@ impl MusicFetch {
 
     /// A remote image provider runs.
     fn any_images(self) -> bool {
-        self.audiodb_images || self.fanart_images || self.dynamic_images
+        self.audiodb_images
+            || self.fanart_images
+            || self.cover_art_archive_images
+            || self.dynamic_images
     }
 
     /// A remote provider of either kind runs.
@@ -531,6 +536,10 @@ impl LibraryScanner {
             fanart_images: images
                 && self.fanart.is_some()
                 && policy.image_enabled(name, fetcher_names::FANART),
+            cover_art_archive_images: images
+                && kind == MusicKind::Album
+                && self.cover_art_archive.is_some()
+                && policy.image_enabled(name, fetcher_names::COVER_ART_ARCHIVE),
             dynamic_images: images
                 && self.dynamic_providers.iter().any(|provider| {
                     provider.library_gated() && policy.image_enabled(name, provider.name())
@@ -1923,7 +1932,11 @@ impl LibraryScanner {
                 }
             }
         }
-        if found.is_empty() && fanart_found.is_empty() && !fetch.dynamic_images {
+        if found.is_empty()
+            && fanart_found.is_empty()
+            && !fetch.dynamic_images
+            && !fetch.cover_art_archive_images
+        {
             return None;
         }
         let mut remote: Vec<RemoteImage> = Vec::new();
@@ -1935,6 +1948,9 @@ impl LibraryScanner {
             (fetcher_names::AUDIODB, Some(remote)),
             (fetcher_names::FANART, Some(fanart_remote)),
         ];
+        if fetch.cover_art_archive_images {
+            sources.push((fetcher_names::COVER_ART_ARCHIVE, None));
+        }
         if fetch.dynamic_images {
             sources.extend(
                 self.dynamic_providers
@@ -1974,6 +1990,42 @@ impl LibraryScanner {
                 .await;
                 self.fill_image_metadata(&mut downloaded).await;
                 images.extend(downloaded);
+            } else if name == fetcher_names::COVER_ART_ARCHIVE {
+                // Keep a curated/local/previously acquired cover even during a
+                // broad refresh. The exact-ID fallback only fills an empty slot.
+                let has_primary = stored
+                    .iter()
+                    .chain(&images)
+                    .any(|image| image.image_type == ferrofin_model::entities::ImageType::Primary);
+                if !has_primary
+                    && preferences.limit(ferrofin_model::entities::ImageType::Primary) > 0
+                    && let Some(client) = &self.cover_art_archive
+                {
+                    let raw_id = |name: &str| {
+                        ids.iter()
+                            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                            .map(|(_, value)| value.as_str())
+                    };
+                    let found = client
+                        .album_images(
+                            raw_id("MusicBrainzAlbum"),
+                            raw_id("MusicBrainzReleaseGroup"),
+                        )
+                        .await;
+                    let mut candidates = Vec::new();
+                    append_fanart(&mut candidates, found);
+                    let mut downloaded = super::artwork::acquire_images(
+                        tmdb,
+                        &dir,
+                        candidates,
+                        preferences,
+                        &images,
+                        false,
+                    )
+                    .await;
+                    self.fill_image_metadata(&mut downloaded).await;
+                    images.extend(downloaded);
+                }
             } else {
                 self.apply_dynamic_images(
                     row,
@@ -2005,6 +2057,40 @@ impl LibraryScanner {
 
 #[cfg(test)]
 impl LibraryScanner {
+    /// The album portion of an explicit image-only refresh. It uses the same
+    /// provider and persistence pass without deriving unrelated track metadata.
+    pub(super) async fn music_image_refresh_for_test(&self, id: Uuid, policy: FetcherPolicy<'_>) {
+        let options = MetadataRefreshOptions {
+            metadata_refresh_mode: MetadataRefreshMode::None,
+            image_refresh_mode: MetadataRefreshMode::FullRefresh,
+            ..MetadataRefreshOptions::default()
+        };
+        let work = MusicRefresh {
+            id,
+            kind: MusicKind::Album,
+            plan: ItemRefreshPlan {
+                remote_images: ImageFetch::MissingOnly,
+                ..ItemRefreshPlan::IDLE
+            },
+            request: RefreshRequest {
+                options: &options,
+                force_save: false,
+            },
+            identified: None,
+            policy,
+            aggregate: false,
+            owns_stamp: false,
+            owns_save: false,
+        };
+        self.refresh_music(
+            &[work],
+            &HashMap::new(),
+            ScanRun::defaults(),
+            &mut Served::new(),
+        )
+        .await;
+    }
+
     /// The music pass over `items` as a first scan's walk hands them to it:
     /// each never refreshed, refreshing with the default options under
     /// `policy`, its remote providers running when `remote` says so.

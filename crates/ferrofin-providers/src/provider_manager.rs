@@ -1147,6 +1147,8 @@ pub struct LocalProviderManager {
     fanart: Option<Arc<crate::fanart::FanartClient>>,
     /// TheAudioDb — artist/album artwork keyed by MusicBrainz ids.
     audiodb: Option<Arc<crate::audiodb::AudioDbClient>>,
+    /// Exact-ID approved music covers; separate from metadata matching.
+    cover_art_archive: Option<Arc<crate::CoverArtArchiveClient>>,
     /// OMDb — the poster (Primary) for a movie/trailer/episode with an IMDb id.
     omdb: Option<Arc<crate::omdb::OmdbClient>>,
     /// TheTVDB — the second season metadata provider a path-less season's
@@ -1380,6 +1382,7 @@ impl LocalProviderManager {
             studios: None,
             fanart: None,
             audiodb: None,
+            cover_art_archive: None,
             omdb: None,
             tvdb: None,
             people: None,
@@ -1484,6 +1487,13 @@ impl LocalProviderManager {
     #[must_use]
     pub fn with_audiodb(mut self, audiodb: Arc<crate::audiodb::AudioDbClient>) -> Self {
         self.audiodb = Some(audiodb);
+        self
+    }
+
+    /// Attaches approved front-cover lookup by stored MusicBrainz IDs.
+    #[must_use]
+    pub fn with_cover_art_archive(mut self, client: Arc<crate::CoverArtArchiveClient>) -> Self {
+        self.cover_art_archive = Some(client);
         self
     }
 
@@ -3659,6 +3669,8 @@ enum RemoteImageSource {
     AudioDbArtist,
     /// `AudioDbAlbumImageProvider`.
     AudioDbAlbum,
+    /// Approved front art for the exact stored MusicBrainz release/group.
+    CoverArtArchive,
     /// `OmdbImageProvider`: the poster of a movie/trailer/episode.
     Omdb,
     /// The Studio Images artwork repository: a studio's thumb.
@@ -3681,6 +3693,7 @@ impl RemoteImageSource {
             | Self::FanartAlbum => FANART_PROVIDER_NAME,
             Self::TvdbSeries | Self::TvdbSeason | Self::TvdbEpisode => fetcher_names::TVDB,
             Self::AudioDbArtist | Self::AudioDbAlbum => AUDIODB_PROVIDER_NAME,
+            Self::CoverArtArchive => fetcher_names::COVER_ART_ARCHIVE,
             Self::Omdb => OMDB_PROVIDER_NAME,
             Self::Studios => crate::studios::PROVIDER_NAME,
         }
@@ -3699,7 +3712,8 @@ impl RemoteImageSource {
             | Self::TmdbPerson
             | Self::TmdbSeason
             | Self::TmdbEpisode
-            | Self::Omdb => &[Primary],
+            | Self::Omdb
+            | Self::CoverArtArchive => &[Primary],
             Self::FanartMovie => &[Primary, Thumb, Art, Logo, Disc, Banner, Backdrop],
             Self::FanartSeries => &[Primary, Thumb, Art, Logo, Backdrop, Banner],
             Self::FanartSeason => &[Backdrop, Thumb, Banner, Primary],
@@ -3855,6 +3869,10 @@ impl LocalProviderManager {
             "MusicAlbum" => {
                 sources.extend(has(self.audiodb.is_some(), RemoteImageSource::AudioDbAlbum));
                 sources.extend(has(self.fanart.is_some(), RemoteImageSource::FanartAlbum));
+                sources.extend(has(
+                    self.cover_art_archive.is_some(),
+                    RemoteImageSource::CoverArtArchive,
+                ));
             }
             "Studio" => sources.extend(has(self.studios.is_some(), RemoteImageSource::Studios)),
             _ => {}
@@ -4031,6 +4049,17 @@ impl LocalProviderManager {
             | RemoteImageSource::AudioDbAlbum
             | RemoteImageSource::Omdb
             | RemoteImageSource::Studios => self.keyed_images(source, entity, ids).await,
+            RemoteImageSource::CoverArtArchive => match &self.cover_art_archive {
+                Some(client) => {
+                    client
+                        .album_images(
+                            provider_id_of_pairs(ids, "MusicBrainzAlbum"),
+                            provider_id_of_pairs(ids, "MusicBrainzReleaseGroup"),
+                        )
+                        .await
+                }
+                None => Vec::new(),
+            },
         }
     }
 

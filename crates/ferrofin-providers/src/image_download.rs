@@ -180,7 +180,16 @@ async fn open_image_capped(
     let Fetched {
         response,
         redirected,
-    } = http.send(url).await?;
+    } = if crate::cover_art_archive::is_archive_url(url) {
+        crate::cover_art_archive::send_image(url).await?
+    } else {
+        http.send(url).await?
+    };
+    let limit = if crate::cover_art_archive::is_archive_url(url) {
+        limit.min(crate::cover_art_archive::IMAGE_LIMIT)
+    } else {
+        limit
+    };
     match response.status() {
         reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::FORBIDDEN => {
             return Err(ImageFetchError::Missing);

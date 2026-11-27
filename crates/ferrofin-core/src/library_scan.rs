@@ -4353,6 +4353,8 @@ pub struct LibraryScanner {
     /// Optional AudioDb client — album/artist description, genre and artwork
     /// by MusicBrainz id, in the music pass ([`music`]).
     audiodb: Option<Arc<ferrofin_providers::AudioDbClient>>,
+    /// Exact-ID front covers, only after existing album artwork is exhausted.
+    cover_art_archive: Option<Arc<ferrofin_providers::CoverArtArchiveClient>>,
     /// Item repository for the music pass (reading the album and artist rows
     /// and their tracks) and the other closing passes. Absent → no music
     /// pass.
@@ -4639,6 +4641,7 @@ impl LibraryScanner {
             fanart: None,
             musicbrainz: None,
             audiodb: None,
+            cover_art_archive: None,
             item_repository: None,
             years: None,
             by_name: None,
@@ -5239,6 +5242,16 @@ impl LibraryScanner {
     #[must_use]
     pub fn with_audiodb(mut self, audiodb: Arc<ferrofin_providers::AudioDbClient>) -> Self {
         self.audiodb = Some(audiodb);
+        self
+    }
+
+    /// Attaches approved front-cover lookup by stored MusicBrainz IDs.
+    #[must_use]
+    pub fn with_cover_art_archive(
+        mut self,
+        client: Arc<ferrofin_providers::CoverArtArchiveClient>,
+    ) -> Self {
+        self.cover_art_archive = Some(client);
         self
     }
 
@@ -30176,6 +30189,260 @@ mod tests {
                 .find(|(k, _)| k == name)
                 .map(|(_, v)| v)
         }
+    }
+
+    /// The album-only fallback is gated by the library, never searches names,
+    /// and makes no request when the album already owns a Primary image.
+    #[rstest::rstest]
+    #[case::missing(true, false, 1)]
+    #[case::existing(true, true, 0)]
+    #[case::disabled(false, false, 0)]
+    #[tokio::test]
+    async fn cover_art_archive_only_fetches_an_enabled_missing_album(
+        #[case] enabled: bool,
+        #[case] existing: bool,
+        #[case] expected_requests: usize,
+    ) {
+        use ferrofin_model::entities::ImageType;
+        use ferrofin_traits::options::ItemImageInfo;
+        use ferrofin_traits::persistence::ItemPersistenceService as _;
+
+        let fixture = MusicFixture::new(true, false, None).await;
+        fixture
+            .persistence
+            .save_provider_id(fixture.album_id, "MusicBrainzAlbum", MB_RELEASE)
+            .await
+            .unwrap();
+        let (base, hits) = spawn_music_stub();
+        let original = fixture._tmp.path().join("original-cover.png");
+        if existing {
+            std::fs::write(&original, b"\x89PNG\r\n\x1a\nowned-cover").unwrap();
+            fixture
+                .persistence
+                .save_item_images(
+                    fixture.album_id,
+                    &[ItemImageInfo {
+                        path: original.to_string_lossy().into_owned(),
+                        image_type: ImageType::Primary,
+                        date_modified: chrono::Utc::now(),
+                        width: 100,
+                        height: 100,
+                        blur_hash: None,
+                    }],
+                )
+                .await
+                .unwrap();
+        }
+        let scanner = fixture
+            .scanner(&base)
+            .with_metadata(
+                Arc::new(ferrofin_providers::TmdbClient::new().with_base_url(&base)),
+                fixture._tmp.path().join("metadata"),
+            )
+            .with_cover_art_archive(Arc::new(
+                ferrofin_providers::CoverArtArchiveClient::for_test(&base),
+            ));
+        let options = LibraryOptions {
+            type_options: ["MusicArtist", "MusicAlbum"]
+                .into_iter()
+                .map(|kind| ferrofin_model::configuration::TypeOptions {
+                    type_: Some(kind.to_owned()),
+                    image_fetchers: if enabled {
+                        vec![ferrofin_providers::cover_art_archive::PROVIDER_NAME.to_owned()]
+                    } else {
+                        Vec::new()
+                    },
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        fixture
+            .pass(
+                &scanner,
+                super::FetcherPolicy {
+                    options: Some(&options),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert_eq!(hits.audiodb(), expected_requests);
+        assert_eq!(hits.musicbrainz(), 0);
+        assert_eq!(hits.searches(), 0);
+        assert_eq!(
+            fixture
+                .id_of(fixture.album_id, "MusicBrainzAlbum")
+                .await
+                .as_deref(),
+            Some(MB_RELEASE)
+        );
+        let images = fixture
+            .items
+            .get_image_infos(fixture.album_id)
+            .await
+            .unwrap();
+        assert_eq!(images.len(), usize::from(existing));
+        if existing {
+            assert_eq!(images[0].path, original.to_string_lossy());
+            assert_eq!(
+                std::fs::read(original).unwrap(),
+                b"\x89PNG\r\n\x1a\nowned-cover"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn cover_art_archive_image_only_refresh_stores_cover_without_changing_metadata() {
+        use ferrofin_model::entities::ImageType;
+        use ferrofin_traits::persistence::ItemPersistenceService as _;
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let fixture = MusicFixture::new(true, false, None).await;
+        let original = BaseItemEntity {
+            name: Some("Owner's album title".to_owned()),
+            overview: Some("Owner's album notes".to_owned()),
+            genres: Some("Owner genre".to_owned()),
+            studios: Some("Owner label".to_owned()),
+            production_year: Some(2003),
+            ..fixture.row(fixture.album_id).await
+        };
+        fixture
+            .persistence
+            .save_items(std::slice::from_ref(&original))
+            .await
+            .unwrap();
+        fixture
+            .persistence
+            .save_provider_id(fixture.album_id, "MusicBrainzAlbum", MB_RELEASE)
+            .await
+            .unwrap();
+        fixture
+            .persistence
+            .save_provider_id(fixture.album_id, "MusicBrainzReleaseGroup", MB_GROUP)
+            .await
+            .unwrap();
+
+        let png = fixture._tmp.path().join("fixture-cover.png");
+        image::RgbImage::from_pixel(64, 64, image::Rgb([34, 52, 73]))
+            .save(&png)
+            .unwrap();
+        let bytes = std::fs::read(png).unwrap();
+        let body = serde_json::json!({
+            "release": format!("https://musicbrainz.org/release/{MB_RELEASE}"),
+            "images": [{"id":1,"front":true,"approved":true}]
+        })
+        .to_string()
+        .into_bytes();
+        ferrofin_providers::destination::test_support::allow_loopback_images();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let requested = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = Arc::clone(&requested);
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buffer = [0_u8; 4096];
+                let count = stream.read(&mut buffer).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..count]);
+                let path = request
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_owned();
+                seen.lock().unwrap().push(path.clone());
+                let (status, content_type, content) = if path == format!("/release/{MB_RELEASE}") {
+                    ("200 OK", "application/json", body.as_slice())
+                } else if path == format!("/release/{MB_RELEASE}/1-1200.jpg") {
+                    ("200 OK", "image/png", bytes.as_slice())
+                } else {
+                    ("404 Not Found", "application/json", &b"{}"[..])
+                };
+                let header = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    content.len(),
+                );
+                let _ = stream.write_all(header.as_bytes()).await;
+                let _ = stream.write_all(content).await;
+                let _ = stream.shutdown().await;
+            }
+        });
+        let scanner = fixture
+            .scanner(&base)
+            .with_metadata(
+                Arc::new(ferrofin_providers::TmdbClient::new().with_base_url(&base)),
+                fixture._tmp.path().join("metadata"),
+            )
+            .with_cover_art_archive(Arc::new(
+                ferrofin_providers::CoverArtArchiveClient::for_test(&base),
+            ))
+            .with_image_processor(Arc::new(ferrofin_drawing::ImageProcessor::new(
+                Arc::new(ferrofin_drawing::ImageCrateEncoder::new()),
+                fixture._tmp.path().join("image-cache"),
+            )));
+        let options = LibraryOptions {
+            type_options: vec![ferrofin_model::configuration::TypeOptions {
+                type_: Some("MusicAlbum".to_owned()),
+                image_fetchers: vec![
+                    ferrofin_providers::cover_art_archive::PROVIDER_NAME.to_owned(),
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        scanner
+            .music_image_refresh_for_test(
+                fixture.album_id,
+                super::FetcherPolicy {
+                    options: Some(&options),
+                    ..Default::default()
+                },
+            )
+            .await;
+        server.abort();
+
+        let images = fixture
+            .items
+            .get_image_infos(fixture.album_id)
+            .await
+            .unwrap();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].image_type, ImageType::Primary);
+        assert_eq!((images[0].width, images[0].height), (64, 64));
+        let saved = image::open(&images[0].path).unwrap().into_rgb8();
+        assert_eq!(saved.dimensions(), (64, 64));
+        assert_eq!(saved.get_pixel(0, 0).0, [34, 52, 73]);
+        assert_eq!(
+            *requested.lock().unwrap(),
+            vec![
+                format!("/release/{MB_RELEASE}"),
+                format!("/release/{MB_RELEASE}/1-1200.jpg"),
+            ]
+        );
+        let row = fixture.row(fixture.album_id).await;
+        assert_eq!(row.name, original.name);
+        assert_eq!(row.overview, original.overview);
+        assert_eq!(row.genres, original.genres);
+        assert_eq!(row.studios, original.studios);
+        assert_eq!(row.production_year, original.production_year);
+        assert_eq!(row.premiere_date, original.premiere_date);
+        assert_eq!(row.date_last_refreshed, original.date_last_refreshed);
+        assert_eq!(
+            fixture
+                .id_of(fixture.album_id, "MusicBrainzAlbum")
+                .await
+                .as_deref(),
+            Some(MB_RELEASE)
+        );
+        assert_eq!(
+            fixture
+                .id_of(fixture.album_id, "MusicBrainzReleaseGroup")
+                .await
+                .as_deref(),
+            Some(MB_GROUP)
+        );
     }
 
     /// The music post-pass under Phase 3L's lock rules, over one album with

@@ -280,11 +280,24 @@ impl GuardedHttp {
     /// GETs `url` through its origin's limiter, following redirects up to
     /// [`MAX_REDIRECTS`] and vetting the destination of each.
     pub(crate) async fn send(&self, url: &str) -> Result<Fetched, SendError> {
+        self.send_checked(url, |_| true).await
+    }
+
+    /// Adds a provider-specific URL rule before every request and redirect,
+    /// while retaining the normal DNS, proxy, quota and redirect bounds.
+    pub(crate) async fn send_checked(
+        &self,
+        url: &str,
+        allows: impl Fn(&reqwest::Url) -> bool + Send + Sync,
+    ) -> Result<Fetched, SendError> {
         let limiter = limiter_for(url, self.kind.label);
         let mut current =
             reqwest::Url::parse(url).map_err(|_| SendError::Failed("a URL that does not parse"))?;
         let mut redirects = 0;
         loop {
+            if !allows(&current) {
+                return Err(self.kind.unsent("a URL outside this provider's policy"));
+            }
             let client = self.client_for(&current).await?;
             let mut request = client.get(current.clone());
             if let Some(agent) = self.kind.user_agent {

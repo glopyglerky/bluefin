@@ -12,6 +12,7 @@ pub mod books;
 pub mod builtin_plugins;
 pub mod chapter_names;
 pub mod container_types;
+pub mod cover_art_archive;
 pub mod destination;
 pub mod episode;
 pub mod error;
@@ -53,6 +54,7 @@ pub mod tvdb;
 pub mod xbmc;
 
 pub use books::{BookMetadata, read_book_cover, read_book_metadata};
+pub use cover_art_archive::CoverArtArchiveClient;
 pub use error::ProvidersError;
 pub use external_ids::{ExternalIdItem, external_id_infos, external_urls};
 pub use local_xml::{

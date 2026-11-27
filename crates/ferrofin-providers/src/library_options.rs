@@ -246,6 +246,7 @@ pub fn default_image_order(kind: &str, name: &str) -> usize {
         | (fetcher_names::FANART, "MusicArtist") => 0,
         (fetcher_names::TMDB, "Series") | (fetcher_names::AUDIODB, "MusicAlbum") => 2,
         (fetcher_names::TMDB | fetcher_names::FANART | fetcher_names::AUDIODB, _) => 1,
+        (fetcher_names::COVER_ART_ARCHIVE, "MusicAlbum") => 80,
         (fetcher_names::OMDB, _) => 90,
         (fetcher_names::EMBEDDED_IMAGES, _) => 99,
         (fetcher_names::SCREEN_GRABBER, _) => 100,
@@ -347,6 +348,8 @@ pub mod fetcher_names {
     pub const MUSICBRAINZ: &str = "MusicBrainz";
     /// TheAudioDB music metadata + artwork.
     pub const AUDIODB: &str = "TheAudioDB";
+    /// Approved front covers matched by exact MusicBrainz identifiers.
+    pub const COVER_ART_ARCHIVE: &str = crate::cover_art_archive::PROVIDER_NAME;
     /// Sidecar/art-dir image discovery.
     pub const LOCAL_IMAGES: &str = "Local Images";
     /// Cover art extracted from a VIDEO file itself
@@ -384,6 +387,7 @@ pub mod fetcher_names {
         FANART,
         MUSICBRAINZ,
         AUDIODB,
+        COVER_ART_ARCHIVE,
         LOCAL_IMAGES,
         EMBEDDED_IMAGES,
         AUDIO_IMAGES,
@@ -567,6 +571,7 @@ fn default_enabled_for(
                 || eq(fetcher_names::SCREEN_GRABBER)
                 || eq(fetcher_names::AUDIODB)
                 || eq(fetcher_names::AUDIO_IMAGES)
+                || (eq(fetcher_names::COVER_ART_ARCHIVE) && type_is(&["MusicAlbum"]))
         }),
         _ => None,
     }
@@ -711,6 +716,14 @@ fn metadata_providers() -> Vec<Provider> {
             default_enabled: true,
             compiled: true,
             images: Some(audiodb_images),
+        },
+        Provider {
+            name: fetcher_names::COVER_ART_ARCHIVE,
+            caps: &[Cap::ImageFetcher],
+            types: &["MusicAlbum"],
+            default_enabled: true,
+            compiled: true,
+            images: Some(cover_art_archive_images),
         },
     ]
 }
@@ -943,6 +956,14 @@ fn audiodb_images(type_name: &str) -> &'static [ImageType] {
     }
 }
 
+fn cover_art_archive_images(kind: &str) -> &'static [ImageType] {
+    if kind == "MusicAlbum" {
+        &[ImageType::Primary]
+    } else {
+        &[]
+    }
+}
+
 /// Supported automatic image types for one built-in fetcher, used to avoid
 /// querying a provider when all of its enabled slots are already filled.
 #[must_use]
@@ -952,6 +973,7 @@ pub fn image_types_for_fetcher(kind: &str, name: &str) -> &'static [ImageType] {
         fetcher_names::TVDB => tvdb_images(kind),
         fetcher_names::FANART => fanart_images(kind),
         fetcher_names::AUDIODB => audiodb_images(kind),
+        fetcher_names::COVER_ART_ARCHIVE => cover_art_archive_images(kind),
         fetcher_names::OMDB if matches!(kind, "Movie" | "Episode") => omdb_images(kind),
         _ => &[],
     }

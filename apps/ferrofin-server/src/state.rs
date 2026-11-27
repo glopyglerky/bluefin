@@ -680,6 +680,8 @@ pub async fn build_app_state(
         Some(base) => ferrofin_providers::AudioDbClient::with_base_url(base),
         None => ferrofin_providers::AudioDbClient::new(),
     });
+    // Exact release covers, with release-group covers only when no edition is known.
+    let cover_art_archive_client = Arc::new(ferrofin_providers::CoverArtArchiveClient::new());
     // fanart.tv — logos/clear-art/disc/banners keyed off the Tmdb/Imdb/Tvdb/
     // MusicBrainz ids. Built-in key works keyless; FERROFIN_FANART_KEY adds a
     // personal client_key. Shared by the scan and the "Choose Image" methods.
@@ -1332,6 +1334,7 @@ pub async fn build_app_state(
             // (movies/trailers/episodes; shared API key by default).
             .with_fanart(Arc::clone(&fanart_client))
             .with_audiodb(Arc::clone(&audiodb_client))
+            .with_cover_art_archive(Arc::clone(&cover_art_archive_client))
             .with_omdb(Arc::clone(&omdb_client))
             // A path-less (virtual) season's refresh runs both season
             // providers, TheMovieDb's and TheTVDB's, in the library's order
@@ -1582,6 +1585,7 @@ pub async fn build_app_state(
     // AudioDb artist bio/genre + artist/album artwork (by MusicBrainz id),
     // fetched in the post-scan music pass. Built-in free key.
     .with_audiodb(Arc::clone(&audiodb_client))
+    .with_cover_art_archive(Arc::clone(&cover_art_archive_client))
     // Studio thumbs from the artwork repository, downloaded post-scan for the
     // by-name Studio rows so the TV Networks / Studios tabs carry artwork.
     .with_studio_images(Arc::clone(&studios_client))
