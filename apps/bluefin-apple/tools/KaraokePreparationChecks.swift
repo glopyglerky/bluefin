@@ -42,6 +42,12 @@ import Foundation
         let noTiming: [String: Any] = ["timingKind": "none", "timeline": NSNull()]
         try check("Stem-only wrong item", accepts: false, changes: noTiming, item: "another-track")
         try check("Stem-only wrong source", accepts: false, changes: noTiming, source: "another-source")
+        try check("Legacy supplied response must qualify playing source", accepts: false,
+                  changes: ["processing": "suppliedStems"], omitted: ["mediaSourceId"])
+        try check("Supplied response rejects another edition", accepts: false,
+                  changes: ["processing": "suppliedStems", "mediaSourceId": "other-source"])
+        try check("Qualified legacy supplied response remains valid", accepts: true,
+                  changes: ["processing": "suppliedStems"])
         try check("Stem-only missing processor", accepts: false, changes: noTiming, omitted: ["processingReference"])
         try check("Stem-only invalid duration", accepts: false, changes: noTiming.merging(["durationSeconds": 0]) { _, new in new })
         try check("Stem-only malformed digest", accepts: false, changes: noTiming.merging(["revision": "bad"]) { _, new in new })

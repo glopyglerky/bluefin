@@ -5,10 +5,11 @@ import AVFoundation
     static func enable(playback: PlaybackController, session: AccountSession,
                        currentSession: () -> AccountSession?, status: (String) -> Void) async throws {
         let id = playback.item.Id
-        let sourceID = playback.selectedMediaSourceID
+        guard let sourceID = playback.selectedMediaSourceID, KaraokeIdentity.validSource(sourceID) else {
+            throw BluefinError.message("Start this track from your server before adjusting its vocals.")
+        }
         let requestID = UUID().uuidString
-        var fields: [String: Any] = ["itemId": id]
-        if let sourceID { fields["mediaSourceId"] = sourceID }
+        let fields: [String: Any] = ["itemId": id, "mediaSourceId": sourceID]
         func current() -> Bool {
             guard let now = currentSession() else { return false }
             return now.server == session.server && now.userId == session.userId && now.token == session.token

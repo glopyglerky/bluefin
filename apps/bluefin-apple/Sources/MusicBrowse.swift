@@ -167,7 +167,12 @@ struct MusicSearchView: View {
             else { UnifiedSearchResults(query: query, initialScope: .music) }
         }
         .navigationTitle("Search").modifier(MusicNavigationTitle(large: true))
+        #if os(iOS)
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                    prompt: Text("Artists, songs, albums and more"))
+        #else
         .searchable(text: $query, prompt: Text("Artists, songs, albums and more"))
+        #endif
     }
 }
 
@@ -186,6 +191,12 @@ struct MusicGenreBrowser: View {
                 Text(showKinds ? "Browse your music" : "Genres").font(.title2.bold())
                     .accessibilityAddTraits(.isHeader)
                 LazyVGrid(columns: columns, spacing: 16) {
+                    ForEach(Array(genres.enumerated()), id: \.element) { index, genre in
+                        NavigationLink(destination: MusicCollection(title: genre, type: "MusicAlbum", genre: genre)) {
+                            MusicBrowseTile(title: genre, symbol: "music.note",
+                                item: albums.items.first { $0.Genres?.contains(genre) == true }, tint: index)
+                        }.modifier(MusicContentLinkStyle())
+                    }
                     if showKinds {
                         kind("Songs", type: "Audio", symbol: "music.note", tint: 0)
                         kind("Albums", type: "MusicAlbum", symbol: "square.stack", tint: 1)
@@ -198,12 +209,7 @@ struct MusicGenreBrowser: View {
                             MusicBrowseTile(title: "Recently added", symbol: "clock", tint: 5)
                         }.modifier(MusicContentLinkStyle())
                     }
-                    ForEach(Array(genres.enumerated()), id: \.element) { index, genre in
-                        NavigationLink(destination: MusicCollection(title: genre, type: "MusicAlbum", genre: genre)) {
-                            MusicBrowseTile(title: genre, symbol: "music.note",
-                                item: albums.items.first { $0.Genres?.contains(genre) == true }, tint: index)
-                        }.modifier(MusicContentLinkStyle())
-                    }
+
                 }
                 if albums.loading { ProgressView("Loading genres") }
                 if let failure = albums.problem {

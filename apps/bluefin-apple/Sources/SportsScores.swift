@@ -66,9 +66,6 @@ struct SportsDashboard: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
-                Picker("Schedule", selection: selection) {
-                    ForEach(SportsDay.allCases) { Text($0.rawValue).tag($0) }
-                }.pickerStyle(.segmented)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
                         ForEach(SportsScoreLeague.allCases) { item in
@@ -80,47 +77,60 @@ struct SportsDashboard: View {
                         }
                     }
                 }
-                HStack {
-                    Button { dayOffset = max(-365, dayOffset - 1) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }
-                        .accessibilityLabel("Previous day")
-                    Spacer()
-                    Text(date, style: .date).font(.headline)
-                    Spacer()
-                    Button { dayOffset = min(365, dayOffset + 1) } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44) }
-                        .accessibilityLabel("Next day")
-                }.buttonStyle(.plain)
-                HStack {
-                    Button { favoritesOnly.toggle() } label: {
-                        Label("My Teams", systemImage: favoritesOnly ? "star.fill" : "star").font(.headline)
-                    }.buttonStyle(.plain).accessibilityValue(favoritesOnly ? "Only followed teams" : "All teams")
-                    Spacer()
-                    NavigationLink(destination: SportsSettingsView(sports: sports)) {
-                        Image(systemName: "slider.horizontal.3").frame(width: 44, height: 44)
-                    }.accessibilityLabel("Sports preferences")
+                VStack(spacing: 0) {
+                    VStack(spacing: 16) {
+                        Picker("Schedule", selection: selection) {
+                            ForEach(SportsDay.allCases) { Text($0.rawValue).tag($0) }
+                        }.pickerStyle(.segmented)
+                        HStack {
+                            Button { dayOffset = max(-365, dayOffset - 1) } label: {
+                                Image(systemName: "chevron.left").frame(width: 44, height: 44)
+                            }.accessibilityLabel("Previous day")
+                            Spacer()
+                            Text(date, style: .date).font(.headline)
+                            Spacer()
+                            Button { dayOffset = min(365, dayOffset + 1) } label: {
+                                Image(systemName: "chevron.right").frame(width: 44, height: 44)
+                            }.accessibilityLabel("Next day")
+                        }.buttonStyle(.plain)
+                        HStack {
+                            Button { favoritesOnly.toggle() } label: {
+                                Label("My Teams", systemImage: favoritesOnly ? "star.fill" : "star").font(.headline)
+                            }.buttonStyle(.plain).accessibilityValue(favoritesOnly ? "Only followed teams" : "All teams")
+                            Spacer()
+                            NavigationLink(destination: SportsSettingsView(sports: sports)) {
+                                Image(systemName: "slider.horizontal.3").frame(width: 44, height: 44)
+                            }.accessibilityLabel("Sports preferences")
+                        }
+                    }.padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 6)
+                    ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
+                        if index > 0 { Divider().padding(.horizontal, 20) }
+                        Button { selected = event } label: {
+                            SportsScoreRow(event: event, preferences: sports.saved?.preferences)
+                        }.modifier(MusicContentLinkStyle())
+                    }
+                    if scores.loading && scores.board == nil {
+                        ProgressView("Loading scores").frame(maxWidth: .infinity).padding(24)
+                    }
+                    if let failure = scores.failure {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Label("Scores could not refresh", systemImage: "wifi.exclamationmark").font(.headline)
+                            Text(failure).font(.callout).foregroundStyle(.secondary)
+                            Button("Try again") { Task { await scores.load(store: store, league: league, date: date) } }
+                        }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                    } else if events.isEmpty && !scores.loading {
+                        MusicEmptyState(title: favoritesOnly ? "No games for your teams" : "No games on this day",
+                            message: favoritesOnly ? "Choose All teams or another date. Follow teams from a game." : "Choose another league or date.")
+                    }
                 }
-                ForEach(events) { event in
-                    Button { selected = event } label: { SportsScoreCard(event: event, preferences: sports.saved?.preferences) }
-                        .modifier(MusicContentLinkStyle())
-                }
-                if scores.loading && scores.board == nil { ProgressView("Loading scores").frame(maxWidth: .infinity).padding(24) }
-                if let failure = scores.failure {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Label("Scores could not refresh", systemImage: "wifi.exclamationmark").font(.headline)
-                        Text(failure).font(.callout).foregroundStyle(.secondary)
-                        Button("Try again") { Task { await scores.load(store: store, league: league, date: date) } }
-                    }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
-                        .background(BluefinStyle.secondaryBackground, in: RoundedRectangle(cornerRadius: 24))
-                } else if events.isEmpty && !scores.loading {
-                    MusicEmptyState(title: favoritesOnly ? "No games for your teams" : "No games on this day",
-                        message: favoritesOnly ? "Choose All teams or another date. Follow teams from a game." : "Choose another league or date.")
-                }
+                .padding(.bottom, 8)
+                .background(BluefinStyle.secondaryBackground, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 30).strokeBorder(BluefinStyle.text.opacity(0.10), lineWidth: 0.5))
                 if let board = scores.board {
                     HStack {
                         Text(board.stale || scores.failure != nil ? "Last available scores" : "ESPN")
                         Spacer()
-                        if let updated = SportsScoreDate.parse(board.fetchedAt) {
-                            Text(updated, style: .time)
-                        }
+                        if let updated = SportsScoreDate.parse(board.fetchedAt) { Text(updated, style: .time) }
                     }.font(.caption).foregroundStyle(.secondary)
                 }
                 NavigationLink(destination: SportsGuideDashboard(sports: sports)) {
@@ -172,48 +182,68 @@ private struct SportsScoreLogo: View {
     }
 }
 
-private struct SportsScoreCard: View {
+private struct SportsScoreRow: View {
     let event: SportsScoreEvent
     let preferences: SportsPreferences?
     var body: some View {
-        VStack(spacing: 18) {
-            HStack {
-                Text(event.league.uppercased()).font(.caption.bold())
-                Spacer()
-                if event.isLive { Label("Live", systemImage: "circle.fill").font(.caption.bold()).foregroundStyle(BluefinStyle.accent) }
-                else { Text(event.statusLabel).font(.caption).lineLimit(1) }
-            }.foregroundStyle(.secondary)
-            HStack(spacing: 20) {
-                team(event.away)
+        VStack(spacing: 14) {
+            Text(event.league.uppercased()).font(.caption.bold()).foregroundStyle(.secondary)
+            HStack(alignment: .center, spacing: 10) {
+                team(event.away, trailing: false)
                 VStack(spacing: 6) {
                     if event.isScheduled, let date = event.dateValue {
-                        Text(date, style: .time).font(.title3.bold())
+                        Text(date, style: .time).font(.headline.monospacedDigit()).lineLimit(1)
                     } else {
-                        HStack(spacing: 12) {
+                        HStack(spacing: 8) {
                             Text(event.away.score ?? "—")
                             Text("·").foregroundStyle(.secondary)
                             Text(event.home.score ?? "—")
-                        }.font(.system(.largeTitle, design: .rounded).weight(.bold).monospacedDigit())
+                        }.font(.title2.bold().monospacedDigit())
                     }
-                    if event.isLive, let clock = event.status.clock { Text(clock).font(.caption.monospacedDigit()) }
+                    if event.isLive {
+                        Label("Live", systemImage: "circle.fill").font(.caption2.bold()).foregroundStyle(BluefinStyle.accent)
+                        if let clock = event.status.clock { Text(clock).font(.caption.monospacedDigit()) }
+                    } else if !event.isScheduled {
+                        Text(event.statusLabel).font(.caption).foregroundStyle(.secondary)
+                    }
                 }.frame(maxWidth: .infinity)
-                team(event.home)
+                team(event.home, trailing: true)
             }
-        }.padding(22).frame(maxWidth: .infinity)
-            .background(SportsTeamBackdrop(home: event.home.color, away: event.away.color))
-            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(BluefinStyle.text.opacity(0.10), lineWidth: 0.5))
-            .accessibilityElement(children: .combine)
+        }.padding(.horizontal, 20).padding(.vertical, 22).frame(maxWidth: .infinity)
+            .contentShape(Rectangle()).accessibilityElement(children: .combine)
     }
-    private func team(_ team: SportsScoreTeam) -> some View {
-        VStack(spacing: 8) {
-            SportsScoreLogo(team: team).frame(width: 54, height: 54)
+    private func team(_ team: SportsScoreTeam, trailing: Bool) -> some View {
+        VStack(alignment: trailing ? .trailing : .leading, spacing: 10) {
+            HStack(spacing: 7) {
+                if trailing, let record = team.record {
+                    Text(record).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                SportsScoreLogo(team: team).frame(width: logoSize, height: logoSize)
+                if !trailing, let record = team.record {
+                    Text(record).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            }.frame(maxWidth: .infinity, alignment: trailing ? .trailing : .leading)
             HStack(spacing: 4) {
-                if team.isFollowed(league: event.league, preferences: preferences) { Image(systemName: "star.fill").font(.caption2) }
-                Text(team.displayName).font(.headline).lineLimit(2).multilineTextAlignment(.center)
+                if !trailing && team.isFollowed(league: event.league, preferences: preferences) {
+                    Image(systemName: "star.fill").font(.caption2)
+                }
+                Text(team.displayName).font(.subheadline.weight(.semibold)).lineLimit(2)
+                if trailing && team.isFollowed(league: event.league, preferences: preferences) {
+                    Image(systemName: "star.fill").font(.caption2)
+                }
             }
-            if let record = team.record { Text(record).font(.caption).foregroundStyle(.secondary) }
+            .frame(maxWidth: .infinity, alignment: trailing ? .trailing : .leading)
+            .multilineTextAlignment(trailing ? .trailing : .leading)
         }.frame(maxWidth: .infinity)
+    }
+    private var logoSize: CGFloat {
+        #if os(tvOS)
+        64
+        #else
+        42
+        #endif
     }
 }
 
@@ -300,7 +330,7 @@ private struct SportsEventView: View {
     }
     private var matchup: some View {
         VStack(spacing: 24) {
-            HStack(alignment: .top, spacing: 24) {
+            HStack(alignment: .top, spacing: 12) {
                 detailTeam(current.away)
                 VStack(spacing: 10) {
                     Text(current.statusLabel).font(.headline).multilineTextAlignment(.center)
@@ -321,7 +351,8 @@ private struct SportsEventView: View {
             let followed = team.isFollowed(league: event.league, preferences: sports.saved?.preferences)
             Button { Task { await follow(team) } } label: {
                 Label(followed ? "Following" : "Follow", systemImage: followed ? "star.fill" : "star")
-                    .font(.caption.weight(.semibold)).padding(.horizontal, 12).padding(.vertical, 10)
+                    .font(.caption.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                    .padding(.horizontal, 12).padding(.vertical, 10)
             }.buttonStyle(.plain).modifier(BluefinGlassSurface(cornerRadius: 24))
                 .disabled(sports.saving || sports.loading || sports.saved == nil)
                 .accessibilityLabel((followed ? "Unfollow " : "Follow ") + team.name)

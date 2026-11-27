@@ -246,6 +246,7 @@ struct UnifiedSearchResults: View {
     @StateObject private var model = UnifiedSearchModel()
     @State private var filters: UnifiedSearchFilters
     @State private var showFilters = false
+    @State private var publicSearch: UnifiedSearchIdentity?
     init(query: String, initialScope: UnifiedSearchScope = .all) {
         self.query = query
         _filters = State(initialValue: .init(scope: initialScope))
@@ -275,12 +276,28 @@ struct UnifiedSearchResults: View {
                 }
             }
             if active {
-                if !store.preview && query.count >= 2 && !filters.hasFacets {
-                    if filters.scope == .all || filters.scope == .tvShows {
-                        PublicTitleSearchSection(query: query, catalog: .television)
-                    }
-                    if filters.scope == .all || filters.scope == .movies {
-                        PublicTitleSearchSection(query: query, catalog: .film, library: current ? model.items : [])
+                if !store.preview && query.count >= 2 && !filters.hasFacets &&
+                    [.all, .tvShows, .movies].contains(filters.scope) {
+                    if publicSearch == identity {
+                        if filters.scope == .all || filters.scope == .tvShows {
+                            PublicTitleSearchSection(query: query, catalog: .television)
+                        }
+                        if filters.scope == .all || filters.scope == .movies {
+                            PublicTitleSearchSection(query: query, catalog: .film, library: current ? model.items : [])
+                        }
+                    } else {
+                        Button {
+                            publicSearch = identity
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(filters.scope == .tvShows ? "Search public TV titles on TVmaze" :
+                                     filters.scope == .movies ? "Search public movies on Wikidata" :
+                                     "Search public movies and TV shows")
+                                if filters.scope == .all {
+                                    Text("Send this search to TVmaze and Wikidata.").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
                     }
                 }
                 if !query.isEmpty && !filters.hasFacets {
@@ -314,7 +331,7 @@ struct UnifiedSearchResults: View {
             } else {
                 Section {
                     Label("Find your next favorite", systemImage: "magnifyingglass").font(.headline)
-                    Text("Search your connected media and the public TV catalog.")
+                    Text("Search your connected media. You can also choose to search public movies and TV shows.")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -323,6 +340,7 @@ struct UnifiedSearchResults: View {
         .task(id: showFilters ? store.accountContext : nil) {
             if showFilters { await model.loadFacets(store: store) }
         }
+        .onChange(of: identity) { _ in publicSearch = nil }
         .onDisappear { model.cancel() }
     }
 

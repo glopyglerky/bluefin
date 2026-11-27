@@ -22,7 +22,12 @@ struct KaraokePreparationManifest: Decodable {
                   processingReference.utf8.count <= 256, processingReference.rangeOfCharacter(from: .controlCharacters) == nil,
                   let mediaSourceId, KaraokeIdentity.validSource(mediaSourceId) else { throw KaraokeError.unauthorized }
         }
-        if let mediaSourceID, let mediaSourceId, !KaraokeIdentity.sameSource(mediaSourceID, mediaSourceId) { throw KaraokeError.unauthorized }
+        if let mediaSourceId, !KaraokeIdentity.validSource(mediaSourceId) { throw KaraokeError.unauthorized }
+        if let mediaSourceID {
+            guard let mediaSourceId, KaraokeIdentity.sameSource(mediaSourceID, mediaSourceId) else {
+                throw KaraokeError.unauthorized
+            }
+        }
         for stem in [accompaniment, leadVocal] {
             guard stem.bytes > 44, stem.bytes <= 64 * 1024 * 1024, KaraokeIdentity.digest(stem.sha256) else { throw KaraokeError.invalidStems }
         }

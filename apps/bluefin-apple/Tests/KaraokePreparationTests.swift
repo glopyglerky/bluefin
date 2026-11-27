@@ -18,6 +18,13 @@ final class KaraokePreparationTests: XCTestCase {
         XCTAssertThrowsError(try manifest(["revision":"bad"]).validate(itemID:"synthetic-item"))
         XCTAssertThrowsError(try manifest(["durationSeconds":0]).validate(itemID:"synthetic-item"))
     }
+    func testSelectedSourceRequiresAQualifiedManifestForSuppliedStems() throws {
+        XCTAssertThrowsError(try manifest().validate(itemID: "synthetic-item", mediaSourceID: "selected-source"))
+        try manifest(["mediaSourceId": "selected-source"]).validate(itemID: "synthetic-item", mediaSourceID: "selected-source")
+        XCTAssertThrowsError(try manifest(["mediaSourceId": "other-edition"]).validate(itemID: "synthetic-item", mediaSourceID: "selected-source"))
+        XCTAssertThrowsError(try manifest(["mediaSourceId": ""]).validate(itemID: "synthetic-item"))
+    }
+
     func testStemOnlyManifestRequiresExplicitMarkerAndKeepsSourceBinding() throws {
         let changes: [String: Any] = ["timingKind": "none", "timeline": NSNull(),
             "processing": "modelSeparatedStems", "processingReference": "test-model",
