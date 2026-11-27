@@ -70,3 +70,45 @@ bearer. Both must refuse, while an unrelated device and the account data remain
 usable. Include failure before the staged-file swap and a database without mesh
 tables. Source-authored regressions do not replace the admitted Forge run and
 actual server acceptance.
+
+### Actual binary restore acceptance
+
+The isolated subprocess journey lives in
+`crates/ferrofin-api/tests/mesh_restore_process.rs`. It starts the supplied
+candidate executable with a disposable database, loopback HTTP/PQ endpoints and
+no public relays. The expected executable SHA-256 is mandatory and is checked
+before launch. All users, passkeys, grants and bearer rows come from the server's
+real APIs; the driver's database connections only read evidence.
+
+Run the named ignored test inside an admitted Forge job after the candidate
+artifact has been built and its digest retained:
+
+```sh
+BLUEFIN_TEST_SERVER_BINARY=/path/to/qualified/ferrofin-server \
+BLUEFIN_TEST_SERVER_SHA256=the_retained_lowercase_sha256 \
+cargo test --locked -p ferrofin-api --test mesh_restore_process \
+  actual_binary_restore_retires_old_mesh_authority \
+  -- --ignored --exact --nocapture
+```
+
+The job receipt must record one executed, passed test and zero ignored tests.
+An ordinary suite invocation that reports this test as ignored is not acceptance.
+The existing `BLUEFIN_TEST_FFMPEG` and `BLUEFIN_TEST_FFPROBE` overrides may select
+the job's admitted media tools.
+
+The journey issues a new-account invitation, uses a software WebAuthn
+authenticator through the real browser-proof HTTP adapter and strict PQ
+connection, and obtains explicit administrator approval. It proves a live mesh
+request before HTTP `Backup/Create`, revokes that device over PQ, then calls
+HTTP `Backup/Restore` and waits for the next actual server lifetime. A
+post-backup user must disappear, while the original administrator's unrelated
+HTTP token remains valid. The restored old session, exact Finish retry, unused
+invitation and internal bearer must fail; a new passkey login must succeed and
+remain valid after an ordinary restart. A timeout does not count as denied
+authorization.
+
+This is actual-binary acceptance with both peers on one host and a software
+authenticator. It does not establish browser secure-context behavior, physical
+iPhone/Apple TV behavior, relay traversal, independent-instance federation, or
+arbitrary filesystem rollback protection. The test is authored source until an
+admitted job retains its execution result.
