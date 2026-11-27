@@ -1625,8 +1625,10 @@ fn content_hashed_web_types(path: &str) -> Option<&'static [&'static str]> {
 
 /// The packager changes these URLs whenever their contents change. This layer
 /// sits inside File Transformation, so rewritten responses never pass through
-/// it. Mutable documents, private API responses and HTML fallbacks are excluded.
+/// it. HEAD bypasses File Transformation, so only GET can assert this policy.
+/// Mutable documents, private API responses and HTML fallbacks are excluded.
 async fn cache_content_hashed_web_assets(req: Request, next: Next) -> Response {
+    let get = req.method() == axum::http::Method::GET;
     let types = content_hashed_web_types(req.uri().path());
     let mut response = next.run(req).await;
     let typed = response
@@ -1641,7 +1643,8 @@ async fn cache_content_hashed_web_assets(req: Request, next: Next) -> Response {
                     .any(|expected| value.trim().eq_ignore_ascii_case(expected))
             })
         });
-    if typed
+    if get
+        && typed
         && matches!(
             response.status(),
             axum::http::StatusCode::OK | axum::http::StatusCode::PARTIAL_CONTENT
@@ -2318,6 +2321,19 @@ mod tests {
             .add_transformation(uuid::Uuid::from_u128(13), &file, Arc::new(Upper))
             .await;
         let app = mount_web(Router::new(), dir.path(), service);
+        let head = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(axum::http::Method::HEAD)
+                    .uri(format!("/web/{file}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(head.status(), StatusCode::OK);
+        assert!(head.headers().get("cache-control").is_none());
         let response = app
             .oneshot(
                 Request::builder()
