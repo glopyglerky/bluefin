@@ -768,7 +768,7 @@ test('a film result displays a licensed Commons poster and exact watch links bef
   if(u.hostname==='commons.wikimedia.org'){
    assert.equal(u.searchParams.get('titles'),'File:Film poster.png');
    return jsonReply({query:{pages:[{title:'File:Film poster.png',imageinfo:[{
-    thumburl:'https://upload.wikimedia.org/wikipedia/commons/thumb/0/00/Film_poster.png/250px-Film_poster.png',
+    thumburl:'https://thumb.wikimedia.org/wikipedia/commons/thumb/0/00/Film_poster.png/250px-Film_poster.png?utm_source=commons.wikimedia.org',
     descriptionurl:'https://commons.wikimedia.org/wiki/File:Film_poster.png',
     extmetadata:{Artist:{value:'<a>Poster Artist</a>'},LicenseShortName:{value:'CC BY-SA 4.0'},
      LicenseUrl:{value:'https://creativecommons.org/licenses/by-sa/4.0/'}}
@@ -784,11 +784,30 @@ test('a film result displays a licensed Commons poster and exact watch links bef
  }});
  await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
  await t.ui.startSearch('Film Fixture',{scope:'movies'});
- assert(findElement(t.root,e=>String(e.src).includes('250px-Film_poster.png')));
+ assert(findElement(t.root,e=>e.src==='https://thumb.wikimedia.org/wikipedia/commons/thumb/0/00/Film_poster.png/250px-Film_poster.png'));
  assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Poster Artist').href,'https://commons.wikimedia.org/wiki/File:Film_poster.png');
  for(const href of ['https://www.netflix.com/watch/80112233','https://www.netflix.com/watch/80112234',
   'https://www.paramountplus.com/movies/fixture/'])assert(findElement(t.root,e=>e.href===href));
  assert(!findElement(t.root,e=>String(e.href).endsWith('/redirect')));
+});
+test('music scope includes solo musicians and keeps album, track and artist destinations distinct',async()=>{
+ const ids=['Q100','Q200','Q300'];
+ const t=setup({apiResponse:u=>{
+  if(u.hostname!=='www.wikidata.org')return;
+  if(u.searchParams.get('action')==='wbsearchentities')return jsonReply({search:ids.map(id=>({id}))});
+  const make=(name,kind,extra)=>({labels:{en:{value:name}},claims:{P31:[claim({id:kind})],...extra}});
+  return jsonReply({entities:{
+   Q100:make('Solo Fixture','Q5',{P106:[claim({id:'Q177220'})],P1902:[claim('A'.repeat(22))]}),
+   Q200:make('Album Fixture','Q482994',{P2205:[claim('B'.repeat(22))]}),
+   Q300:make('Song Fixture','Q7366',{P2207:[claim('C'.repeat(22))]}),
+  }});
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('audio',{scope:'music'});
+ for(const [id,name] of [['Q100','Solo Fixture'],['Q200','Album Fixture'],['Q300','Song Fixture']]){
+  const result=findElement(t.root,e=>e.dataset.focusKey==='public-title|music|'+id);
+  assert(result?.textContent.includes(name));
+ }
+ for(const [kind,id] of [['artist','A'],['album','B'],['track','C']])assert(findElement(t.root,e=>e.href==='https://open.spotify.com/'+kind+'/'+id.repeat(22)));
 });
 test('film selection stays in Bluefin and offers a direct player or exact provider title',async()=>{
  const t=setup({apiResponse:u=>{
