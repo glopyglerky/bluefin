@@ -42,6 +42,8 @@ use crate::error::ApiError;
 use crate::extract::{JsonBody, Query};
 use crate::state::AppState;
 
+mod mesh_restore;
+
 /// The SQLite database file name inside the data directory.
 const DB_FILE_NAME: &str = "ferrofin.db";
 
@@ -1113,6 +1115,11 @@ fn stage_archive(archive_path: &Path, roots: &TreeRoots) -> std::io::Result<Stag
             }
             staged.push(file);
         }
+    }
+    // Retire restored mesh authority before any live file is replaced.
+    let database = staging_path(&roots.database);
+    if let Some(file) = staged.iter().find(|file| file.0 == database) {
+        mesh_restore::invalidate_staged(&file.0)?;
     }
     Ok(staged)
 }
