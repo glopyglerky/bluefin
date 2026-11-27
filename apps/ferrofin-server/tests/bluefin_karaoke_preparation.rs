@@ -522,7 +522,7 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|line| line.get("Cues").is_none())
+            .all(|line| line["Cues"].as_array().is_some_and(Vec::is_empty))
     );
     let stem_only = Uuid::new_v4();
     f.post(stem_only, &f.token).await;
