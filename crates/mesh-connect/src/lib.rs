@@ -8,10 +8,12 @@
 #![forbid(unsafe_code)]
 
 mod capsule;
+pub mod resource_grant;
 mod error;
 pub mod launch;
 pub mod protocol;
 pub mod discovery;
+pub mod relay_admission;
 #[cfg(feature = "images")]
 mod qr;
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]

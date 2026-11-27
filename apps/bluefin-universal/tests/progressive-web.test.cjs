@@ -63,7 +63,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  const register=(name,fn)=>{const previous=events[name];events[name]=(...args)=>{previous?.(...args);fn(...args);};};
  const context=vm.createContext({document,location:new URL(document.baseURI),navigator:{},
   crypto:webcrypto,URL,Uint8Array,Uint32Array,Blob,File,TextEncoder,TextDecoder,AbortController,Response,fetch,
-  setTimeout,clearTimeout,setInterval:()=>1,clearInterval(){},addEventListener:register,
+  performance,setTimeout,clearTimeout,setInterval:()=>1,clearInterval(){},addEventListener:register,
   isSecureContext:true,WebAssembly:undefined});
  context.window=context;
  context.takeBluefinLaunch=()=>{const code=launchCode;launchCode='';return code;};
@@ -73,7 +73,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
  Object.defineProperty(context,'localStorage',{get(){throw Error('Default view touched localStorage');}});
  Object.defineProperty(context,'sessionStorage',{get(){throw Error('Default view touched sessionStorage');}});
  vm.runInContext(source('local-music.js'),context);
- const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={perform,lookupSearchFacet,artworkSource,artKey,validateSingManifest,singPcm,singLyrics,prepareSing,activateSing,retireSing,runSing,seekLyric,sportsLogo,followSportsTeam,loadLyrics,pumpArtwork,clearImages,state,connect,signIn,navigate,openItem,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,startSearch,openSearch,searchCall,loadMoreSearch,loadSearchFacets,recordHomeSearch,clearHomeSearchHistory,importInvitationImage:readInvitationImage};})();');
+ const script=source('native-view.js').replace(/\}\)\(\);\s*$/,'globalThis.contract={enterWatchRoom,leaveWatchRoom,perform,lookupSearchFacet,artworkSource,artKey,validateSingManifest,singPcm,singLyrics,prepareSing,activateSing,retireSing,runSing,seekLyric,sportsLogo,followSportsTeam,loadLyrics,pumpArtwork,clearImages,state,connect,signIn,navigate,openItem,beginMesh,play,signOut,stopPlayback,render,nativeLeasePath,tvLeasePath,leaseRequest,issueInvite,openLocalMusic,addLocalFiles,localItems,localOwner,loadRoute,reportProgress,playbackTimeline,seekPlayback,toggleShuffle,playShuffled,startSearch,openSearch,searchCall,loadMoreSearch,loadSearchFacets,recordHomeSearch,clearHomeSearchHistory,importInvitationImage:readInvitationImage};})();');
  vm.runInContext(script,context);
  return {context,ui:context.contract,root,video,requests,events,item,pending};
 }
@@ -1368,4 +1368,37 @@ test('an active Sing session stops without automatic replay if its negotiated so
  await until(()=>t.ui.state.player===null&&t.contexts[0].state==='closed');
  assert.equal(t.video.playCalls,plays);assert.match(t.ui.state.error,/playing version changed/);
  await t.ui.signOut();
+});
+
+test('watch together loads its own authorized video without starting it before the room',async()=>{
+ const group='44444444444444448444444444444444',item='22222222222242228222222222222222',playlist='55555555555545558555555555555555';
+ const anchor='2026-11-27T08:00:00.000Z';
+ const timeline={GroupId:group,State:'Waiting',PositionTicks:0,AnchorTime:anchor,Item:{ItemId:item,PlaylistItemId:playlist}};
+ const ops=[];
+ const engine={
+  async webRoomHttp(adapter,wire){
+   const op=JSON.parse(wire);ops.push(op.kind);
+   if(op.kind==='join'||op.kind==='current')return JSON.stringify(timeline);
+   if(op.kind==='clock')return JSON.stringify({RequestReceptionTime:anchor,ResponseTransmissionTime:anchor});
+   return 'null';
+  },
+  webRoomProjection(){return JSON.stringify({positionTicks:0,serverNowMs:Date.parse(anchor),paused:true,seek:false});}
+ };
+ const t=setup({engine:async()=>engine,apiResponse:(u)=>{
+  if(u.pathname.endsWith('/Items/'+item))return new Response(JSON.stringify({Id:item,Name:'Original test film',Type:'Movie',RunTimeTicks:600000000}));
+ }});
+ t.context.BluefinRuntime.ready=()=>engine;
+ await t.ui.connect('https://bluefin.test');
+ await t.ui.signIn('Listener','example-password',false);
+ try{
+  await t.ui.enterWatchRoom({kind:'join',group});
+  for(let i=0;i<30&&!t.ui.state.player;i++)await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(t.ui.state.player?.item.Id,item);
+  assert.equal(t.video.paused,true);assert.equal(t.video.playCalls||0,0);
+  assert(ops.includes('current'));
+  assert(t.requests.some(record=>new URL(record.url).pathname.endsWith('/Items/'+item)));
+  assert(t.requests.some(record=>new URL(record.url).pathname==='/Bluefin/Web/v1/leases'));
+ }finally{await t.ui.leaveWatchRoom();}
+ assert(ops.includes('leave'));
+ assert.equal(t.ui.state.player,null);
 });

@@ -46,6 +46,11 @@ impl DeviceIdentity {
         if message.len()>crate::protocol::MAX_FRAME_BYTES{return Err(Error::TooLarge);}
         sign(&self.key,message)
     }
+    /// Listener routing identity, available before waiting for relay online.
+    /// Admit it through the private listener owner before starting the server.
+    pub fn listener_endpoint_id(&self)->Result<[u8;32]>{
+        Ok(*self.iroh_secret()?.public().as_bytes())
+    }
     pub(crate) fn iroh_secret(&self)->Result<iroh::SecretKey>{
         // RFC 5869 HKDF separates the outer addressing key from the PQ signing
         // key while preserving a stable endpoint for the protected server seed.

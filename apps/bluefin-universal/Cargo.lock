@@ -437,12 +437,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bluefin-sync-play"
+version = "0.1.0"
+
+[[package]]
 name = "bluefin-universal"
 version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
  "bluefin-contract",
+ "bluefin-sync-play",
  "bluefin-iroh-modern",
  "eframe",
  "futures-util",
@@ -2688,6 +2693,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "thiserror 2.0.21",
  "time",
  "tokio",

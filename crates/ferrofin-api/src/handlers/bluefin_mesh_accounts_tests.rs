@@ -3,6 +3,145 @@ use super::*;
 #[path = "bluefin_mesh_session_fixture.rs"]
 mod session_fixture;
 
+fn relay_store()->Mutex<bluefin_mesh_connect::relay_admission::RelayAdmissions>{
+    Mutex::new(bluefin_mesh_connect::relay_admission::RelayAdmissions::new("https://relay.example/").unwrap())
+}
+async fn relay_fixture()->Fixture {
+    let mut f=Fixture::new().await;
+    let mut published=address();published.relay_urls=vec!["https://relay.example/".into()];
+    f.service=Service::new(f.db.clone(),"https://accounts.example",published).await.unwrap();
+    f
+}
+
+#[tokio::test]
+async fn mesh_relay_bootstrap_requires_exact_live_capsule_and_never_creates_a_session(){
+    use std::time::{Duration,Instant};
+    let f=relay_fixture().await;let store=relay_store();
+    let invite=f.invite(InviteIntent::Signup,None).await;
+    let mut forged=invite.clone();forged.secret[0]^=1;
+    assert!(f.service.admit_relay_bootstrap(&f.state,&store,&forged,[9;32]).await.is_err());
+    assert!(!store.lock().await.allows(&[9;32],Instant::now()));
+    assert!(f.service.admit_relay_bootstrap(&f.state,&store,&invite,invite.endpoint_id).await.is_err());
+    f.service.admit_relay_bootstrap(&f.state,&store,&invite,[9;32]).await.unwrap();
+    assert!(store.lock().await.allows(&[9;32],Instant::now()));
+    assert!(!store.lock().await.allows(&[9;32],Instant::now()+Duration::from_secs(120)));
+    assert_eq!(f.service.invite_row(&invite).await.unwrap().get::<String,_>("State"),"issued");
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM BluefinMeshSessions").fetch_one(f.db.pool()).await.unwrap(),0);
+    let _new=Service::new(f.db.clone(),"https://accounts.example",f.service.address.clone()).await.unwrap();
+    assert!(f.service.admit_relay_bootstrap(&f.state,&store,&invite,[8;32]).await.is_err());
+    assert!(!store.lock().await.allows(&[8;32],Instant::now()));
+}
+
+#[tokio::test]
+async fn mesh_relay_bootstrap_rechecks_policy_and_operation_budget(){
+    let f=relay_fixture().await;let store=relay_store();
+    let invite=f.invite(InviteIntent::Signup,None).await;
+    let permit=f.service.operations.acquire_many(16).await.unwrap();
+    assert!(f.service.admit_relay_bootstrap(&f.state,&store,&invite,[9;32]).await.is_err());
+    drop(permit);
+    let temporary=f.directory.path().join("accounts-policy.tmp");
+    std::fs::write(&temporary,r#"{"allowSignups":false}"#).unwrap();
+    std::fs::rename(&temporary,f.directory.path().join("bluefin-accounts.json")).unwrap();
+    assert!(f.service.admit_relay_bootstrap(&f.state,&store,&invite,[9;32]).await.is_err());
+    assert!(!store.lock().await.allows(&[9;32],std::time::Instant::now()));
+}
+
+#[tokio::test]
+async fn mesh_relay_bootstrap_checks_login_account_policy(){
+    let f=relay_fixture().await;let store=relay_store();
+    let (user,_)=f.login_account().await;
+    let invite=f.invite(InviteIntent::Login,Some(user)).await;
+    f.service.admit_relay_bootstrap(&f.state,&store,&invite,[9;32]).await.unwrap();
+    // Use the same account policy owner as ordinary remote authorization.
+    let account=f.state.users.get_user_by_id(user).await.unwrap().unwrap();
+    let mut policy=f.state.users.get_user_dto(&account,None).await.unwrap().policy.unwrap();
+    policy.enable_remote_access=false;
+    f.state.users.update_policy(user,&policy).await.unwrap();
+    assert!(f.service.admit_relay_bootstrap(&f.state,&store,&invite,[8;32]).await.is_err());
+}
+
+#[tokio::test]
+async fn mesh_relay_bootstrap_claim_and_expiry_cannot_be_bypassed(){
+    let f=relay_fixture().await;let store=relay_store();
+    let invite=f.invite(InviteIntent::Signup,None).await;
+    let device=DeviceIdentity::from_seed([67;32]).unwrap();
+    let start=begin(&f,invite.clone(),&device,1,None).await;
+    assert!(f.service.admit_relay_bootstrap(&f.state,&store,&invite,[9;32]).await.is_err());
+    assert!(f.service.handle(&f.state,&device.public_key(),finish_request(&start,&device,2,json!({}))).await.is_err());
+    assert!(f.service.admit_relay_bootstrap(&f.state,&store,&invite,[9;32]).await.is_err());
+    let fresh=f.invite(InviteIntent::Signup,None).await;
+    sqlx::query("UPDATE BluefinMeshInvites SET Expires=? WHERE Id=?")
+        .bind(now()-1).bind(fresh.invitation_id.to_vec()).execute(f.db.writer()).await.unwrap();
+    assert!(f.service.admit_relay_bootstrap(&f.state,&store,&fresh,[9;32]).await.is_err());
+    assert!(!store.lock().await.allows(&[9;32],std::time::Instant::now()));
+}
+
+#[tokio::test]
+async fn mesh_relay_bootstrap_rechecks_ledger_after_waiting_for_store(){
+    use std::{future::{Future,poll_fn},task::Poll};
+    for expire in [false,true] {
+        let f=relay_fixture().await;let store=relay_store();
+        let invite=f.invite(InviteIntent::Signup,None).await;
+        let lock=store.lock().await;
+        let mut attempt=Box::pin(f.service.admit_relay_bootstrap(&f.state,&store,&invite,[9;32]));
+        // Drive past the initial ledger read to the store lock, without timers
+        // or depending on scheduler ordering. Once the SQL reader completes,
+        // the pending future holds both service and account-policy gates.
+        poll_fn(|cx|{
+            assert!(attempt.as_mut().poll(cx).is_pending());
+            if f.service.gate.try_lock().is_err() && f.state.account_gate.try_lock().is_err() {
+                // The final check is after the store lock regardless of how
+                // far the asynchronous initial SQL read has progressed.
+                Poll::Ready(())
+            } else {cx.waker().wake_by_ref();Poll::Pending}
+        }).await;
+        if expire {
+            sqlx::query("UPDATE BluefinMeshInvites SET Expires=? WHERE Id=?")
+                .bind(now()-1).bind(invite.invitation_id.to_vec()).execute(f.db.writer()).await.unwrap();
+        } else {
+            sqlx::query("UPDATE BluefinMeshInvites SET State='revoked' WHERE Id=?")
+                .bind(invite.invitation_id.to_vec()).execute(f.db.writer()).await.unwrap();
+        }
+        drop(lock);
+        assert!(attempt.await.is_err());
+        assert!(!store.lock().await.allows(&[9;32],std::time::Instant::now()));
+    }
+}
+
+#[tokio::test]
+async fn mesh_relay_bootstrap_obeys_remote_network_policy(){
+    use ferrofin_networking::{NetworkConfiguration,NetworkManager};
+    let mut f=relay_fixture().await;let store=relay_store();
+    let invite=f.invite(InviteIntent::Signup,None).await;
+    for configuration in [
+        NetworkConfiguration{enable_remote_access:false,..Default::default()},
+        NetworkConfiguration{enable_remote_access:true,remote_ip_filter:vec!["192.0.2.0/24".into()],..Default::default()},
+    ] {
+        let mut inner=(*f.state).clone();
+        inner.network=Some(Arc::new(std::sync::RwLock::new(NetworkManager::with_defaults(configuration,""))));
+        f.state=AppState::from_inner(inner);
+        assert!(f.service.admit_relay_bootstrap(&f.state,&store,&invite,[9;32]).await.is_err());
+    }
+}
+
+#[tokio::test]
+async fn mesh_relay_bootstrap_drives_the_private_http_callout_only(){
+    use axum::{body::Body,http::{Request as HttpRequest,StatusCode}};
+    use tower::ServiceExt;
+    let f=relay_fixture().await;
+    let relay=super::super::bluefin_mesh_relay::RelayCallout::new("https://relay.example/",&"ab".repeat(32)).unwrap();
+    let router=relay.clone().router();
+    let request=||HttpRequest::builder().method("POST").uri("/relay/admission")
+        .header("authorization",format!("Bearer {}","ab".repeat(32)))
+        .header("x-iroh-endpoint-id","09".repeat(32)).body(Body::empty()).unwrap();
+    assert_eq!(router.clone().oneshot(request()).await.unwrap().status(),StatusCode::FORBIDDEN);
+    let invite=f.invite(InviteIntent::Signup,None).await;
+    f.service.admit_relay_bootstrap(&f.state,&relay.admissions,&invite,[9;32]).await.unwrap();
+    assert_eq!(router.clone().oneshot(request()).await.unwrap().status(),StatusCode::OK);
+    relay.admissions.lock().await.revoke_invitation(&invite.invitation_id);
+    assert_eq!(router.oneshot(request()).await.unwrap().status(),StatusCode::FORBIDDEN);
+}
+
 use async_trait::async_trait;
 use bluefin_mesh_connect::native::DeviceIdentity;
 use ferrofin_core::user_manager::FerrofinUserManager;

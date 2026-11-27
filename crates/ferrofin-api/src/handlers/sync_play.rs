@@ -356,6 +356,60 @@ async fn get_group(
     Ok(Json(mgr.get_group(&session, group_id).await?))
 }
 
+#[derive(serde::Deserialize)]
+#[serde(tag = "Action", content = "Data", deny_unknown_fields)]
+enum RoomControl {
+    Leave,
+    Pause,
+    Unpause,
+    Seek(SeekRequestDto),
+    Ready(ReadyRequestDto),
+    Buffering(BufferRequestDto),
+    SetNewQueue(PlayRequestDto),
+}
+
+/// Apply a command to the room the client observed. The manager compares the
+/// room under the same lock as the mutation.
+async fn control_room(
+    SyncPlayAuth(auth, _): SyncPlayAuth<IsInGroup>,
+    State(state): State<AppState>,
+    Path(room_id): Path<Uuid>,
+    JsonBody(body): JsonBody<RoomControl>,
+) -> Result<StatusCode, ApiError> {
+    let manager = manager(&state)?;
+    let session = sync_play_session(&state, &auth).await?;
+    let request = match body {
+        RoomControl::Leave => {
+            manager.leave_room(&session, room_id).await?;
+            return Ok(StatusCode::NO_CONTENT);
+        }
+        RoomControl::Pause => PlaybackRequest::Pause,
+        RoomControl::Unpause => PlaybackRequest::Unpause,
+        RoomControl::Seek(body) => PlaybackRequest::Seek {
+            position_ticks: body.position_ticks,
+        },
+        RoomControl::Ready(body) => PlaybackRequest::Ready {
+            when: body.when,
+            position_ticks: body.position_ticks,
+            is_playing: body.is_playing,
+            playlist_item_id: body.playlist_item_id,
+        },
+        RoomControl::Buffering(body) => PlaybackRequest::Buffer {
+            when: body.when,
+            position_ticks: body.position_ticks,
+            is_playing: body.is_playing,
+            playlist_item_id: body.playlist_item_id,
+        },
+        RoomControl::SetNewQueue(body) => PlaybackRequest::Play {
+            playing_queue: body.playing_queue,
+            playing_item_position: body.playing_item_position,
+            start_position_ticks: body.start_position_ticks,
+        },
+    };
+    manager.handle_room_request(&session, room_id, request).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // ── playback requests ──────────────────────────────────────────────────────
 
 /// `POST /SyncPlay/SetNewQueue` — set a new play queue.
@@ -619,6 +673,7 @@ pub fn register(router: Router<AppState>) -> Router<AppState> {
         .route("/SyncPlay/Leave", post(leave_group))
         .route("/SyncPlay/List", get(list_groups))
         .route("/Bluefin/SyncPlay/Current", get(current_playback))
+        .route("/Bluefin/SyncPlay/{room_id}/Control", post(control_room))
         .route("/SyncPlay/{id}", get(get_group))
         .route("/SyncPlay/SetNewQueue", post(set_new_queue))
         .route("/SyncPlay/SetPlaylistItem", post(set_playlist_item))

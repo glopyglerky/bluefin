@@ -34,6 +34,9 @@ mod sports;
 mod search;
 mod stream;
 mod trailers;
+/// Portable scheduling seam for a future authenticated Apple room adapter.
+/// These types carry no transport, credentials, or media authorization.
+pub use bluefin_sync_play as sync_play;
 const INPUT_MAX: usize = 65536;
 const RESPONSE_MAX: usize = 8 * 1024 * 1024;
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
