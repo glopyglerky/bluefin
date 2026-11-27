@@ -445,7 +445,7 @@ function searchCall(lane,route,start=0){
  if(route.query)query.push(['SearchTerm',route.query]);
  let path;
  if(lane==='library'){
-  path='Users/'+state.session.user+'/Items';query.push(['Recursive',true],['Fields','Overview,PrimaryImageAspectRatio']);
+  path='Users/'+state.session.user+'/Items';query.push(['Recursive',true],['Fields','Overview,PrimaryImageAspectRatio,ProviderIds']);
   const type=searchScopes.find(([key])=>key===filters.scope)?.[2];if(type)query.push(['IncludeItemTypes',type]);
   if(filters.studioID)query.push(['StudioIds',filters.studioID]);if(filters.tag)query.push(['Tags',filters.tag]);
   if(filters.collectionID)query.push(['ParentId',filters.collectionID]);
@@ -855,40 +855,108 @@ function searchPoster(item){
  card.append(playResult);
  return card;
 }
-async function findFilmProviders(item){
+const regionNames=new Intl.DisplayNames(undefined,{type:'region',fallback:'none'});
+const storefrontRegions=Array.from({length:26*26},(_,index)=>String.fromCharCode(65+Math.floor(index/26),65+(index%26)))
+ .map(code=>[code,regionNames.of(code)]).filter(([,name])=>name).sort((a,b)=>a[1].localeCompare(b[1]));
+function defaultStorefront(){
+ try{return new Intl.Locale(globalThis.navigator?.language||'en-US').maximize().region||'US';}
+ catch{return 'US';}
+}
+function storefrontPrice(amount,currency){
+ return Number.isFinite(amount)&&amount>=0&&/^[A-Z]{3}$/.test(currency)?
+  new Intl.NumberFormat(undefined,{style:'currency',currency}).format(amount):null;
+}
+function statedIdentifiers(response,property,valid){
+ if(response?.error)throw Error('Store identifiers unavailable');
+ const rows=response?.claims?.[property];
+ if(!Array.isArray(rows))return [];
+ return [...new Set(rows.filter(row=>row?.rank!=='deprecated')
+  .map(row=>row?.mainsnak?.datavalue?.value).filter(id=>typeof id==='string'&&valid.test(id)))].slice(0,6);
+}
+async function findFilmOffers(item,region){
  const signal=routeController?.signal;
- if(!signal||signal.aborted||item.links?.loading)return;
- item.links={loading:true};render();
+ if(!signal||signal.aborted||item.offer?.region===region&&item.offer.loading)return;
+ const current=item.offer={region,loading:true};render();
+ if(state.session&&!item.imdbIds){
+  wikidataJSON({action:'wbgetclaims',entity:item.id,property:'P345'},signal).then(response=>{
+   if(!signal.aborted){
+    item.imdbIds=statedIdentifiers(response,'P345',/^tt[0-9]{7,12}$/);
+    render();
+   }
+  }).catch(()=>{});
+ }
  try{
-  const response=await wikidataJSON({action:'wbgetclaims',entity:item.id,property:'P9586'},signal);
-  if(signal.aborted)return;
-  if(response?.error)throw Error('Provider links unavailable');
-  const rows=response?.claims?.P9586;
-  const ids=new Set((Array.isArray(rows)?rows:[]).filter(row=>row?.rank!=='deprecated')
-   .map(row=>row?.mainsnak?.datavalue?.value).filter(id=>typeof id==='string'&&/^umc\.cmc\.[a-z0-9]{22,25}$/.test(id)));
-  item.links={ids:Array.from(ids).slice(0,3)};
+  const claims=await wikidataJSON({action:'wbgetclaims',entity:item.id,property:'P6398'},signal);
+  const ids=statedIdentifiers(claims,'P6398',/^[1-9][0-9]{0,14}$/);
+  if(signal.aborted||item.offer!==current)return;
+  if(!ids.length){
+   const pages=await wikidataJSON({action:'wbgetclaims',entity:item.id,property:'P9586'},signal);
+   if(signal.aborted||item.offer!==current)return;
+   item.offer={region,checked:false,links:statedIdentifiers(pages,'P9586',/^umc\.cmc\.[a-z0-9]{22,25}$/)
+    .map(id=>'https://tv.apple.com/movie/'+id)};
+   render();return;
+  }
+  const endpoint=new URL('https://itunes.apple.com/lookup');
+  endpoint.searchParams.set('id',ids.join(','));endpoint.searchParams.set('country',region);
+  const response=await publicCatalogJSON(endpoint,signal);
+  if(signal.aborted||item.offer!==current)return;
+  if(!Array.isArray(response?.results))throw Error('Invalid storefront response');
+  const offers=[];
+  for(const row of response.results){
+   if(row?.kind!=='feature-movie'||!ids.includes(String(row.trackId))||typeof row.trackViewUrl!=='string')continue;
+   let destination;
+   try{destination=new URL(row.trackViewUrl);}catch{continue;}
+   if(destination.origin!=='https://itunes.apple.com'||destination.username||destination.password||
+      !destination.pathname.startsWith('/'+region.toLowerCase()+'/movie/')||
+      !destination.pathname.endsWith('/id'+row.trackId))continue;
+   const rent=storefrontPrice(row.trackRentalPrice,row.currency);
+   const buy=storefrontPrice(row.trackPrice,row.currency);
+   if(rent||buy)offers.push({rent,buy,destination:destination.origin+destination.pathname});
+  }
+  item.offer={region,checked:true,offers};
  }catch{
-  if(signal.aborted)return;
-  item.links={error:true};
+  if(signal.aborted||item.offer!==current)return;
+  item.offer={region,error:true};
  }
  render();
 }
 function filmProviderActions(item){
- const actions=node('div'),status=item.links;
- if(status?.loading)actions.append(node('p','Finding provider links…','loading'));
- else if(status?.ids?.length){
-  for(const id of status.ids){
-   const link=node('a','Open title in Apple TV');
-   link.href='https://tv.apple.com/movie/'+id;link.rel='noopener noreferrer';link.target='_blank';
-   actions.append(link);
-  }
-  actions.append(node('p','Apple TV checks regional availability and account access.','secondary'));
- }else if(status?.ids)actions.append(node('p','No provider links found.','secondary'));
- else{
-  if(status?.error)actions.append(node('p','Could not load provider links.','secondary'));
-  const find=button(status?.error?'Retry provider links':'Find provider links',()=>findFilmProviders(item),'plain');
+ const actions=node('div'),status=item.offer;
+ if(!status){
+  const find=button('Where to watch',()=>findFilmOffers(item,defaultStorefront()),'plain');
   find.dataset.focusKey='film-providers|'+item.id;
   actions.append(find);
+  return actions;
+ }
+ const region=searchChoice('Storefront region','storefront-'+item.id,status.region,storefrontRegions,
+  selected=>findFilmOffers(item,selected),false);
+ const library=state.session&&state.search?.pages.find(page=>page.lane==='library');
+ const owned=library?.items.filter(value=>value.Type==='Movie'&&
+  item.imdbIds?.includes(value.ProviderIds?.Imdb||value.ProviderIds?.IMDb));
+ for(const media of owned||[]){
+  const caption=resumeTicks(media)>0?'Resume in Bluefin':'Play in Bluefin';
+  const start=action(caption,()=>play(media),'primary','play');
+  start.dataset.focusKey='film-play|'+id(media.Id);
+  actions.append(start);
+ }
+ actions.append(region);
+ if(status.loading)actions.append(node('p','Checking availability…','loading'));
+ else if(status.error){
+  actions.append(node('p','The Apple storefront could not be checked.','secondary'),
+   button('Retry',()=>findFilmOffers(item,status.region),'plain'));
+ }else if(status.checked){
+  const regionName=regionNames.of(status.region)||status.region;
+  actions.append(node('p','Apple storefront · '+regionName));
+  if(!status.offers.length)actions.append(node('p','No rent or buy offer returned for this region.','secondary'));
+  for(const offer of status.offers){
+   actions.append(node('p',[offer.rent&&'Rent '+offer.rent,offer.buy&&'Buy '+offer.buy].filter(Boolean).join(' · ')));
+   const link=node('a','Continue to Apple TV');link.href=offer.destination;link.rel='noopener noreferrer';link.target='_blank';actions.append(link);
+  }
+ }else{
+  actions.append(node('p','No regional offers could be verified for this film.','secondary'));
+  for(const destination of status.links||[]){
+   const link=node('a','Open title in Apple TV');link.href=destination;link.rel='noopener noreferrer';link.target='_blank';actions.append(link);
+  }
  }
  return actions;
 }

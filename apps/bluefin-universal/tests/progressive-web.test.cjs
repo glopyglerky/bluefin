@@ -704,14 +704,22 @@ test('public TV discovery works without any connected peer and keeps catalog req
  assert(publicRequests.every(r=>r.options.headers===undefined&&r.options.credentials==='omit'));
 });
 
-test('film catalog resolves ranked Wikidata titles without connecting a library', async()=>{
+test('film search resolves an exact identity and displays movie offers for the selected region', async()=>{
  const t=setup({apiResponse:u=>{
+  if(u.hostname==='itunes.apple.com'){
+   const region=u.searchParams.get('country');
+   return jsonReply({results:[
+    {kind:'feature-movie',trackId:1003,trackRentalPrice:region==='US'?5.99:3.49,currency:region==='US'?'USD':'GBP',
+     trackViewUrl:'https://itunes.apple.com/'+region.toLowerCase()+'/movie/example/id1003?at=example'},
+    {kind:'feature-movie',trackId:1003,trackRentalPrice:0,currency:'USD',trackViewUrl:'https://unrelated.test/movie/id1003'},
+   ]});
+  }
   if(u.hostname!=='www.wikidata.org')return undefined;
   if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[
    {title:'Q184843'},{title:'Q184843'},{title:'Q1234567890123456789'},{title:'File:Unrelated'}]}});
-  if(u.searchParams.get('action')==='wbgetclaims')return jsonReply({claims:{P9586:[
-   {rank:'normal',mainsnak:{datavalue:{value:'umc.cmc.abcdefghijklmnopqrstuv'}}},
-   {rank:'deprecated',mainsnak:{datavalue:{value:'umc.cmc.zzzzzzzzzzzzzzzzzzzzzz'}}},
+  if(u.searchParams.get('action')==='wbgetclaims')return jsonReply({claims:{P6398:[
+   {rank:'normal',mainsnak:{datavalue:{value:'1003'}}},
+   {rank:'deprecated',mainsnak:{datavalue:{value:'1004'}}},
    {rank:'normal',mainsnak:{datavalue:{value:'https://unrelated.test/play'}}}
   ]}});
   return jsonReply({entities:{Q184843:{labels:{en:{value:'Blade Runner'}},
@@ -730,15 +738,25 @@ test('film catalog resolves ranked Wikidata titles without connecting a library'
  assert.equal(link.href,'https://www.wikidata.org/wiki/Q184843');
  assert(link.textContent.includes('1982 film directed by Ridley Scott'));
  assert(t.root.textContent.includes('Streaming availability for these results is unverified.'));
- assert(!findElement(t.root,e=>e.tagName==='A'&&e.textContent.includes('Open title in Apple TV')));
- await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Find provider links')).listeners.click();
+ assert(!findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Continue to Apple TV'));
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Where to watch')).listeners.click();
  const provider=t.requests.find(r=>new URL(r.url).searchParams.get('action')==='wbgetclaims');
  assert.equal(new URL(provider.url).searchParams.get('entity'),'Q184843');
  assert.equal(provider.options.credentials,'omit');
- assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Open title in Apple TV').href,
-  'https://tv.apple.com/movie/umc.cmc.abcdefghijklmnopqrstuv');
- assert(!findElement(t.root,e=>String(e.href).includes('unrelated.test')||String(e.href).includes('zzzzzzzz')));
- assert(t.root.textContent.includes('Apple TV checks regional availability and account access.'));
+ const offer=t.requests.find(r=>new URL(r.url).hostname==='itunes.apple.com');
+ assert.equal(new URL(offer.url).searchParams.get('id'),'1003');
+ assert.equal(new URL(offer.url).searchParams.get('country'),'US');
+ assert.equal(offer.options.credentials,'omit');
+ assert(t.root.textContent.includes('5.99'));
+ assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Continue to Apple TV').href,
+  'https://itunes.apple.com/us/movie/example/id1003');
+ assert(!findElement(t.root,e=>String(e.href).includes('unrelated.test')));
+ const region=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-storefront-Q184843');
+ assert(region);
+ region.value='GB';await region.onchange();
+ assert(t.root.textContent.includes('3.49'));
+ assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Continue to Apple TV').href,
+  'https://itunes.apple.com/gb/movie/example/id1003');
 });
 
 test('moonlit explicit search history uses the current account revision and survives a stale write rejection',async()=>{
