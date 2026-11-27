@@ -720,6 +720,7 @@ test('public film search uses a bounded close-match lookup when the exact catalo
   const action=url.searchParams.get('action');
   if(action==='wbsearchentities')return jsonReply({search:[]});
   if(action==='query'){
+   if(url.searchParams.get('srsearch').endsWith(' haswbstatement:P31=Q11424'))return jsonReply({query:{search:[]}});
    assert.equal(url.searchParams.get('srsearch'),'spirted~1 away~1');
    assert.equal(url.searchParams.get('srlimit'),'16');
    return jsonReply({query:{search:[{title:'Q155653'},{title:'https://unrelated.test/'}]}});
@@ -732,7 +733,7 @@ test('public film search uses a bounded close-match lookup when the exact catalo
  await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
  await t.ui.startSearch('Spirted Away',{scope:'movies'});
  assert.match(t.root.textContent,/Spirited Away.*Anime film/);
- assert.equal(t.requests.length,3);
+ assert.equal(t.requests.length,4);
  assert(t.requests.every(r=>r.options.credentials==='omit'));
 });
 
@@ -755,6 +756,86 @@ test('broad account search includes connected catalog and a close upcoming sport
  const before=t.requests.length;
  await t.ui.startSearch('private title',{scope:'library'});
  assert(t.requests.slice(before).every(r=>new URL(r.url).hostname==='bluefin.test'&&!new URL(r.url).pathname.includes('/Discovery/Search')));
+});
+
+test('film search resolves an exact identity and displays movie offers for the selected region', async()=>{
+ const t=setup({apiResponse:u=>{
+  if(u.hostname==='itunes.apple.com'){
+   const region=u.searchParams.get('country');
+   return jsonReply({results:[
+    {kind:'feature-movie',trackId:1003,trackRentalPrice:region==='US'?5.99:3.49,currency:region==='US'?'USD':'GBP',
+     trackViewUrl:'https://itunes.apple.com/'+region.toLowerCase()+'/movie/example/id1003?at=example'},
+    {kind:'feature-movie',trackId:1003,trackRentalPrice:0,currency:'USD',trackViewUrl:'https://unrelated.test/movie/id1003'},
+   ]});
+  }
+  if(u.hostname!=='www.wikidata.org')return undefined;
+  if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[
+   {title:'Q184843'},{title:'Q184843'},{title:'Q1234567890123456789'},{title:'File:Unrelated'}]}});
+  if(u.searchParams.get('action')==='wbgetclaims')return jsonReply({claims:{P6398:[
+   {rank:'normal',mainsnak:{datavalue:{value:'1003'}}},
+   {rank:'deprecated',mainsnak:{datavalue:{value:'1004'}}},
+   {rank:'normal',mainsnak:{datavalue:{value:'https://unrelated.test/play'}}}
+  ]}});
+  return jsonReply({entities:{Q184843:{labels:{en:{value:'Blade Runner'}},
+   descriptions:{en:{value:'1982 film directed by Ridley Scott'}}}}});
+ }});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
+ await t.ui.startSearch('Blade Runner',{scope:'movies'});
+ assert.equal(t.ui.state.session,null);
+ const requests=t.requests.filter(r=>new URL(r.url).hostname==='www.wikidata.org');
+ assert.equal(requests.length,2);
+ assert(requests.every(r=>r.options.credentials==='omit'&&r.options.referrerPolicy==='no-referrer'&&
+  Object.keys(r.options.headers).join(',')==='Api-User-Agent'));
+ assert.equal(new URL(requests[0].url).searchParams.get('srsearch'),'Blade Runner haswbstatement:P31=Q11424');
+ assert.equal(new URL(requests[1].url).searchParams.get('ids'),'Q184843');
+ const link=findElement(t.root,e=>e.tagName==='A'&&e.textContent.includes('Blade Runner'));
+ assert.equal(link.href,'https://www.wikidata.org/wiki/Q184843');
+ assert(link.textContent.includes('1982 film directed by Ridley Scott'));
+ assert(!findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Continue to Apple TV'));
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Where to watch')).listeners.click();
+ const provider=t.requests.find(r=>new URL(r.url).searchParams.get('action')==='wbgetclaims');
+ assert.equal(new URL(provider.url).searchParams.get('entity'),'Q184843');
+ assert.equal(provider.options.credentials,'omit');
+ const offer=t.requests.find(r=>new URL(r.url).hostname==='itunes.apple.com');
+ assert.equal(new URL(offer.url).searchParams.get('id'),'1003');
+ assert.equal(new URL(offer.url).searchParams.get('country'),'US');
+ assert.equal(offer.options.credentials,'omit');
+ assert(t.root.textContent.includes('5.99'));
+ assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Continue to Apple TV').href,
+  'https://itunes.apple.com/us/movie/example/id1003');
+ assert(!findElement(t.root,e=>String(e.href).includes('unrelated.test')));
+ const region=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-storefront-Q184843');
+ assert(region);
+ region.value='GB';await region.onchange();
+ assert(t.root.textContent.includes('3.49'));
+ assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Continue to Apple TV').href,
+  'https://itunes.apple.com/gb/movie/example/id1003');
+});
+
+test('public film availability offers in-app playback only for the exact authorized library title',async()=>{
+ const t=setup({apiResponse:u=>{
+  if(u.hostname==='itunes.apple.com')return jsonReply({results:[]});
+  if(u.hostname==='www.wikidata.org'){
+   if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[{title:'Q184843'}]}});
+   if(u.searchParams.get('action')==='wbgetentities')return jsonReply({entities:{
+    Q184843:{labels:{en:{value:'Blade Runner'}}}}});
+   const property=u.searchParams.get('property');
+   return jsonReply({claims:{[property]:[{rank:'normal',mainsnak:{datavalue:{value:property==='P345'?'tt0083658':'1003'}}}]}});
+  }
+  if(u.pathname.startsWith('/Users/')&&u.pathname.endsWith('/Items')&&u.searchParams.has('SearchTerm')){
+   return jsonReply({Items:[
+    {Id:'66666666666646668666666666666666',Name:'Blade Runner',Type:'Movie',ProviderIds:{Imdb:'tt0083658'}},
+    {Id:'77777777777747778777777777777777',Name:'Blade Runner',Type:'Movie',ProviderIds:{Imdb:'tt1856101'}}
+   ],TotalRecordCount:2});
+  }
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.startSearch('Blade Runner',{scope:'movies'});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Where to watch')).listeners.click();
+ assert(findElement(t.root,e=>e.dataset.focusKey==='film-play|66666666666646668666666666666666'));
+ assert(!findElement(t.root,e=>e.dataset.focusKey==='film-play|77777777777747778777777777777777'));
+ const search=t.requests.find(r=>new URL(r.url).searchParams.has('SearchTerm'));
+ assert(new URL(search.url).searchParams.get('Fields').includes('ProviderIds'));
 });
 
 test('moonlit explicit search history uses the current account revision and survives a stale write rejection',async()=>{

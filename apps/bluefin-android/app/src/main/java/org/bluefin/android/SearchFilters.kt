@@ -47,3 +47,25 @@ data class MediaSearchFacets(
     }
 }
 data class HomeShelf(val title: String, val items: List<LibraryItem>)
+
+data class PublicTvTitle(val id: Long, val name: String, val year: String?, val artwork: String?) {
+    val url: String get() = "https://www.tvmaze.com/shows/$id"
+
+    companion object {
+        private val portrait = Regex("https://static\\.tvmaze\\.com/uploads/images/medium_portrait/[0-9]+/[0-9]+\\.jpg")
+        fun isPortrait(url: String): Boolean = portrait.matches(url)
+
+        fun parse(page: JSONObject): List<PublicTvTitle> {
+            val rows = page.getJSONArray("results")
+            return (0 until minOf(rows.length(), 20)).mapNotNull { index ->
+                val row = rows.optJSONObject(index) ?: return@mapNotNull null
+                val id = row.optLong("id")
+                val title = row.optString("title").trim()
+                if (id <= 0 || title.isBlank() || title.length > 256) return@mapNotNull null
+                val year = row.optString("year").takeIf { it.length == 4 && it.all(Char::isDigit) }
+                val image = row.optString("artwork").takeIf(::isPortrait)
+                PublicTvTitle(id, title, year, image)
+            }.distinctBy { it.id }
+        }
+    }
+}
