@@ -1,0 +1,20 @@
+[package]
+name = "bluefin-catalog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Portable catalog identity and regional access offers with optional hosted adapters"
+
+[features]
+default = []
+http = ["dep:reqwest", "dep:tokio", "serde/std", "serde_json/std", "url/std"]
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+url = { version = "2.5.8", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+reqwest = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }

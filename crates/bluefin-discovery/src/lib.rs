@@ -1,5 +1,9 @@
 //! Optional server-owned discovery. Native clients depend only on wire types.
 pub mod config;
+/// Public catalog access and regional offer adapters.
+pub mod catalog;
+/// Portable catalog request and response contracts.
+pub use bluefin_catalog as catalog_types;
 mod upstream;
 
 /// Sanitized errors. Provider response bodies, addresses and secrets stay private.
@@ -119,6 +123,7 @@ pub struct DiscoveryService {
     submissions: Mutex<()>,
     network: Semaphore,
     upstream: upstream::Upstream,
+    catalog: catalog::CatalogService,
 }
 
 impl DiscoveryService {
@@ -131,7 +136,13 @@ impl DiscoveryService {
             submissions: Mutex::new(()),
             network: Semaphore::new(8),
             upstream: upstream::Upstream::new()?,
+            catalog: catalog::CatalogService::open(&path.with_file_name("bluefin-catalog.json"))?,
         }))
+    }
+
+    /// Public catalog reads are independent of optional library/request grants.
+    pub fn catalog(&self) -> &catalog::CatalogService {
+        &self.catalog
     }
 
     pub async fn settings(&self) -> SettingsSnapshot {

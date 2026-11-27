@@ -184,7 +184,7 @@ async fn put_queue(
 
 /// Register Bluefin extensions alongside the existing Jellyfin-compatible API.
 pub fn register(router: Router<AppState>) -> Router<AppState> {
-    super::bluefin_discovery::register(super::bluefin_karaoke::register(router))
+    super::bluefin_catalog::register(super::bluefin_discovery::register(super::bluefin_karaoke::register(router)))
         .route("/Bluefin/Capabilities", get(capabilities))
         .route(
             "/Bluefin/Music/Queue",
