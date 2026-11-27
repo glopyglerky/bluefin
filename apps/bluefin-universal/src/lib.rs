@@ -12,6 +12,7 @@ pub mod playback;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod player;
 pub mod protocol;
+pub mod media_resources;
 pub mod service;
 pub mod state;
 #[cfg(feature = "ui")]

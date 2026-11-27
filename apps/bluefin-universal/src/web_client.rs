@@ -51,6 +51,22 @@ pub async fn request(handle: String, method: String, path: String, query: String
 pub async fn artwork(handle: String, item: String, backdrop: bool) -> Result<Vec<u8>, JsValue> {
     mesh::artwork(&handle,&item,backdrop).await.map_err(error)
 }
+#[wasm_bindgen(js_name = webMeshSportsPreferences)]
+pub async fn sports_preferences(handle: String, version: String, body: String) -> Result<String, JsValue> {
+    mesh::sports_preferences(&handle,&version,&body).await.map(serialize).map_err(error)
+}
+
+
+#[wasm_bindgen(js_name = webMeshKaraokeStem)]
+pub async fn karaoke_stem(handle: String, item: String, source: String,
+    revision: String, role: String, expected_bytes: u32) -> Result<Vec<u8>, JsValue> {
+    mesh::karaoke_stem(&handle,&item,&source,&revision,&role,expected_bytes).await.map_err(error)
+}
+#[wasm_bindgen(js_name = webMeshSportsLogo)]
+pub async fn sports_logo(handle: String, asset: String) -> Result<Vec<u8>, JsValue> {
+    mesh::sports_logo(&handle,&asset).await.map_err(error)
+}
+
 #[wasm_bindgen(js_name = webMeshInvitation)]
 pub fn invitation(serialized: String) -> Result<String, JsValue> {
     if serialized.len()>65536 {return Err(JsValue::from_str("Invitation response limit."));}
@@ -92,7 +108,8 @@ pub fn playback(handle: String) -> Result<String, JsValue> {
         let Some((current,service))=player.as_ref() else {return Ok("null".into());};
         if current != &handle {return Err(JsValue::from_str("Playback account mismatch."));}
         let state=service.snapshot();
-        Ok(serialize(json!({"plan":state.plan,"position":state.position,"duration":state.duration,
+        let media_source_id = state.plan.as_ref().map(|plan| plan.media_source.clone());
+        Ok(serialize(json!({"plan":state.plan,"mediaSourceId":media_source_id,"position":state.position,"duration":state.duration,
             "paused":state.paused,"busy":state.busy,"finished":state.finished,"message":state.message,
             "cleanupAcknowledged":state.cleanup_acknowledged,"revoked":state.revoked})))
     })

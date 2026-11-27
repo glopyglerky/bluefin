@@ -61,6 +61,7 @@ struct HttpRequest {
     method:String,path:String,
     #[serde(default)] headers:Vec<(String,String)>,
     #[serde(default)] body:Vec<u8>,
+    #[serde(default)] json_body:Option<Value>,
 }
 
 
@@ -167,14 +168,35 @@ fn credential_name(value:&str)->bool{
     let key:String=value.chars().filter(|c|c.is_ascii_alphanumeric()).flat_map(char::to_lowercase).collect();
     matches!(key.as_str(),"accesstoken"|"refreshtoken"|"apikey"|"apitoken"|"password"|"secret"|"deviceseed"|"authorization")
 }
+
+fn exact_binary_resource(segments:&[&str])->bool {
+    fn digest(value:&str)->bool {
+        value.len()==64 && value.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))
+    }
+    match segments {
+        ["sports","api","v1","logos",asset] => digest(asset),
+        ["bluefin","karaoke",item,revision,"stems",role] =>
+            uuid::Uuid::parse_str(item).is_ok_and(|id|!id.is_nil())
+                && digest(revision) && matches!(*role,"accompaniment"|"lead-vocal"),
+        _ => false,
+    }
+}
 fn validate_request(input:&HttpRequest,media:bool)->Result<(Method,Uri),ApiError>{
-    if input.method.len()>12 || input.path.len()>8192 || input.headers.len()>32 || input.body.len()>8192{return Err(malformed());}
+    if input.method.len()>12 || input.path.len()>8192 || input.headers.len()>32{return Err(malformed());}
     let method=Method::from_bytes(input.method.as_bytes()).map_err(|_|malformed())?;
     if !matches!(method,Method::GET|Method::HEAD|Method::POST|Method::PUT|Method::PATCH|Method::DELETE){return Err(denied());}
     let uri:Uri=input.path.parse().map_err(|_|malformed())?;
     if uri.scheme().is_some() || uri.authority().is_some() || !uri.path().starts_with('/')
         || uri.path().starts_with("//") || uri.path().contains(['\\','%'])
         || uri.path().split('/').any(|p|p=="."||p==".."){return Err(malformed());}
+    let body_limit=if method==Method::PUT && uri.path()=="/sports/api/v1/preferences" { bluefin_contract::sports::MAX_BODY_BYTES } else {8192};
+    if input.body.len()>body_limit{return Err(malformed());}
+    if let Some(value)=&input.json_body {
+        if method!=Method::PUT || uri.path()!="/sports/api/v1/preferences" || !input.body.is_empty()
+            || serde_json::to_vec(value).map_err(|_|malformed())?.len()>body_limit {
+            return Err(malformed());
+        }
+    }
     let lower=uri.path().to_ascii_lowercase();
     let segments:Vec<_>=lower.split('/').filter(|s|!s.is_empty()).collect();
     if segments.iter().any(|s|s.contains("authenticate")||s.contains("password")||s.contains("passkey")
@@ -186,7 +208,7 @@ fn validate_request(input:&HttpRequest,media:bool)->Result<(Method,Uri),ApiError
         if url::form_urlencoded::parse(query.as_bytes()).any(|(k,_)|credential_name(&k)){return Err(denied());}
     }
     if media && (!matches!(method,Method::GET|Method::HEAD)
-        || !matches!(segments.first().copied(),Some("videos"|"audio"|"items"|"livetv"))){
+        || !(matches!(segments.first().copied(),Some("videos"|"audio"|"items"|"livetv")) || exact_binary_resource(&segments))){
         return Err(denied());
     }
     Ok((method,uri))
@@ -196,10 +218,14 @@ async fn forward(connection:&mut PqcConnection,state:&AppState,service:&Service,
     require_network(state)?;
     let authorization=service.authorization(state,peer,&control.session_id,origin).await?;
     let (method,uri)=validate_request(&control.request,control.kind==ControlKind::Media)?;
-    let mut request=Request::builder().method(method).uri(uri.clone()).body(Body::from(control.request.body)).map_err(|_|malformed())?;
+    let body=if let Some(value)=control.request.json_body {
+        serde_json::to_vec(&value).map_err(|_|malformed())?
+    }else{control.request.body};
+    let mut request=Request::builder().method(method).uri(uri.clone()).body(Body::from(body)).map_err(|_|malformed())?;
     for (name,value) in control.request.headers{
         let lower=name.to_ascii_lowercase();
-        if !matches!(lower.as_str(),"accept"|"content-type"|"range"|"if-range"|"if-none-match"|"if-modified-since"|"accept-language"){return Err(denied());}
+        if !matches!(lower.as_str(),"accept"|"content-type"|"range"|"if-range"|"if-none-match"|"if-modified-since"|"accept-language")
+            && !(lower=="if-match" && request.method()==Method::PUT && uri.path()=="/sports/api/v1/preferences"){return Err(denied());}
         if value.len()>4096{return Err(malformed());}
         let name=HeaderName::from_bytes(name.as_bytes()).map_err(|_|malformed())?;
         let value=HeaderValue::from_str(&value).map_err(|_|malformed())?;
@@ -329,7 +355,7 @@ mod tests{
     #[test]
     fn claimed_http_origin_and_credential_routes_are_rejected(){
         for path in ["/Users/AuthenticateByName","/Auth/Keys","/QuickConnect/Connect","/u%73ers/Authenticate","//remote/path","https://remote/path","/Items?api_key=x"]{
-            let request=HttpRequest{method:"GET".into(),path:path.into(),headers:vec![],body:vec![]};
+            let request=HttpRequest{method:"GET".into(),path:path.into(),headers:vec![],body:vec![],json_body:None};
             assert!(validate_request(&request,false).is_err(),"{path}");
         }
     }
@@ -345,4 +371,53 @@ mod tests{
         assert!(!out.contains("private-bearer"));assert!(!out.contains("api_key"));
         assert!(out.contains("URI=\"key\"")); assert!(out.ends_with("segment.ts\n"));
     }
+    #[test]
+    fn binary_sing_and_sports_paths_remain_narrow_and_read_only() {
+        let revision="a".repeat(64);
+        for path in [format!("/sports/api/v1/logos/{revision}"),
+            format!("/Bluefin/Karaoke/00000000000000000000000000000001/{revision}/Stems/accompaniment"),
+            format!("/Bluefin/Karaoke/00000000000000000000000000000001/{revision}/Stems/lead-vocal")] {
+            let mut request=HttpRequest{method:"GET".into(),path,headers:vec![],body:vec![],json_body:None};
+            assert!(validate_request(&request,true).is_ok());
+            request.method="POST".into();
+            assert!(validate_request(&request,true).is_err());
+        }
+        for path in ["/sports/api/v1/preferences".to_owned(),"/sports/api/v1/logos/../secret".into(),
+            "/sports/api/v1/logos/https://other.example/a".into(),
+            format!("/Bluefin/Karaoke/00000000000000000000000000000000/{revision}/Stems/accompaniment"),
+            format!("/Bluefin/Karaoke/00000000000000000000000000000001/{revision}/Stems/other"),
+            format!("/Bluefin/Karaoke/00000000000000000000000000000001/{revision}/Preparation")] {
+            let request=HttpRequest{method:"GET".into(),path,headers:vec![],body:vec![],json_body:None};
+            assert!(validate_request(&request,true).is_err());
+        }
+    }
+    #[test]
+    fn large_preference_body_allowance_does_not_apply_to_other_routes_or_methods() {
+        let mut request=HttpRequest{method:"PUT".into(),path:"/sports/api/v1/preferences".into(),
+            headers:vec![],body:vec![b' ';60_000],json_body:None};
+        assert!(validate_request(&request,false).is_ok());
+        request.body.push(b' ');
+        assert!(validate_request(&request,false).is_err());
+        request.body.truncate(8193);
+        request.method="POST".into();
+        assert!(validate_request(&request,false).is_err());
+        request.method="PUT".into();request.path="/Users/Me".into();
+        assert!(validate_request(&request,false).is_err());
+    }
+
+    #[test]
+    fn compact_json_body_is_only_admitted_for_account_sports_preferences() {
+        let mut request=HttpRequest{method:"PUT".into(),path:"/sports/api/v1/preferences".into(),
+            headers:vec![],body:vec![],json_body:Some(json!({"teams":["nhl:1"],"schema":1}))};
+        assert!(validate_request(&request,false).is_ok());
+        request.body=vec![b'x'];
+        assert!(validate_request(&request,false).is_err());
+        request.body.clear();request.path="/Users/Me".into();
+        assert!(validate_request(&request,false).is_err());
+        request.path="/sports/api/v1/preferences".into();request.method="POST".into();
+        assert!(validate_request(&request,false).is_err());
+        request.method="PUT".into();request.json_body=Some(json!({"value":"a".repeat(60_000)}));
+        assert!(validate_request(&request,false).is_err());
+    }
+
 }

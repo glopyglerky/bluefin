@@ -519,6 +519,69 @@ pub(crate) async fn artwork(handle: &str, item: &str, backdrop: bool) -> Result<
     Ok(bytes)
 }
 
+/// Compare-and-swap only the signed-in account's Sports presentation choices.
+pub(crate) async fn sports_preferences(handle: &str, version: &str, body: &str) -> Result<Value> {
+    let revision: u64 = version.parse().map_err(|_| "Invalid Sports revision.")?;
+    if revision.to_string() != version || body.len() > bluefin_contract::sports::MAX_BODY_BYTES {
+        return Err("Invalid Sports preferences.".into());
+    }
+    let preferences: bluefin_contract::sports::Preferences =
+        serde_json::from_str(body).map_err(|_| "Invalid Sports preferences.")?;
+    if !preferences.is_valid() { return Err("Invalid Sports preferences.".into()); }
+    let session = connected(handle)?;
+    let _permit = Permit::acquire(session.clone())?;
+    ensure_current(&session).await?;
+    let base = origin(&session.descriptor.api_origin)?;
+    let url = protocol::api_url(&base,"sports/api/v1/preferences",&[])?;
+    let headers=vec![("content-type".into(),"application/json".into()),
+        ("if-match".into(),format!(r#""{revision}""#))];
+    let (status,_,bytes)=fetch(&session,"PUT",&url,&headers,body.as_bytes().to_vec(),false,protocol::MAX_RESPONSE).await?;
+    ensure_current(&session).await?;
+    if !(200..300).contains(&status) { return Err(format!("The peer returned HTTP {status}.")); }
+    serde_json::from_slice(&bytes).map_err(|_| "Invalid Sports preferences response.".into())
+}
+
+/// Downloads an admitted Sing stem using the current device proof and pinned
+/// peer. A manifest's byte count bounds the transfer; the caller verifies its
+/// SHA-256 before decoding or playing any returned audio.
+pub(crate) async fn karaoke_stem(handle: &str, item: &str, source: &str,
+    revision: &str, role: &str, expected_bytes: u32) -> Result<Vec<u8>> {
+    let resource = crate::media_resources::karaoke_stem(item,source,revision,role,expected_bytes)?;
+    let session = connected(handle)?;
+    let _permit = Permit::acquire(session.clone())?;
+    ensure_current(&session).await?;
+    let base = origin(&session.descriptor.api_origin)?;
+    let url = protocol::api_url(&base,&resource.path,&[("MediaSourceId",resource.source)])?;
+    let (status,headers,bytes) = fetch(&session,"GET",&url,&[],Vec::new(),true,resource.bytes).await?;
+    ensure_current(&session).await?;
+    let mime = response_mime(&headers);
+    if status != 200 || mime != "audio/wav"
+        || !crate::media_resources::wav_matches(&bytes,resource.bytes) {
+        return Err("The prepared Sing audio changed or is unavailable. Prepare it again.".into());
+    }
+    Ok(bytes)
+}
+
+/// Team artwork is addressed by a public asset digest, never a caller URL.
+pub(crate) async fn sports_logo(handle: &str, asset: &str) -> Result<Vec<u8>> {
+    let path = crate::media_resources::sports_logo(asset)?;
+    let session = connected(handle)?;
+    let _permit = Permit::acquire(session.clone())?;
+    ensure_current(&session).await?;
+    let base = origin(&session.descriptor.api_origin)?;
+    let url = protocol::api_url(&base,&path,&[])?;
+    let (status,headers,bytes) = fetch(&session,"GET",&url,&[],Vec::new(),true,1024*1024).await?;
+    ensure_current(&session).await?;
+    if status != 200 || !crate::media_resources::image_matches(response_mime(&headers),&bytes) {
+        return Err("Team artwork is unavailable.".into());
+    }
+    Ok(bytes)
+}
+fn response_mime(headers: &[(String,String)]) -> &str {
+    headers.iter().find(|(name,_)|name.eq_ignore_ascii_case("content-type"))
+        .map(|(_,value)|value.split(';').next().unwrap_or("").trim()).unwrap_or("")
+}
+
 async fn open_request(session: &Connected, method: &str, url: &Url,
     headers: &[(String,String)], body: Vec<u8>, media: bool) -> Result<(PqcConnection, u16, Vec<(String,String)>)> {
     if url.origin().ascii_serialization() != session.descriptor.api_origin
@@ -531,9 +594,16 @@ async fn open_request(session: &Connected, method: &str, url: &Url,
     ensure_page()?;
     let mut connection = session.endpoint.connect_server(&session.descriptor.server).await.map_err(|_| failure())?;
     if let Err(error) = ensure_page() { connection.close().await; return Err(error); }
+    let request = if !media && method == "PUT" && url.path() == "/sports/api/v1/preferences" {
+        if body.len() > bluefin_contract::sports::MAX_BODY_BYTES { return Err("Sports preferences limit.".into()); }
+        let value: Value = serde_json::from_slice(&body).map_err(|_| "Invalid Sports preferences.")?;
+        json!({"method":method,"path":path,"headers":headers,"json_body":value})
+    } else {
+        json!({"method":method,"path":path,"headers":headers,"body":body})
+    };
     connection.send(&json!({"version":1,"body":{
         "type":if media { "media" } else { "control" }, "session_id":session.descriptor.id,
-        "binding":connection.binding(), "request":{"method":method,"path":path,"headers":headers,"body":body}
+        "binding":connection.binding(), "request":request
     }})).await.map_err(|_| failure())?;
     let head: Value = connection.receive().await.map_err(|_| failure())?;
     if head["version"] != 1 || head["body"]["type"] != "response_head" { return Err(failure()); }
@@ -565,9 +635,9 @@ async fn fetch(session: &Connected, method: &str, url: &Url, headers: &[(String,
             }
         }
         Ok((status,headers,bytes))
-    }).await.map_err(|_| "The peer response timed out.")?;
+    }).await.map_err(|_| "The peer response timed out.");
     connection.close().await;
-    result
+    result?
 }
 
 async fn revoke_identity(saved: &Saved, descriptor: &Descriptor, request_id: &[u8;32]) -> Result<()> {
