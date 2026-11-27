@@ -150,6 +150,7 @@ pub(crate) mod bluefin_accounts;
 pub(crate) mod bluefin_passkeys;
 pub mod bluefin_mesh_accounts;
 pub mod bluefin_discovery;
+pub mod bluefin_catalog;
 pub mod bluefin_karaoke;
 pub mod bluefin_tv_playback;
 pub mod branding;
