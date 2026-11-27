@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The account's channel and programme IDs remain the playback authority.
 /// Channel pages are fetched near the viewport and evicted outside three pages.
-@MainActor struct LiveGuideView: View {
+struct LiveGuideView: View {
     @EnvironmentObject private var store: LibraryStore
     @Environment(\.dynamicTypeSize) private var dynamicType
     @State private var pages: [Int: ChannelPage] = [:]
