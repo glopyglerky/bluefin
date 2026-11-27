@@ -251,22 +251,15 @@ struct UnifiedSearchFacets: Decodable {
         await model.start { start, limit in
             try Task.checkCancellation()
             guard store.accountContext == context else { throw CancellationError() }
-            do {
-                let page = try await fetchPage(request, lane, start, limit, store, context)
-                try Task.checkCancellation()
-                guard store.accountContext == context else { throw CancellationError() }
-                finished = true
-                return page
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                finished = true
-                throw error
-            }
+            let page = try await fetchPage(request, lane, start, limit, store, context)
+            try Task.checkCancellation()
+            guard store.accountContext == context else { throw CancellationError() }
+            finished = true
+            return page
         }
         guard finished, generation == current, store.accountContext == context, !Task.isCancelled else { return }
-        // Successful empty pages and visible error/retry states are completed
-        // attempts too; only interrupted first loads should start again on return.
+        // Empty successful pages are complete too. Failures remain retryable
+        // through their visible error state, so an interrupted retry can resume.
         completedInitialLanes.insert(lane)
     }
 

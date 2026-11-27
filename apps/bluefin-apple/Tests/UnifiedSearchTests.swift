@@ -122,4 +122,27 @@ import XCTest
         XCTAssertFalse(model.loading)
     }
 
+    func testReturningAfterCanceledInitialRetryResumesThatLane() async throws {
+        let store = LibraryStore(); store.explore()
+        let filters = UnifiedSearchFilters(source: .library)
+        var calls = 0
+        var held: CheckedContinuation<ItemPage, Error>?
+        let model = UnifiedSearchModel(fetchPage: { _, _, _, _, _, _ in
+            calls += 1
+            if calls == 1 { throw BluefinError.message("Temporary search failure") }
+            if calls == 2 { return try await withCheckedThrowingContinuation { held = $0 } }
+            return .init(Items: [MediaItem(Id: "retried")], TotalRecordCount: 1)
+        })
+        await model.load(query: "ocean", store: store, filters: filters)
+        XCTAssertNotNil(model.laneModels[.library]?.failures[0])
+        model.laneModels[.library]?.retry(0)
+        try await waitUntil { held != nil }
+        model.cancel()
+        await model.load(query: "ocean", store: store, filters: filters)
+        XCTAssertEqual(calls, 3)
+        XCTAssertEqual(model.items.map(\.Id), ["retried"])
+        held?.resume(throwing: CancellationError())
+        model.cancel()
+    }
+
 }
