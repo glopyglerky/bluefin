@@ -291,7 +291,9 @@ class MainActivity : ComponentActivity() {
     }
     val destinations = (sources?.links.orEmpty() + initial?.links.orEmpty()).distinctBy { it.url }
     val exactIds = sources?.imdbIds.orEmpty() + initial?.imdbIds.orEmpty()
-    val local = library.filter { it.type == "Movie" && it.imdbId?.let(exactIds::contains) == true }
+    val local = if (kind == "movie") {
+        library.filter { it.type == "Movie" && it.imdbId?.let(exactIds::contains) == true }
+    } else emptyList()
     val credits = sources?.credits.orEmpty()
     val open: (String) -> Unit = { url ->
         runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
@@ -309,10 +311,10 @@ class MainActivity : ComponentActivity() {
                     it.licenseUrl?.let { license -> TextButton(onClick = { open(license) }) { Text(it.license) } }
                 }
                 (sources?.description ?: initial?.description)?.let { Text(it) }
-                Text("Where to watch", style = MaterialTheme.typography.titleLarge)
                 local.forEach { item ->
                     Action(if (item.ticks > 0) "Resume in Bluefin" else "Play in Bluefin") { dismiss(); play(item) }
                 }
+                Text("Catalog links", style = MaterialTheme.typography.titleLarge)
                 destinations.forEach { link ->
                     Action((if (link.player) "Watch on " else "Open on ") + link.provider) { open(link.url) }
                 }

@@ -545,6 +545,16 @@ private struct PublicTitleProviderChoices: View {
         return ((result?.links ?? []) + initialLinks).filter { seen.insert($0.url).inserted }
     }
 
+    private var playableLibraryItems: [MediaItem] {
+        guard kind == "movie" else { return [] }
+        return library.filter { media in
+            guard media.Type == "Movie", let id = media.ProviderIds?["Imdb"] ?? media.ProviderIds?["IMDb"] else {
+                return false
+            }
+            return id == imdbId || result?.imdbIds.contains(id) == true
+        }
+    }
+
     var body: some View {
         List {
             Section {
@@ -566,17 +576,16 @@ private struct PublicTitleProviderChoices: View {
                     if let license = artworkCredit.licenseUrl { Link(artworkCredit.license, destination: license) }
                 }
             }
-            Section("Where to watch") {
-                ForEach(library.filter { media in
-                    kind == "movie" && media.Type == "Movie" &&
-                    (media.ProviderIds?["Imdb"] ?? media.ProviderIds?["IMDb"]).map { id in
-                        id == imdbId || result?.imdbIds.contains(id) == true
-                    } == true
-                }) { media in
-                    Button(media.resumeTicks > 0 ? "Resume in Bluefin" : "Play in Bluefin") {
-                        Task { await store.play(media) }
+            if !playableLibraryItems.isEmpty {
+                Section {
+                    ForEach(playableLibraryItems) { media in
+                        Button(media.resumeTicks > 0 ? "Resume in Bluefin" : "Play in Bluefin") {
+                            Task { await store.play(media) }
+                        }
                     }
                 }
+            }
+            Section("Catalog links") {
                 ForEach(destinations) { destination in
                     Link(destination.action, destination: destination.url)
                 }
