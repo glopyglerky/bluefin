@@ -246,3 +246,43 @@ fn returning_to_a_queue_item_requires_a_fresh_authorization_callback() {
     assert!(!room.item_ready(first));
     assert!(room.item_ready(again));
 }
+
+#[test]
+fn a_fresh_command_can_reference_a_timeline_that_started_long_ago() {
+    let (mut room, ticket) = room_with_queue();
+    assert!(room.item_ready(ticket));
+    let old_anchor = Command {
+        execute_at_ms: 15_000,
+        ..command(Action::Resume {
+            position_ticks: 20_000_000,
+        })
+    };
+    assert_eq!(
+        room.schedule(membership(1), old_anchor, 1024),
+        CommandStatus::Scheduled
+    );
+    assert_eq!(
+        room.take_due(membership(1), 1024),
+        Some(Action::Resume {
+            position_ticks: 370_240_000
+        })
+    );
+    let stale_stop = Command {
+        emitted_at: 100_000_000,
+        ..command(Action::Stop)
+    };
+    assert_eq!(
+        room.schedule(membership(1), stale_stop, 1024),
+        CommandStatus::Stale
+    );
+    let fresh_stop = Command {
+        emitted_at: old_anchor.emitted_at + 1,
+        execute_at_ms: old_anchor.execute_at_ms,
+        ..command(Action::Stop)
+    };
+    assert_eq!(
+        room.schedule(membership(1), fresh_stop, 1024),
+        CommandStatus::Scheduled
+    );
+    assert_eq!(room.take_due(membership(1), 1024), Some(Action::Stop));
+}

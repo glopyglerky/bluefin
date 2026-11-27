@@ -12,7 +12,7 @@ const TICKS_PER_MILLISECOND: u64 = 10_000;
 const MAX_NETWORK_DELAY: u64 = 2_000;
 const MAX_CLOCK_AGE: u64 = 30_000;
 const MAX_FUTURE: u64 = 10_000;
-const MAX_LATE: u64 = 30_000;
+const MAX_COMMAND_AGE: u64 = 30_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClockExchange {
@@ -120,10 +120,21 @@ pub enum Action {
 pub struct Command {
     pub group: Id,
     pub playlist_item: Id,
-    /// The wire timestamp's original ordering precision, in 100-ns ticks.
+    /// Unix time in 100-ns ticks, retaining the server's ordering precision.
     pub emitted_at: i64,
     pub execute_at_ms: i64,
     pub action: Action,
+}
+
+impl Command {
+    fn is_fresh(self, now: i64) -> bool {
+        let emitted_ms = self.emitted_at.div_euclid(TICKS_PER_MILLISECOND as i64);
+        if emitted_ms > now {
+            emitted_ms.abs_diff(now) <= MAX_NETWORK_DELAY
+        } else {
+            emitted_ms.abs_diff(now) <= MAX_COMMAND_AGE
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -291,12 +302,12 @@ impl Room {
         let Some(now) = room.clock.and_then(|clock| clock.server_time(local_now)) else {
             return CommandStatus::OutsideClockWindow;
         };
-        let allowed = if command.execute_at_ms >= now {
-            command.execute_at_ms.abs_diff(now) <= MAX_FUTURE
-        } else {
-            command.execute_at_ms.abs_diff(now) <= MAX_LATE
-        };
-        if !allowed {
+        // The server can reissue a current Pause, Stop or Unpause with its
+        // original playback anchor. Freshness follows emission, while the
+        // anchor is used only for the deadline and media extrapolation.
+        if !command.is_fresh(now)
+            || (command.execute_at_ms > now && command.execute_at_ms.abs_diff(now) > MAX_FUTURE)
+        {
             return CommandStatus::OutsideClockWindow;
         }
         playback.command = Some(command);
@@ -318,10 +329,10 @@ impl Room {
             return None;
         }
         playback.delivered = true;
-        let late = now.abs_diff(command.execute_at_ms);
-        if late > MAX_LATE {
+        if !command.is_fresh(now) {
             return None;
         }
+        let late = now.abs_diff(command.execute_at_ms);
         match command.action {
             Action::Resume { position_ticks } => Some(Action::Resume {
                 position_ticks: position_ticks
