@@ -171,6 +171,85 @@ impl Service {
             .bind(invite.invitation_id.to_vec()).bind(self.epoch.to_vec()).bind(digest(code.as_bytes()).to_vec()).bind(now())
             .fetch_optional(self.db.pool()).await.map_err(storage)?.ok_or_else(used)
     }
+    /// Confidential-capsule bootstrap for a scoped private relay fixture.
+    /// Deliberately unmounted: any future adapter needs a trusted HTTPS origin,
+    /// fixed launch policy, bounded input and redacted request logging. The
+    /// original capsule is a bearer; never persist it or send it to the relay.
+    /// SHA256(key || endpoint) is not a MAC (RFC 2104). No such construction is
+    /// substituted here for a reviewed endpoint-bound proof.
+    ///
+    /// The lease is only permission to reach the inner PQ/passkey handshake.
+    /// It neither claims nor consumes an invite and never promotes a session.
+    /// Reconnect promotion must receive the transport's actual Iroh endpoint
+    /// AND inner verified device identity, check its durable active session and
+    /// current policy, and use bounded revocable leases. A Finish request,
+    /// browser callback or copied session descriptor cannot supply that proof.
+    /// The runtime owner must replace the admission store on epoch change;
+    /// relay HTTP admission cannot terminate existing connections.
+    pub(crate) async fn admit_relay_bootstrap(
+        &self, state:&AppState,
+        relay:&Mutex<bluefin_mesh_connect::relay_admission::RelayAdmissions>,
+        invite:&ConnectInvite, endpoint:[u8;32],
+    )->Result<(),ApiError>{
+        let _permit=self.operations.try_acquire().map_err(|_|
+            ApiError::ServiceUnavailable("Please retry shortly.".into()))?;
+        let _gate=self.gate.lock().await;
+        let _policy_gate=state.account_gate.lock().await;
+        self.live().await?;
+        crate::mesh_transport::require_network(state)?;
+        let policy=self.policy(state).await?;
+        let row=self.invite_row(invite).await?;
+        if row.get::<String,_>("State")!="issued" {return Err(used());}
+        let bound:Option<String>=row.get("UserId");
+        match invite.intent {
+            InviteIntent::Login=>{
+                let user=Uuid::parse_str(bound.as_deref().ok_or_else(failed)?).map_err(|_|failed())?;
+                self.account_allowed(state,user).await?;
+                if self.credentials(user).await?.is_empty() {return Err(failed());}
+            },
+            InviteIntent::Signup=>if !policy.allow_signups || bound.is_some() {return Err(failed());},
+        }
+        let code=invite.to_code().map_err(|_|used())?;
+        // Lock order: service, account policy, admission store, SQL writer.
+        // Acquire every awaitable lock before the final time/state check. A
+        // competing claim or issuer activation cannot cross this transaction.
+        let mut admissions=relay.lock().await;
+        let mut tx=self.db.writer().begin_with("BEGIN IMMEDIATE").await.map_err(storage)?;
+        self.live_tx(&mut tx).await?;
+        let current=sqlx::query("SELECT UserId,Expires FROM BluefinMeshInvites WHERE Id=? AND Epoch=? AND CapsuleHash=? AND Intent=? AND State='issued'")
+            .bind(invite.invitation_id.to_vec()).bind(self.epoch.to_vec())
+            .bind(digest(code.as_bytes()).to_vec())
+            .bind(match invite.intent {InviteIntent::Login=>"login",InviteIntent::Signup=>"signup"})
+            .fetch_optional(&mut *tx).await.map_err(storage)?.ok_or_else(used)?;
+        if current.get::<Option<String>,_>("UserId")!=bound {return Err(used());}
+        if let Some(user)=bound.as_deref() {
+            // Read the account owner's actual durable permission rows inside
+            // this writer fence too: an account policy update while acquiring
+            // the store/transaction must not race the earlier DTO check.
+            use ferrofin_db::enums::PermissionKind;
+            let allowed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM Users u WHERE u.Id=? AND NOT EXISTS(SELECT 1 FROM Permissions p WHERE p.UserId=u.Id AND p.Kind=? AND p.Value!=0) AND EXISTS(SELECT 1 FROM Permissions p WHERE p.UserId=u.Id AND p.Kind=? AND p.Value!=0) AND EXISTS(SELECT 1 FROM BluefinPasskeys k WHERE k.UserId=u.Id))")
+                .bind(user).bind(i32::from(PermissionKind::IsDisabled))
+                .bind(i32::from(PermissionKind::EnableRemoteAccess))
+                .fetch_one(&mut *tx).await.map_err(storage)?;
+            if !allowed {return Err(failed());}
+        }
+        let wall=now();
+        if current.get::<i64,_>("Expires")<=wall {return Err(used());}
+        crate::mesh_transport::require_network(state)?;
+        let mut lease_invite=invite.clone();
+        lease_invite.expires_at_unix_ms=lease_invite.expires_at_unix_ms
+            .min(current.get::<i64,_>("Expires") as u64);
+        admissions.admit_pairing(&lease_invite,endpoint,wall as u64,std::time::Instant::now())
+            .map_err(|error|match error {
+                bluefin_mesh_connect::relay_admission::AdmissionError::Full=>
+                    ApiError::ServiceUnavailable("Please retry shortly.".into()),
+                _=>failed(),
+            })?;
+        // No await between final check and insertion. No durable SQL mutation:
+        // dropping the transaction queues rollback while still fencing claims.
+        drop(tx);
+        Ok(())
+    }
     /// The transport supplies the verified ML-DSA peer, after network admission.
     pub async fn handle(&self,state:&AppState,peer:&[u8],input:Value)->Result<Value,ApiError>{
         if peer.len()!=1952 {return Err(failed());}
