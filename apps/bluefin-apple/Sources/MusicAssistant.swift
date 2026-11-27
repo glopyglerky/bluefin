@@ -358,6 +358,12 @@ struct MusicAssistantTrackSlot: Identifiable {
             }
             failedLibraryPage = nil
             isSearch = false
+            // The upstream cursor counts inspected rows, including unavailable
+            // entries omitted by projection. Advance an empty page rather than
+            // leaving an unfillable loading row at the visible end.
+            if page.items.isEmpty, page.hasMore, page.nextOffset == nextOffset, page.nextOffset > offset {
+                requestedLibraryPage = page.nextOffset
+            }
             touchLibraryPage(offset)
             trimLibraryPages()
         } catch {
@@ -377,7 +383,7 @@ struct MusicAssistantTrackSlot: Identifiable {
         }
     }
 
-    func libraryPageAppeared(_ offset: UInt64) {
+    func libraryPageAppeared(_ offset: UInt64, index: Int) {
         visibleLibraryPages[offset, default: 0] += 1
         touchLibraryPage(offset)
         if trackPages.first(where: { $0.offset == offset })?.items == nil {
@@ -385,6 +391,9 @@ struct MusicAssistantTrackSlot: Identifiable {
             scheduleLibraryPage()
         }
         trimLibraryPages()
+        if let page = trackPages.last, page.offset == offset, index >= max(0, page.count - 5) {
+            loadMoreTracks()
+        }
     }
 
     func libraryPageDisappeared(_ offset: UInt64) {
@@ -494,6 +503,7 @@ struct MusicAssistantTrackSlot: Identifiable {
 struct MusicAssistantView: View {
     @EnvironmentObject private var store: LibraryStore
     @StateObject private var model = MusicAssistantModel()
+    @ScaledMetric(relativeTo: .body) private var trackRowHeight: CGFloat = 140
 
     var body: some View {
         Form {
@@ -576,18 +586,18 @@ struct MusicAssistantView: View {
                             if let tracks = page.items, tracks.indices.contains(index) {
                                 trackRow(tracks[index])
                             } else if page.items != nil {
-                                Text("This track is no longer available.").foregroundStyle(.secondary).frame(minHeight: 110)
+                                Text("This track is no longer available.").foregroundStyle(.secondary).frame(height: trackRowHeight)
                             } else {
-                                ProgressView("Loading track…").frame(minHeight: 110)
+                                ProgressView("Loading track…").frame(height: trackRowHeight)
                             }
                         }
-                        .onAppear { model.libraryPageAppeared(page.offset) }
+                        .onAppear { model.libraryPageAppeared(page.offset, index: index) }
                         .onDisappear { model.libraryPageDisappeared(page.offset) }
                     }
                 }
                 if model.hasMore {
                     ProgressView("Loading more tracks…")
-                        .task(id: model.libraryCursor) { model.loadMoreTracks() }
+                        .onAppear { model.loadMoreTracks() }
                 }
                 if model.canRetryLibrary {
                     Button("Retry loading tracks") { model.retryLibrary() }.disabled(model.busy)
@@ -611,7 +621,7 @@ struct MusicAssistantView: View {
                 Button("Add to queue") { model.play(track, mode: "add") }
             }.disabled(!model.canPlay || !track.available)
             if !track.available { Text("Unavailable in Music Assistant").font(.caption).foregroundStyle(.secondary) }
-        }.padding(.vertical, 4).frame(minHeight: 110)
+        }.padding(.vertical, 4).frame(height: trackRowHeight)
     }
 
     private var queue: some View {

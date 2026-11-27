@@ -211,6 +211,11 @@ struct LiveGuideView: View {
                 Group {
                     if pages[offset]?.failure != nil {
                         Button("Retry") { requestPage(offset, retry: true) }
+                    } else if pages[offset]?.complete == true {
+                        VStack(spacing: 5) {
+                            Text("Channel no longer available").font(.caption2).multilineTextAlignment(.center)
+                            Button("Refresh") { reload = UUID() }.font(.caption2)
+                        }.padding(.horizontal, 6)
                     } else { ProgressView().accessibilityLabel("Loading channel") }
                 }
                 .frame(width: channelWidth, height: rowHeight)
