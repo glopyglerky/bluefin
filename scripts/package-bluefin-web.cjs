@@ -28,6 +28,30 @@ function replace(source,from,to,label){
 function hashed(name,bytes){
  const dot=name.lastIndexOf('.');return name.slice(0,dot)+'-'+sha(bytes)+name.slice(dot);
 }
+const installationChannels=new Map([
+ ['appleStore',['App Store',/^https:\/\/apps\.apple\.com\/(?:[a-z]{2}\/)?app\/(?:[a-z0-9-]+\/)?id[0-9]+$/]],
+ ['testFlight',['TestFlight beta',/^https:\/\/testflight\.apple\.com\/join\/[A-Za-z0-9]{8}$/]],
+ ['googlePlay',['Google Play for Android and Google TV',/^https:\/\/play\.google\.com\/store\/apps\/details\?id=org\.bluefin\.android$/]],
+ ['roku',['Add on Roku',/^https:\/\/my\.roku\.com\/account\/add\?channel=[A-Za-z0-9]{1,20}$/]],
+]);
+function installPage(app,stylesheet){
+ const input=read(app,'install-channels.json');
+ if(input.length>2048)throw Error('Installation channel configuration is too large.');
+ const channels=JSON.parse(input.toString('utf8'));
+ if(!channels||typeof channels!=='object'||Array.isArray(channels))throw Error('Invalid installation channel configuration.');
+ for(const [key,value]of Object.entries(channels)){
+  const channel=installationChannels.get(key);
+  if(!channel||typeof value!=='string'||!channel[1].test(value)||new URL(value).href!==value)throw Error('Invalid Bluefin installation channel.');
+ }
+ const links=Array.from(installationChannels).flatMap(([key,[label]])=>{
+  const url=Object.hasOwn(channels,key)?channels[key]:null;
+  return url?['<li><a href="'+url+'" target="_blank" rel="noopener noreferrer">'+label+'</a></li>']:[];
+ });
+ const choices=links.length?'<ul>'+links.join('')+'</ul>':'<p>A native download is unavailable on this release. You can use Bluefin in your browser.</p>';
+ const template=read(app,'install.html').toString('utf8');
+ return replace(replace(template,'./bluefin.css','./'+stylesheet,'install stylesheet'),
+  '<!-- Bluefin installation channels -->',choices,'installation channels');
+}
 function inventory(output,details={}){
  const entries=files(output).filter(name=>name!=='asset-manifest.json').map(name=>{
   const bytes=read(output,name);
@@ -45,6 +69,8 @@ function packageWeb(engineInput,output,sourceRoot){
  if(!engineFiles.includes('bluefin_universal.js')||!engineFiles.includes('bluefin_universal_bg.wasm'))throw Error('The admitted bindgen output is incomplete.');
  const wasm=read(engineInput,'bluefin_universal_bg.wasm');
  if(wasm.length<8||!wasm.subarray(0,4).equals(Buffer.from([0,97,115,109])))throw Error('The admitted Wasm artifact is invalid.');
+ const css=read(app,'bluefin.css'),cssName=hashed('bluefin.css',css);
+ const install=installPage(app,cssName);
  fs.mkdirSync(output,{recursive:false,mode:0o755});
  const worker=read(app,'media-worker.js'),workerHash=sha(worker);
  const workerReference='./media-worker.js?release='+workerHash;
@@ -70,7 +96,7 @@ function packageWeb(engineInput,output,sourceRoot){
  for(const name of files(vendor))write(output,'vendor/'+(name==='hls.light.min.js'?hlsName:name),read(vendor,name));
  let index=read(app,'index.html').toString('utf8');
  if(/<base(?:\s|>)/i.test(index))throw Error('The document base must remain at its deployment root.');
- const css=read(app,'bluefin.css'),cssName=hashed('bluefin.css',css);write(output,cssName,css);
+ write(output,cssName,css);
  index=replace(index,'./bluefin.css','./'+cssName,'stylesheet');
  const scripts=['bootstrap.js','native-view.js'];
  if(fs.existsSync(path.join(app,'local-music.js')))scripts.push('local-music.js');
@@ -86,6 +112,7 @@ function packageWeb(engineInput,output,sourceRoot){
   index=replace(index,'./'+name,'./'+versioned,name);
  }
  write(output,'index.html',index);
+ write(output,'install.html',install);
  write(output,'mesh-policy.json',read(app,'mesh-policy.json'));
  write(output,'LICENSE',read(sourceRoot,'LICENSE'));
  // Deployment provenance and the exact corresponding-source archive are

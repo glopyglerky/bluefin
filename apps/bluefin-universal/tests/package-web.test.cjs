@@ -7,6 +7,8 @@ function fixture(t){
  const source=path.join(root,'source'),app=path.join(source,'apps/bluefin-universal'),engine=path.join(root,'engine'),output=path.join(root,'bundle');
  fs.mkdirSync(path.join(app,'vendor'),{recursive:true});fs.mkdirSync(path.join(engine,'snippets/bridge'),{recursive:true});
  fs.writeFileSync(path.join(app,'index.html'),'<link href="./bluefin.css"><script src="./bootstrap.js"></script><script src="./native-view.js"></script>');
+ fs.writeFileSync(path.join(app,'install.html'),'<meta name="referrer" content="no-referrer"><link href="./bluefin.css"><!-- Bluefin installation channels --><a href="./">Continue in the browser</a>');
+ fs.writeFileSync(path.join(app,'install-channels.json'),'{}');
  fs.writeFileSync(path.join(app,'bluefin.css'),'body{color:#006e91}');
  fs.writeFileSync(path.join(app,'bootstrap.js'),"import('./bluefin_universal.js');new URL('./media-worker.js',document.baseURI);");
  fs.writeFileSync(path.join(app,'native-view.js'),"new URL('./vendor/hls.light.min.js',document.baseURI);");
@@ -52,4 +54,39 @@ test('packaging rejects oversized assets and filesystem links',t=>{
  assert.throws(()=>packageWeb(f.engine,f.output,f.source),/exceeds 25 MiB/);
  const g=fixture(t);fs.symlinkSync(path.join(g.source,'LICENSE'),path.join(g.engine,'linked-license'));
  assert.throws(()=>packageWeb(g.engine,g.output,g.source),/symbolic links/);
+});
+test('the install page offers only configured platform destinations and preserves browser access',t=>{
+ const f=fixture(t);
+ const channels={
+  appleStore:'https://apps.apple.com/us/app/bluefin/id1234567890',
+  testFlight:'https://testflight.apple.com/join/AbCd1234',
+  googlePlay:'https://play.google.com/store/apps/details?id=org.bluefin.android',
+  roku:'https://my.roku.com/account/add?channel=BluefinBeta',
+ };
+ fs.writeFileSync(path.join(f.app,'install-channels.json'),JSON.stringify(channels));
+ const manifest=packageWeb(f.engine,f.output,f.source);
+ const install=fs.readFileSync(path.join(f.output,'install.html'),'utf8');
+ assert(manifest.assets.some(entry=>entry.path==='install.html'));
+ assert.match(install,/bluefin-[a-f0-9]{64}\.css/);
+ assert.match(install,/no-referrer/);
+ assert.match(install,/Continue in the browser/);
+ for(const url of Object.values(channels))assert(install.includes('href="'+url+'" target="_blank" rel="noopener noreferrer"'));
+ const closed=fixture(t);
+ packageWeb(closed.engine,closed.output,closed.source);
+ assert(!fs.readFileSync(path.join(closed.output,'install.html'),'utf8').includes('https://'));
+});
+test('packaging rejects off-platform destinations and invitation data in an install URL',t=>{
+ const f=fixture(t);
+ for(const channels of [
+  {testFlight:'https://testflight.apple.com.example/join/AbCd1234'},
+  {testFlight:'https://testflight.apple.com/join/AbCd1234#bluefin-connect=example'},
+  {appleStore:'https://apps.apple.com/us/app/bluefin/id1234567890?invitation=example'},
+  {googlePlay:'https://play.google.com/store/apps/details?id=other.package'},
+  {roku:'https://my.roku.com/account/add?channel=Bluefin&token=example'},
+  {custom:'https://example.com/bluefin'},
+ ]){
+  fs.writeFileSync(path.join(f.app,'install-channels.json'),JSON.stringify(channels));
+  assert.throws(()=>packageWeb(f.engine,f.output,f.source),/Invalid Bluefin installation channel/);
+  assert(!fs.existsSync(f.output));
+ }
 });

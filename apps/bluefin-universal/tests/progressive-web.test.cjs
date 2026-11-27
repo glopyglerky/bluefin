@@ -226,6 +226,18 @@ function findElement(root,predicate) {
  for(const child of root.children||[]){const found=findElement(child,predicate);if(found)return found;}
  return null;
 }
+test('opening an invitation exposes installation without sending or persisting its code',()=>{
+ const code='MC1-EXAMPLE',t=setup({launchCode:code});
+ assert.equal(t.ui.state.sheet,'invite');
+ assert.equal(t.ui.state.code,code);
+ const sheet=findElement(t.root,e=>e.attributes.role==='dialog');
+ assert(sheet);
+ const install=findElement(sheet,e=>e.tagName==='A'&&e.textContent==='Install Bluefin');
+ assert.equal(install?.href,'https://bluefin.test/web/bluefin/install.html');
+ assert.equal(install.target,'_blank');
+ assert.equal(install.rel,'noopener noreferrer');
+ assert.equal(t.requests.length,0);
+});
 test('QR capability failure offers optional site guidance before sending an invitation',async()=>{
  const code='MC1-EXAMPLE',t=setup({launchCode:code,meshFailure:true});
  assert.equal(t.requests.length,0);assert.equal(t.ui.state.sheet,'invite');

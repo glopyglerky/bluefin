@@ -119,6 +119,31 @@ existing client-bound service-worker bridge. It never calls the HTTPS cookie
 gateway. If that browser cannot provide the worker/media capability, the paired
 session remains paired and playback fails explicitly.
 
+## Install from an invitation
+
+The HTTPS invitation page opens `install.html` in a separate tab. This link
+carries no invitation code, query or fragment. Installation and pairing are
+separate user actions. A user who installs the app can scan the original QR
+again while the one-use invitation is still valid. A user who already started
+pairing should finish on the device that started it.
+
+`apps/bluefin-universal/install-channels.json` contains the release owner's
+verified public Apple App Store, TestFlight, Google Play and Roku URLs. The
+supported keys are `appleStore`, `testFlight`, `googlePlay` and `roku`.
+Use the canonical store URL, without tracking or invitation data. Publish a
+channel only after its exact signed build and platform installation are
+verified. The checked-in configuration is empty. Every packaged install page
+offers browser access, including Safari's Add to Home Screen option.
+
+TestFlight and the App Store require Apple Developer Program distribution
+access. Direct Apple web distribution has separate eligibility and device
+support. Google Play TV and Roku beta deployments also require their
+respective published or tester artifacts. [Apple account
+comparison](https://developer.apple.com/help/account/basics/about-your-developer-account),
+[Apple web distribution](https://developer.apple.com/documentation/marketplacekit/distributing-your-app-from-your-website),
+[Google TV distribution](https://developer.android.com/training/tv/publishing/distribute),
+[Roku beta distribution](https://developer.roku.com/dev/docs/channel-publishing-guide)
+
 ## Temporary devices
 
 Mesh pairing uses an in-memory revisioned journal by default. Opening the page
