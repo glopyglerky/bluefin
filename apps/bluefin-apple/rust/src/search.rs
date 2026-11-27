@@ -107,6 +107,10 @@ pub(super) fn facets(api: &Api<'_>) -> Result<Value> {
         ("IncludeItemTypes", "BoxSet".into()), ("Recursive", "true".into()),
         ("Limit", "200".into()), ("SortBy", "SortName".into())
     ])?;
+    project_facets(&studios, &filters, &collections)
+}
+
+fn project_facets(studios: &Value, filters: &Value, collections: &Value) -> Result<Value> {
     let named = |value: &Value| -> Result<Vec<Value>> {
         let rows = value["Items"].as_array().ok_or_else(|| err("Invalid search filters"))?;
         if rows.len() > 200 { return Err(err("Search filter page exceeds limit")); }
@@ -131,12 +135,33 @@ pub(super) fn facets(api: &Api<'_>) -> Result<Value> {
         .filter_map(Value::as_i64).filter(|year| (1..=9999).contains(year)).take(512).collect();
     years.sort_unstable_by(|a, b| b.cmp(a)); years.dedup();
     let truncated = studios["TotalRecordCount"].as_u64().unwrap_or(0) > 200
-        || collections["TotalRecordCount"].as_u64().unwrap_or(0) > 200 || all_tags.len() > 512;
-    Ok(json!({"studios":named(&studios)?, "tags":tags, "collections":named(&collections)?, "genres":genres, "years":years, "truncated":truncated}))
+        || collections["TotalRecordCount"].as_u64().unwrap_or(0) > 200 || all_tags.len() > 512
+        || filters["Genres"].as_array().is_some_and(|values| values.len() > 512)
+        || filters["Years"].as_array().is_some_and(|values| values.len() > 512);
+    Ok(json!({"studios":named(studios)?, "tags":tags, "collections":named(collections)?, "genres":genres, "years":years, "truncated":truncated}))
 }
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn capped_genre_and_year_facets_disclose_incomplete_choices() {
+        let empty = json!({"Items": [], "TotalRecordCount": 0});
+        for field in ["Genres", "Years"] {
+            for count in [512, 513] {
+                let values: Vec<Value> = (1..=count).map(|index| {
+                    if field == "Genres" { json!(format!("Genre {index}")) }
+                    else { json!(index) }
+                }).collect();
+                let mut filters = json!({"Tags": [], "Genres": [], "Years": []});
+                filters[field] = json!(values);
+                let projected = project_facets(&empty, &filters, &empty).unwrap();
+                let key = if field == "Genres" { "genres" } else { "years" };
+                assert_eq!(projected[key].as_array().unwrap().len(), 512);
+                assert_eq!(projected["truncated"], count > 512);
+            }
+        }
+    }
 
     #[test]
     fn explicit_search_sort_and_refinements_are_retained_for_every_page() {
