@@ -515,7 +515,7 @@ private struct SearchProgrammeDestination: View {
     @State private var problem: String?
     @State private var opening = false
     private var isAiring: Bool {
-        guard let start = programme.start, let end = programme.end else { return false }
+        guard let start = programme.airingStart, let end = programme.airingEnd else { return false }
         let now = Date()
         return start <= now && now < end
     }
@@ -526,7 +526,7 @@ private struct SearchProgrammeDestination: View {
             else {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(programme.title).font(.title.bold())
-                    if let start = programme.start {
+                    if let start = programme.airingStart {
                         Text(start.formatted(date: .abbreviated, time: .shortened)).foregroundStyle(.secondary)
                     }
                     if let overview = programme.Overview, !overview.isEmpty { Text(overview) }

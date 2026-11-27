@@ -56,7 +56,7 @@ struct BluefinGlassSurface: ViewModifier {
         if !enabled { content }
         else if reduceTransparency || reduceMotion {
             content.background(BluefinStyle.secondaryBackground, in: shape)
-                .overlay(shape.strokeBorder(BluefinStyle.border.opacity(0.3), lineWidth: 0.5))
+                .overlay(shape.strokeBorder(BluefinStyle.decorativeLine, lineWidth: 0.5))
         } else {
             #if !os(visionOS)
             if #available(iOS 26.0, tvOS 26.0, macOS 26.0, watchOS 26.0, *) {

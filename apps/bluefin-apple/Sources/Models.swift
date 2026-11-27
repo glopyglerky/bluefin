@@ -53,6 +53,8 @@ struct MediaItem: Codable, Identifiable, Hashable {
     var Number: String?
     var CurrentProgram: LiveProgram?
     var ChannelId: String?
+    var StartDate: String?
+    var EndDate: String?
     var ParentIndexNumber: Int?
     var IndexNumber: Int?
     var ImageTags: [String: String]?
@@ -92,6 +94,8 @@ struct MediaItem: Codable, Identifiable, Hashable {
     }
     var id: String { Id }
     var title: String { Name ?? "Untitled" }
+    var airingStart: Date? { StartDate.flatMap(LiveProgram.date) }
+    var airingEnd: Date? { EndDate.flatMap(LiveProgram.date) }
     var isContainer: Bool { IsFolder == true || ["Series", "Season", "MusicAlbum", "MusicArtist", "CollectionFolder", "Folder", "BoxSet", "Playlist"].contains(Type ?? "") }
     var subtitle: String {
         if let series = SeriesName { return "\(series) · S\(ParentIndexNumber ?? 1) E\(IndexNumber ?? 1)" }
@@ -169,7 +173,7 @@ struct LiveProgram: Codable, Hashable, Identifiable {
     var title: String { Name ?? "Live programme" }
     var start: Date? { StartDate.flatMap(Self.date) }
     var end: Date? { EndDate.flatMap(Self.date) }
-    private static func date(_ value: String) -> Date? {
+    static func date(_ value: String) -> Date? {
         (try? fractionalTimestamp.parse(value)) ?? (try? wholeTimestamp.parse(value))
     }
     private static let fractionalTimestamp = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
