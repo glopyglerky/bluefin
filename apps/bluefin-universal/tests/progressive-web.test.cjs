@@ -686,7 +686,8 @@ test('default public search discovers TV, movies, music, credited people, and da
  const t=setup({apiResponse:url=>{
   if(url.href.startsWith('https://api.tvmaze.com/search/shows'))return jsonReply([
    {show:{id:47,name:'Screen Fixture',url:'https://unrelated.test/title',premiered:'2025-04-01',
-    image:{medium:'https://static.tvmaze.com/uploads/images/medium_portrait/2/47.jpg'}}},
+    image:{medium:'https://static.tvmaze.com/uploads/images/medium_portrait/2/47.png'},
+    officialSite:'https://www.netflix.com/title/80057281'}},
    {show:{id:48,name:'No Poster',image:{medium:'https://unrelated.test/image.jpg'}}},
   ]);
   if(url.href.startsWith('https://api.tvmaze.com/search/people'))return jsonReply([{person:{id:73,name:'TV Crew Fixture'}}]);
@@ -709,6 +710,8 @@ test('default public search discovers TV, movies, music, credited people, and da
  assert.match(t.root.textContent,/TV Crew Fixture/);
  assert(!t.root.textContent.includes('Not media'));
  assert(findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Screen Fixture')));
+ assert(findElement(t.root,e=>e.src==='https://static.tvmaze.com/uploads/images/medium_portrait/2/47.png'));
+ assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Open on Netflix').href,'https://www.netflix.com/title/80057281');
  assert(!findElement(t.root,e=>String(e.href).includes('/shows/47')));
  assert(!findElement(t.root,e=>String(e.src).includes('unrelated.test')));
  assert(t.requests.every(r=>r.options.headers===undefined&&r.options.credentials==='omit'&&r.options.referrerPolicy==='no-referrer'));
@@ -760,13 +763,41 @@ test('broad account search includes connected catalog and a close upcoming sport
 });
 
 const claim=(value,rank='normal')=>({rank,mainsnak:{snaktype:'value',datavalue:{value}}});
+test('a film result displays a licensed Commons poster and exact watch links before opening details',async()=>{
+ const t=setup({apiResponse:u=>{
+  if(u.hostname==='commons.wikimedia.org'){
+   assert.equal(u.searchParams.get('titles'),'File:Film poster.png');
+   return jsonReply({query:{pages:[{title:'File:Film poster.png',imageinfo:[{
+    thumburl:'https://upload.wikimedia.org/wikipedia/commons/thumb/0/00/Film_poster.png/250px-Film_poster.png',
+    descriptionurl:'https://commons.wikimedia.org/wiki/File:Film_poster.png',
+    extmetadata:{Artist:{value:'<a>Poster Artist</a>'},LicenseShortName:{value:'CC BY-SA 4.0'},
+     LicenseUrl:{value:'https://creativecommons.org/licenses/by-sa/4.0/'}}
+   }]}]}});
+  }
+  if(u.hostname!=='www.wikidata.org')return;
+  if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[{title:'Q184843'}]}});
+  return jsonReply({entities:{Q184843:{labels:{en:{value:'Film Fixture'}},claims:{
+   P3383:[claim('Film poster.png')],P18:[claim('Secondary artwork.jpg')],
+   P1874:[claim('80112233'),claim('80112234')],P856:[claim('https://www.paramountplus.com/movies/fixture/'),
+    claim('https://www.netflix.com/title/80112233/redirect'),claim('https://www.netflix.com')]
+  }}}});
+ }});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
+ await t.ui.startSearch('Film Fixture',{scope:'movies'});
+ assert(findElement(t.root,e=>String(e.src).includes('250px-Film_poster.png')));
+ assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Poster Artist').href,'https://commons.wikimedia.org/wiki/File:Film_poster.png');
+ for(const href of ['https://www.netflix.com/watch/80112233','https://www.netflix.com/watch/80112234',
+  'https://www.paramountplus.com/movies/fixture/'])assert(findElement(t.root,e=>e.href===href));
+ assert(!findElement(t.root,e=>String(e.href).endsWith('/redirect')));
+});
 test('film selection stays in Bluefin and offers a direct player or exact provider title',async()=>{
  const t=setup({apiResponse:u=>{
   if(u.hostname!=='www.wikidata.org')return undefined;
   if(u.searchParams.get('action')==='wbsearchentities')return jsonReply({search:[]});
   if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[
    {title:'Q184843'},{title:'Q184843'},{title:'File:Unrelated'}]}});
-  if(u.searchParams.get('props')==='claims')return jsonReply({entities:{Q184843:{claims:{
+  return jsonReply({entities:{Q184843:{labels:{en:{value:'Blade Runner'}},
+   descriptions:{en:{value:'1982 film directed by Ridley Scott'}},claims:{
    P1874:[claim('80234304')],
    P6466:[claim('e47078f3-1c0e-49a8-9da9-c571a7a20fec')],
    P13902:[claim('entity-f6174ebf-cb92-453c-a52b-62bb3576e402')],
@@ -775,8 +806,6 @@ test('film selection stays in Bluefin and offers a direct player or exact provid
    P8298:[claim('movie/../../unrelated.test')],
    P9586:[claim('unused')]
   }}}});
-  return jsonReply({entities:{Q184843:{labels:{en:{value:'Blade Runner'}},
-   descriptions:{en:{value:'1982 film directed by Ridley Scott'}}}}});
  }});
  await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
  await t.ui.startSearch('Blade Runner',{scope:'movies'});
@@ -785,7 +814,9 @@ test('film selection stays in Bluefin and offers a direct player or exact provid
  assert(selection);
  await selection.listeners.click();
  const lookups=t.requests.filter(r=>new URL(r.url).hostname==='www.wikidata.org');
- assert.equal(lookups.filter(r=>new URL(r.url).searchParams.get('props')==='claims').length,1);
+ assert.equal(t.ui.state.route.kind,'public-detail');
+ assert.match(t.root.textContent,/1982 film directed by Ridley Scott.*Where to watch/);
+ assert(lookups.some(r=>new URL(r.url).searchParams.get('props')==='labels|descriptions|claims'));
  assert(lookups.every(r=>r.options.credentials==='omit'&&r.options.referrerPolicy==='no-referrer'));
  const link=label=>findElement(t.root,e=>e.tagName==='A'&&e.textContent===label)?.href;
  assert.equal(link('Watch on Netflix'),'https://www.netflix.com/watch/80234304');
@@ -797,7 +828,12 @@ test('film selection stays in Bluefin and offers a direct player or exact provid
 
 test('series lookup resolves an exact TVmaze identity and goes straight to the provider title',async()=>{
  const t=setup({apiResponse:u=>{
-  if(u.hostname==='api.tvmaze.com')return jsonReply([{show:{id:47,name:'Example series'}}]);
+  if(u.hostname==='api.tvmaze.com'){
+   if(u.pathname==='/shows/47')return jsonReply({id:47,summary:'<p>The series premise</p>',_embedded:{cast:[
+    {person:{id:19,name:'Sample Actor'},character:{name:'Lead Character'}}]}});
+   if(u.pathname.startsWith('/people/19/'))return jsonReply([{type:'Director',_embedded:{show:{id:47,name:'Example series'}}}]);
+   return jsonReply([{show:{id:47,name:'Example series'}}]);
+  }
   if(u.hostname==='www.wikidata.org'){
    if(u.searchParams.get('action')==='wbsearchentities')return jsonReply({search:[]});
    if(u.searchParams.get('action')==='query'){
@@ -810,10 +846,17 @@ test('series lookup resolves an exact TVmaze identity and goes straight to the p
  await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search media')).listeners.click();
  await t.ui.startSearch('example',{scope:'tvShows'});
  await findElement(t.root,e=>e.dataset.focusKey==='public-title|series|47').listeners.click();
+ assert.equal(t.ui.state.route.kind,'public-detail');
+ assert.match(t.root.textContent,/The series premise.*Where to watch.*Credits and related media.*Sample Actor.*Lead Character/);
  assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Open on Netflix').href,'https://www.netflix.com/title/80057281');
  assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Open on Hulu').href,
   'https://www.hulu.com/series/e47078f3-1c0e-49a8-9da9-c571a7a20fec');
  assert(!findElement(t.root,e=>String(e.href).includes('/watch/')));
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Sample Actor')).listeners.click();
+ assert.equal(t.ui.state.route.title,'Sample Actor');
+ assert.match(t.root.textContent,/Credits.*Example series.*Director/);
+ await findElement(t.root,e=>e.dataset.focusKey==='back|Back').listeners.click();
+ assert.equal(t.ui.state.route.title,'Example series');
 });
 
 test('public film offers in-app playback only for the exact authorized library title',async()=>{
@@ -821,8 +864,7 @@ test('public film offers in-app playback only for the exact authorized library t
   if(u.hostname==='www.wikidata.org'){
    if(u.searchParams.get('action')==='wbsearchentities')return jsonReply({search:[]});
   if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[{title:'Q184843'}]}});
-   if(u.searchParams.get('props')==='claims')return jsonReply({entities:{Q184843:{claims:{P345:[claim('tt0083658')]}}}});
-   return jsonReply({entities:{Q184843:{labels:{en:{value:'Blade Runner'}}}}});
+   return jsonReply({entities:{Q184843:{labels:{en:{value:'Blade Runner'}},claims:{P345:[claim('tt0083658')]}}}});
   }
   if(u.pathname.startsWith('/Users/')&&u.pathname.endsWith('/Items')&&u.searchParams.has('SearchTerm')){
    return jsonReply({Items:[
