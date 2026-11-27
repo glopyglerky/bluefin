@@ -512,6 +512,7 @@ private struct PublicTitleProviderChoices: View {
     struct Result: Decodable, Sendable {
         let links: [Destination]
         let imdbIds: [String]
+        let tmdbId: String?
         let description: String?
         let credits: [Credit]?
     }
@@ -585,6 +586,10 @@ private struct PublicTitleProviderChoices: View {
                     }
                 }
             }
+            if let reference = CatalogOfferReference.video(kind: kind, tmdb: result?.tmdbId,
+                                                            imdb: imdbId ?? result?.imdbIds.first) {
+                Section("Availability") { CatalogOfferPanel(reference: reference) }
+            }
             Section("Catalog links") {
                 ForEach(destinations) { destination in
                     Link(destination.action, destination: destination.url)
@@ -621,6 +626,248 @@ private struct PublicTitleProviderChoices: View {
                 completed = request
             }
         }
+    }
+}
+
+struct CatalogOfferReference: Hashable, Sendable {
+    let kind: String
+    let source: String
+    let id: String
+
+    static func video(kind: String, tmdb: String?, imdb: String?) -> Self? {
+        guard kind == "movie" || kind == "series" else { return nil }
+        if let tmdb, tmdb.range(of: #"^[1-9][0-9]{0,11}$"#, options: .regularExpression) != nil {
+            return Self(kind: kind, source: "tmdb", id: tmdb)
+        }
+        if let imdb, imdb.range(of: #"^tt[0-9]{7,12}$"#, options: .regularExpression) != nil {
+            return Self(kind: kind, source: "imdb", id: imdb)
+        }
+        return nil
+    }
+
+    init?(item: MediaItem) {
+        let ids = item.ProviderIds ?? [:]
+        func provider(_ key: String) -> String? {
+            ids.first { $0.key.caseInsensitiveCompare(key) == .orderedSame }?.value
+        }
+        switch item.Type {
+        case "Movie", "Series":
+            guard let video = Self.video(kind: item.Type == "Movie" ? "movie" : "series",
+                                         tmdb: provider("Tmdb"), imdb: provider("Imdb")) else { return nil }
+            self = video
+        case "MusicArtist", "MusicAlbum", "Audio":
+            let mapping: (String, String)
+            if item.Type == "MusicArtist" { mapping = ("artist", "MusicBrainzArtist") }
+            else if item.Type == "Audio" { mapping = ("recording", "MusicBrainzRecording") }
+            else if let group = provider("MusicBrainzReleaseGroup"), UUID(uuidString: group) != nil { mapping = ("releaseGroup", "MusicBrainzReleaseGroup") }
+            else { mapping = ("release", "MusicBrainzAlbum") }
+            guard let raw = provider(mapping.1), let uuid = UUID(uuidString: raw), uuid.uuidString != "00000000-0000-0000-0000-000000000000" else { return nil }
+            self = Self(kind: mapping.0, source: "musicbrainz", id: uuid.uuidString.lowercased())
+        default: return nil
+        }
+    }
+
+    private init(kind: String, source: String, id: String) {
+        self.kind = kind
+        self.source = source
+        self.id = id
+    }
+}
+
+struct CatalogOfferPanel: View {
+    private struct Country: Decodable, Sendable { let code: String; let name: String }
+    private struct Registry: Decodable, Sendable { let countries: [Country] }
+    private struct Response: Decodable, Sendable {
+        let offers: [Offer]
+        let sources: [Source]
+    }
+    private struct Source: Decodable, Sendable {
+        struct Attribution: Decodable, Sendable { let name: String; let url: URL }
+        let source: String
+        let attributions: [Attribution]
+        let scope: String
+        let status: String
+        var label: String {
+            switch status {
+            case "complete": return "Reported coverage"
+            case "partial": return "Partial coverage"
+            case "noOffers": return "No offers reported"
+            case "missingCredentials": return "Source not configured"
+            case "notFound": return "Title not found"
+            case "identityMismatch": return "Title could not be confirmed"
+            case "denied": return "Access denied"
+            case "invalidResponse": return "Invalid response"
+            case "rateLimited": return "Rate limited"
+            case "unsupportedCountry": return "Country unsupported"
+            case "unsupportedIdentity": return "Title type unsupported"
+            default: return "Unavailable"
+            }
+        }
+    }
+    private struct Offer: Decodable, Sendable, Identifiable {
+        struct Service: Decodable, Sendable { let name: String }
+        struct Destination: Decodable, Sendable { let kind: String; let url: URL }
+        struct Price: Decodable, Sendable { let amount: String?; let currency: String?; let formatted: String? }
+        struct Evidence: Decodable, Sendable {
+            let source: String
+            let observedAt: UInt64
+            let expiresAt: UInt64?
+            let regionVerified: Bool
+        }
+        let id: String
+        let country: String?
+        let service: Service
+        let accessType: String
+        let rawAccessType: String?
+        let addon: Service?
+        let destinations: [Destination]
+        let price: Price?
+        let quality: String?
+        let evidence: Evidence
+        var market: String {
+            guard evidence.regionVerified, let country,
+                  country.range(of: #"^[A-Z]{2}$"#, options: .regularExpression) != nil else { return "" }
+            return country
+        }
+        var expired: Bool {
+            guard let expiry = evidence.expiresAt else { return false }
+            return Date(timeIntervalSince1970: TimeInterval(expiry)) <= Date()
+        }
+        var destination: Destination? {
+            guard !expired else { return nil }
+            let order = accessType == "download" ? ["download", "title"] : ["player", "title", "download"]
+            for kind in order {
+                if let option = destinations.first(where: {
+                    $0.kind == kind && $0.url.scheme?.lowercased() == "https" &&
+                        $0.url.host != nil && $0.url.user == nil && $0.url.password == nil
+                }) { return option }
+            }
+            return nil
+        }
+        var accessLabel: String {
+            ["ads": "With ads", "free": "Free", "subscription": "Subscription", "rent": "Rent",
+             "buy": "Buy", "download": "Download", "addon": "Add-on"][accessType] ?? rawAccessType ?? "Other access"
+        }
+        func action(_ destination: Destination) -> String {
+            if ["rent", "buy", "download"].contains(accessType) { return "\(accessLabel) on \(service.name)" }
+            let verb = destination.kind == "player" ? "Play" : destination.kind == "download" ? "Download" : "Open"
+            return "\(verb) on \(service.name)"
+        }
+        var facts: String {
+            let priceLabel = price?.formatted ?? [price?.amount, price?.currency].compactMap { $0 }.joined(separator: " ")
+            let checked = evidence.observedAt > 0 ?
+                Date(timeIntervalSince1970: TimeInterval(evidence.observedAt)).formatted(date: .abbreviated, time: .shortened) : nil
+            return [accessLabel, addon?.name, quality, priceLabel, expired ? "Expired" : nil,
+                    !evidence.regionVerified ? "Region unverified" : nil, evidence.source, checked]
+                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        }
+    }
+
+    let reference: CatalogOfferReference
+    @EnvironmentObject private var store: LibraryStore
+    @State private var country = ""
+    @State private var registry: [Country] = []
+    @State private var response: Response?
+    @State private var unavailable = false
+    @State private var retry = 0
+    @State private var openMarkets: Set<String> = []
+
+    private var origin: String? {
+        if let configured = Bundle.main.object(forInfoDictionaryKey: "BluefinPublicCatalogOrigin") as? String,
+           let url = URL(string: configured), url.scheme == "https", url.host != nil {
+            return configured
+        }
+        return store.session?.server
+    }
+    private func name(_ code: String) -> String {
+        if code.isEmpty { return "Region unverified" }
+        return registry.first { $0.code == code }?.name ?? Locale.current.localizedString(forRegionCode: code) ?? code
+    }
+    private var countries: [String] {
+        let listed = registry.map(\.code) + (response?.offers.map(\.market) ?? []) + [country]
+        return Array(Set(listed.filter { !$0.isEmpty })).sorted { name($0) < name($1) }
+    }
+
+    var body: some View {
+        Group {
+            Picker("Country", selection: $country) {
+                Text("All regions").tag("")
+                ForEach(countries, id: \.self) { Text(name($0)).tag($0) }
+            }
+            if unavailable || origin?.isEmpty != false {
+                Text("Availability is unavailable.").foregroundStyle(.secondary)
+                if origin?.isEmpty == false { Button("Retry availability") { retry += 1 } }
+            } else if let response {
+                let groups = Dictionary(grouping: response.offers) { $0.market }
+                    .filter { country.isEmpty || $0.key.isEmpty || $0.key == country }
+                if groups.isEmpty {
+                    let reported = response.sources.contains {
+                        $0.scope == "regionalAvailability" && ["complete", "noOffers"].contains($0.status)
+                    }
+                    Text(reported ? "No offers were reported for this selection." : "Availability is unknown.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(groups.keys.sorted(), id: \.self) { market in
+                    let expanded = openMarkets.contains(market)
+                    if groups.count == 1 {
+                        Text(name(market)).font(.headline)
+                    } else {
+                        Button {
+                            if expanded { openMarkets.remove(market) }
+                            else { openMarkets.insert(market) }
+                        } label: {
+                            Label(name(market), systemImage: expanded ? "chevron.down" : "chevron.right")
+                        }
+                    }
+                    if groups.count == 1 || expanded {
+                        ForEach(groups[market] ?? []) { offer in
+                            VStack(alignment: .leading, spacing: 4) {
+                                if let destination = offer.destination {
+                                    Link(offer.action(destination), destination: destination.url)
+                                } else { Text(offer.service.name) }
+                                Text(offer.facts).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                ForEach(response.sources.indices, id: \.self) { index in
+                    let source = response.sources[index]
+                    Text("\(source.source) · \(source.label)").font(.caption).foregroundStyle(.secondary)
+                    ForEach(source.attributions, id: \.name) { attribution in
+                        if attribution.url.scheme == "https", attribution.url.host != nil,
+                           attribution.url.user == nil, attribution.url.password == nil {
+                            Link(attribution.name, destination: attribution.url).font(.caption)
+                        }
+                    }
+                }
+            } else { ProgressView("Checking availability") }
+        }
+            .task(id: origin) {
+                registry = []
+                guard let server = origin, !server.isEmpty else { return }
+                let fields: [String: Any] = ["server": server, "allowLocalHttp": store.session?.allowHttp ?? false]
+                if let result: Registry = try? await RustBridge.call("publicCatalogProviders", fields: fields), !Task.isCancelled {
+                    registry = result.countries
+                }
+            }
+            .task(id: [origin ?? "", reference.kind, reference.source, reference.id, country, String(retry)]) {
+                response = nil
+                unavailable = false
+                openMarkets = []
+                guard let server = origin, !server.isEmpty else { return }
+                var fields: [String: Any] = [
+                    "server": server, "allowLocalHttp": store.session?.allowHttp ?? false,
+                    "kind": reference.kind, "source": reference.source, "id": reference.id
+                ]
+                if !country.isEmpty { fields["country"] = country }
+                do {
+                    let result: Response = try await RustBridge.call("publicCatalogOffers", fields: fields)
+                    try Task.checkCancellation()
+                    response = result
+                } catch {
+                    if !Task.isCancelled { unavailable = true }
+                }
+            }
     }
 }
 

@@ -548,6 +548,9 @@ pub fn call(v: &Value) -> Result<Value> {
     if op == "publicTitleSources" {
         return public_catalog::public_title_sources(v);
     }
+    if matches!(op, "publicCatalogOffers" | "publicCatalogProviders") {
+        return public_catalog::regional_access(v, op == "publicCatalogOffers");
+    }
     if matches!(op, "ownedLibraryList" | "ownedLibraryImport" | "ownedLibraryRemove" | "ownedLibraryQueue"
         | "ownedLibrarySelect" | "ownedLibraryAdvance" | "ownedLibraryPlay" | "ownedLibrarySearch") {
         return owned_music::call(v, op);

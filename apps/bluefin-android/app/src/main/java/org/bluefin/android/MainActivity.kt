@@ -314,6 +314,10 @@ class MainActivity : ComponentActivity() {
                 local.forEach { item ->
                     Action(if (item.ticks > 0) "Resume in Bluefin" else "Play in Bluefin") { dismiss(); play(item) }
                 }
+                val offer = CatalogOfferReference.video(kind, sources?.tmdbId ?: initial?.tmdbId,
+                    exactIds.singleOrNull() ?: imdbId)
+                if (offer != null) CatalogOfferPanel(core, offer)
+                else Text("Regional availability is unknown for this title.")
                 Text("Catalog links", style = MaterialTheme.typography.titleLarge)
                 destinations.forEach { link ->
                     Action((if (link.player) "Watch on " else "Open on ") + link.provider) { open(link.url) }
@@ -388,6 +392,7 @@ class MainActivity : ComponentActivity() {
             Action("Add to queue") { model.add(item) }
         } else Action("Browse contents") { model.children(item) }
         if (item.audio) Action("Download audio", !model.busy) { model.download(item) }
+        CatalogOfferReference.library(item)?.let { CatalogOfferPanel(model.core, it) }
         item.providerLinks.forEach { (name, url) ->
             Action("Open $name") {
                 if (safeProviderUrl(url)) runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }

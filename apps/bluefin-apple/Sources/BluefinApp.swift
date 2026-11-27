@@ -850,6 +850,12 @@ struct DetailView: View {
                 }
                 #endif
                 NativeIntegrationActions(item: current)
+                if let offer = CatalogOfferReference(item: current) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Availability").font(.headline)
+                        CatalogOfferPanel(reference: offer)
+                    }
+                }
                 if !store.preview && ["Movie", "Series"].contains(current.Type ?? "") {
                     #if os(tvOS)
                     MediaNavigationLink(destination: .trailers(current.Id)) {

@@ -15,6 +15,10 @@ fn query(input: &Value) -> Result<&str> {
 }
 
 fn read_catalog(url: &str, params: &[(&str, &str)]) -> Result<Value> {
+    read_catalog_response(url, params, CATALOG_LIMIT, 6)
+}
+
+fn read_catalog_response(url: &str, params: &[(&str, &str)], limit: u64, seconds: u64) -> Result<Value> {
     static CLIENT: OnceLock<Result<Client>> = OnceLock::new();
     let client = CLIENT
         .get_or_init(|| {
@@ -32,6 +36,7 @@ fn read_catalog(url: &str, params: &[(&str, &str)]) -> Result<Value> {
     let response = client
         .get(url)
         .query(params)
+        .timeout(Duration::from_secs(seconds))
         .send()
         .map_err(|_| err("Public catalog is unavailable"))?;
     if !response.status().is_success() {
@@ -39,13 +44,59 @@ fn read_catalog(url: &str, params: &[(&str, &str)]) -> Result<Value> {
     }
     let mut bytes = Vec::new();
     response
-        .take(CATALOG_LIMIT + 1)
+        .take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| err("Public catalog response could not be read"))?;
-    if bytes.len() as u64 > CATALOG_LIMIT {
+    if bytes.len() as u64 > limit {
         return Err(err("Public catalog response is too large"));
     }
     serde_json::from_slice(&bytes).map_err(|_| err("Invalid public catalog response"))
+}
+
+/// Calls the instance's public catalog without an account header or a peer session.
+pub(super) fn regional_access(input: &Value, offers: bool) -> Result<Value> {
+    let api = super::server(input)?;
+    let mut params = Vec::new();
+    let region;
+    if let Some(country) = input["country"].as_str() {
+        if country.len() != 2 || !country.bytes().all(|c| c.is_ascii_alphabetic()) {
+            return Err(err("Invalid catalog country"));
+        }
+        region = country.to_ascii_uppercase();
+        params.push(("country", region.as_str()));
+    }
+    let identity = if offers {
+        let kind = text(input, "kind")?;
+        let source = text(input, "source")?;
+        let id = text(input, "id")?;
+        let valid = match (kind, source) {
+            ("movie" | "series", "tmdb") => decimal(id, 1, 12) && !id.starts_with('0'),
+            ("movie" | "series", "imdb") => imdb_id(id),
+            ("artist" | "release" | "releaseGroup" | "recording" | "work" | "musicVideo", "musicbrainz") => uuid_id(id),
+            _ => false,
+        };
+        if !valid { return Err(err("Invalid regional catalog identity")); }
+        params.extend([("kind", kind), ("source", source), ("id", id)]);
+        Some((kind, source, id))
+    } else { None };
+    let route = if offers { "Bluefin/Catalog/Offers" } else { "Bluefin/Catalog/Providers" };
+    let url = api.join(route).map_err(|_| err("Invalid public catalog URL"))?;
+    let response = read_catalog_response(url.as_str(), &params, super::RESPONSE_MAX as u64 - 8192, 24)?;
+    if response["schemaVersion"].as_u64() != Some(1) {
+        return Err(err("Unsupported regional catalog response"));
+    }
+    if let Some((kind, source, id)) = identity {
+        let response_ids = response["identity"]["ids"].as_array();
+        if response["identity"]["kind"] != kind || response_ids.is_none_or(|ids| {
+            ids.len() != 1 || ids[0]["source"] != source || ids[0]["id"] != id
+        }) || response["country"].as_str() != params.iter().find(|(field, _)| *field == "country").map(|(_, value)| *value)
+            || !response["offers"].is_array() {
+            return Err(err("Unexpected regional catalog identity"));
+        }
+    } else if !response["countries"].is_array() {
+        return Err(err("Invalid regional catalog registry"));
+    }
+    Ok(response)
 }
 
 /// Public lookup runs on this instance, without a peer origin or account token.
@@ -345,8 +396,10 @@ pub(super) fn public_title_sources(input: &Value) -> Result<Value> {
             .as_str()
             .map(strip_markup)
     });
+    let tmdb = claim_values(claims, if kind == "movie" { "P4947" } else { "P4983" },
+        |id| decimal(id, 1, 12) && !id.starts_with('0')).into_iter().next();
     Ok(
-        json!({"links": links, "imdbIds": claim_values(claims, "P345", imdb_id), "description": description, "credits": credits}),
+        json!({"links": links, "imdbIds": claim_values(claims, "P345", imdb_id), "tmdbId":tmdb, "description": description, "credits": credits}),
     )
 }
 

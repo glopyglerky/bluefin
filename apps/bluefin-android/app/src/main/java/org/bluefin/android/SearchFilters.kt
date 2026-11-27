@@ -106,7 +106,8 @@ data class PublicArtworkCredit(val author: String, val url: String, val license:
 }
 data class PublicCredit(val name: String, val role: String)
 data class PublicTitleSources(val links: List<PublicProviderDestination>, val imdbIds: Set<String>,
-                              val description: String? = null, val credits: List<PublicCredit> = emptyList()) {
+                              val description: String? = null, val credits: List<PublicCredit> = emptyList(),
+                              val tmdbId: String? = null) {
     companion object {
         fun parse(page: JSONObject): PublicTitleSources {
             val rows = page.optJSONArray("links") ?: JSONArray()
@@ -125,7 +126,7 @@ data class PublicTitleSources(val links: List<PublicProviderDestination>, val im
                     val credit = credits.optJSONObject(i) ?: return@mapNotNull null
                     val name = credit.optString("name").takeIf { it.isNotBlank() } ?: return@mapNotNull null
                     PublicCredit(name, credit.optString("role"))
-                })
+                }, page.optString("tmdbId").takeIf { it.matches(Regex("[1-9][0-9]{0,11}")) })
         }
     }
 }
