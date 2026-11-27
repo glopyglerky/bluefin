@@ -255,8 +255,14 @@ fn imdb_id(value: &str) -> bool {
         .is_some_and(|id| decimal(id, 7, 12))
 }
 fn uuid_id(value: &str) -> bool {
-    use uuid::Uuid;
-    value.len() == 36 && Uuid::parse_str(value).is_ok()
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
 }
 
 fn direct_provider_links(claims: &Value, movie: bool) -> Vec<Value> {
