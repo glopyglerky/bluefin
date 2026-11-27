@@ -1258,7 +1258,8 @@ async function loadRegionalOffers(route,country,signal=routeController?.signal){
  }
  render();
 }
-const offerAccessLabels={free:'Free',ads:'With ads',subscription:'Subscription',rent:'Rent',buy:'Buy',download:'Download',addon:'Add-on'};
+const offerAccessLabels=new Map([['free','Free'],['ads','With ads'],['subscription','Subscription'],
+ ['rent','Rent'],['buy','Buy'],['download','Download'],['addon','Add-on']]);
 function offerMarketName(country){
  const code=String(country||'').toUpperCase();
  if(!/^[A-Z]{2}$/.test(code))return '';
@@ -1275,14 +1276,16 @@ function offerRow(row){
  const provider=catalogText(row?.provider,120);
  if(!provider)return null;
  const entry=node('div',undefined,'offer-row');
- const facts=[offerAccessLabels[row.access]||catalogText(row.access,60),catalogText(row.platform,60),
+ const facts=[offerAccessLabels.get(row.access)||catalogText(row.access,60),catalogText(row.platform,60),
   catalogText(row.quality,60),catalogText(row.price,60),catalogText(row.currency,12)];
  const date=typeof row.observedAt==='string'?new Date(row.observedAt):null;
  if(date&&!Number.isNaN(date.valueOf()))facts.push('Checked '+date.toLocaleString());
- const status=({expired:'Expired',missing:'Offer removed',unavailable:'Unavailable',unknown:'Availability unknown'})[row.status];
- if(status)facts.push(status);
- const target=status?null:offerTarget(row.playerUrl)||offerTarget(row.titleUrl);
- const verb=({buy:'Buy',rent:'Rent',download:'Download'})[row.access]||(row.playerUrl?'Play':'Open');
+ const statuses={expired:'Expired',missing:'Offer removed',unavailable:'Unavailable',unknown:'Availability unknown'};
+ const inactive=row.status!=null&&row.status!=='available';
+ if(inactive)facts.push(Object.hasOwn(statuses,row.status)?statuses[row.status]:statuses.unknown);
+ const player=inactive?null:offerTarget(row.playerUrl);
+ const target=inactive?null:player||offerTarget(row.titleUrl);
+ const verb=['buy','rent','download'].includes(row.access)?offerAccessLabels.get(row.access):player?'Play':'Open';
  if(target){
   const link=node('a',verb+' on '+provider);
   link.href=target;link.rel='noopener noreferrer';entry.append(link);

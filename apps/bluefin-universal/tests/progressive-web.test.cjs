@@ -802,13 +802,20 @@ test('a specialist title requests independent country offers and uses the direct
   if(url.pathname==='/Bluefin/Catalog/Offers/movie/597'){
    const country=url.searchParams.get('country');
    return jsonReply({country,offers:country==='gb'?[]:[{provider:'Netflix',access:'subscription',
-    titleUrl:'https://www.netflix.com/title/12345678',playerUrl:'https://www.netflix.com/watch/12345678'}]});
+    titleUrl:'https://www.netflix.com/title/12345678',playerUrl:'https://www.netflix.com/watch/12345678'},
+   {provider:'Independent Fixture',access:'rent',status:'available',platform:'Web',price:'4.99',currency:'USD',
+    quality:'4K',playerUrl:'https://@',titleUrl:'https://independent.example/title/597'},
+   {provider:'Expired Fixture',access:'free',status:'expired',titleUrl:'https://independent.example/title/old'}]});
   }
  }});
  await t.ui.openSearch();await t.ui.startSearch('Film Fixture',{scope:'movies'});
  await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
  assert(findElement(t.root,e=>e.href==='https://www.netflix.com/watch/12345678'));
  assert(!findElement(t.root,e=>e.href==='https://www.netflix.com/title/12345678'));
+ assert(findElement(t.root,e=>e.href==='https://independent.example/title/597'));
+ assert(t.root.textContent.includes('Rent · Web · 4K · 4.99 · USD'));
+ assert(t.root.textContent.includes('Expired'));
+ assert(!findElement(t.root,e=>e.href==='https://independent.example/title/old'));
  const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
  country.value='gb';await country.onchange();
  assert(t.root.textContent.includes('No offers were returned for this country.'));
