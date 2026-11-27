@@ -53,9 +53,12 @@ fn read_catalog_response(url: &str, params: &[(&str, &str)], limit: u64, seconds
     serde_json::from_slice(&bytes).map_err(|_| err("Invalid public catalog response"))
 }
 
-/// Calls the instance's public catalog without an account header or a peer session.
+/// Paired accounts use their instance's authenticated transport, including mesh.
+/// Unpaired browsing may use an independently configured public HTTP origin.
 pub(super) fn regional_access(input: &Value, offers: bool) -> Result<Value> {
-    let api = super::server(input)?;
+    if input.get("mesh").is_some_and(|mesh| !mesh.is_null() && !mesh.is_object()) {
+        return Err(err("Invalid mesh account transport"));
+    }
     let mut params = Vec::new();
     let region;
     if let Some(country) = input["country"].as_str() {
@@ -79,9 +82,20 @@ pub(super) fn regional_access(input: &Value, offers: bool) -> Result<Value> {
         params.extend([("kind", kind), ("source", source), ("id", id)]);
         Some((kind, source, id))
     } else { None };
-    let route = if offers { "Bluefin/Catalog/Offers" } else { "Bluefin/Catalog/Providers" };
-    let url = api.join(route).map_err(|_| err("Invalid public catalog URL"))?;
-    let response = read_catalog_response(url.as_str(), &params, super::RESPONSE_MAX as u64 - 8192, 24)?;
+    let resource = if offers { "Offers" } else { "Providers" };
+    let response = if input["mesh"].is_object() || input.get("token").is_some() {
+        // A malformed or retired session fails through the existing account
+        // transport. It must never fall back to an anonymous HTTP request.
+        super::Api::new(input)?.get(
+            &["Bluefin", "Catalog", resource],
+            params.iter().map(|(key, value)| (*key, (*value).to_owned())).collect(),
+        )?
+    } else {
+        let origin = super::server(input)?;
+        let url = origin.join(&format!("Bluefin/Catalog/{resource}"))
+            .map_err(|_| err("Invalid public catalog URL"))?;
+        read_catalog_response(url.as_str(), &params, super::RESPONSE_MAX as u64 - 8192, 24)?
+    };
     if response["schemaVersion"].as_u64() != Some(1) {
         return Err(err("Unsupported regional catalog response"));
     }
@@ -789,4 +803,100 @@ mod public_catalog_tests {
         assert_eq!(shows[0]["url"], "https://www.netflix.com/title/80234304");
         assert_eq!(shows[0]["kind"], "title");
     }
+
+    fn catalog_http_fixture(response: Value) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::Write;
+        use std::net::TcpListener;
+        use std::time::Instant;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let worker = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "Catalog request did not arrive");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("Catalog fixture could not accept: {error}"),
+                }
+            };
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0; 2048];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = stream.read(&mut chunk).unwrap();
+                assert!(count > 0 && request.len() + count <= 16_384);
+                request.extend_from_slice(&chunk[..count]);
+            }
+            let body = serde_json::to_vec(&response).unwrap();
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            stream.write_all(&body).unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        (origin, worker)
+    }
+
+    #[test]
+    fn paired_regional_offers_use_the_account_transport_and_validate_the_identity() {
+        let expected = json!({"schemaVersion":1,
+            "identity":{"kind":"movie","ids":[{"source":"imdb","id":"tt1234567"}]},
+            "country":"US","offers":[]});
+        let (server, request) = catalog_http_fixture(expected.clone());
+        let actual = regional_access(&json!({
+            "server":server,"allowLocalHttp":true,"token":"catalog-fixture-token",
+            "deviceId":"catalog-fixture","kind":"movie","source":"imdb",
+            "id":"tt1234567","country":"us"
+        }), true).unwrap();
+        assert_eq!(actual, expected);
+        let request = request.join().unwrap();
+        let first_line = request.lines().next().unwrap();
+        assert!(first_line.starts_with("GET /Bluefin/Catalog/Offers?"));
+        for part in ["country=US", "kind=movie", "source=imdb", "id=tt1234567"] {
+            assert!(first_line.contains(part), "{first_line}");
+        }
+        let headers = request.to_ascii_lowercase();
+        assert!(headers.contains("authorization: mediabrowser "));
+        assert!(headers.contains("token=\"catalog-fixture-token\""));
+        assert!(headers.contains("deviceid=\"catalog-fixture\""));
+    }
+
+    #[test]
+    fn anonymous_provider_registry_does_not_attach_an_account_header() {
+        let (server, request) = catalog_http_fixture(json!({"schemaVersion":1,"countries":[]}));
+        let result = regional_access(&json!({"server":server,"allowLocalHttp":true,"mesh":null}), false).unwrap();
+        assert_eq!(result["countries"], json!([]));
+        let request = request.join().unwrap();
+        assert!(request.starts_with("GET /Bluefin/Catalog/Providers HTTP/1.1"));
+        assert!(!request.to_ascii_lowercase().contains("\r\nauthorization:"));
+    }
+
+    #[test]
+    fn paired_regional_offers_reject_a_different_returned_identity() {
+        let (server, request) = catalog_http_fixture(json!({"schemaVersion":1,
+            "identity":{"kind":"movie","ids":[{"source":"imdb","id":"tt7654321"}]},
+            "country":"US","offers":[]}));
+        let result = regional_access(&json!({
+            "server":server,"allowLocalHttp":true,"token":"catalog-fixture-token",
+            "kind":"movie","source":"imdb","id":"tt1234567","country":"US"
+        }), true);
+        assert_eq!(result.unwrap_err(), "Unexpected regional catalog identity");
+        request.join().unwrap();
+    }
+
+    #[test]
+    fn malformed_mesh_is_rejected_before_selecting_an_http_route() {
+        for mesh in [json!("invalid"), json!([]), json!(0), json!(true)] {
+            // The deliberately invalid origin also proves transport selection
+            // cannot run first, even when an otherwise valid token is present.
+            let result = regional_access(&json!({
+                "server":"not an HTTP origin", "token":"catalog-fixture-token", "mesh":mesh
+            }), false);
+            assert_eq!(result.unwrap_err(), "Invalid mesh account transport");
+        }
+    }
+
 }

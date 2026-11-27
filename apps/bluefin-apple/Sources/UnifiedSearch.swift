@@ -773,6 +773,19 @@ struct CatalogOfferPanel: View {
         }
     }
 
+    private struct LookupContext: Hashable {
+        let account: UUID
+        let paired: Bool
+        let publicOrigin: String?
+        var available: Bool { paired || publicOrigin != nil }
+    }
+    private struct LookupRequest: Hashable {
+        let context: LookupContext
+        let reference: CatalogOfferReference
+        let country: String
+        let retry: Int
+    }
+
     let reference: CatalogOfferReference
     @EnvironmentObject private var store: LibraryStore
     @State private var country = ""
@@ -781,20 +794,49 @@ struct CatalogOfferPanel: View {
     @State private var unavailable = false
     @State private var retry = 0
     @State private var openMarkets: Set<String> = []
+    @State private var registryFor: LookupContext?
+    @State private var responseFor: LookupRequest?
 
-    private var origin: String? {
-        if let configured = Bundle.main.object(forInfoDictionaryKey: "BluefinPublicCatalogOrigin") as? String,
-           let url = URL(string: configured), url.scheme == "https", url.host != nil {
-            return configured
+    private var publicOrigin: String? {
+        guard let configured = Bundle.main.object(forInfoDictionaryKey: "BluefinPublicCatalogOrigin") as? String,
+              let url = URL(string: configured), url.scheme == "https", url.host != nil,
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { return nil }
+        return configured
+    }
+    private var lookupContext: LookupContext {
+        .init(account: store.accountContext, paired: store.session != nil && !store.preview,
+              publicOrigin: publicOrigin)
+    }
+    private var lookupRequest: LookupRequest {
+        .init(context: lookupContext, reference: reference, country: country, retry: retry)
+    }
+    private var activeRegistry: [Country] { registryFor == lookupContext ? registry : [] }
+
+    private func lookup<T: Decodable & Sendable>(_ operation: String, context: LookupContext,
+                                                 fields: [String: Any] = [:]) async throws -> T {
+        guard context == lookupContext else { throw CancellationError() }
+        let result: T
+        if context.paired {
+            result = try await store.authenticated(operation, fields: fields)
+        } else {
+            guard let server = context.publicOrigin else {
+                throw BluefinError.message("Availability is unavailable.")
+            }
+            var request = fields
+            request["server"] = server
+            result = try await RustBridge.call(operation, fields: request)
         }
-        return store.session?.server
+        try Task.checkCancellation()
+        guard context == lookupContext else { throw CancellationError() }
+        return result
     }
     private func name(_ code: String) -> String {
         if code.isEmpty { return "Region unverified" }
-        return registry.first { $0.code == code }?.name ?? Locale.current.localizedString(forRegionCode: code) ?? code
+        return activeRegistry.first { $0.code == code }?.name ?? Locale.current.localizedString(forRegionCode: code) ?? code
     }
     private var countries: [String] {
-        let listed = registry.map(\.code) + (response?.offers.map(\.market) ?? []) + [country]
+        let markets = responseFor == lookupRequest ? (response?.offers.map(\.market) ?? []) : []
+        let listed = activeRegistry.map(\.code) + markets + [country]
         return Array(Set(listed.filter { !$0.isEmpty })).sorted { name($0) < name($1) }
     }
 
@@ -804,10 +846,10 @@ struct CatalogOfferPanel: View {
                 Text("All regions").tag("")
                 ForEach(countries, id: \.self) { Text(name($0)).tag($0) }
             }
-            if unavailable || origin?.isEmpty != false {
+            if !lookupContext.available || (unavailable && responseFor == lookupRequest) {
                 Text("Availability is unavailable.").foregroundStyle(.secondary)
-                if origin?.isEmpty == false { Button("Retry availability") { retry += 1 } }
-            } else if let response {
+                if lookupContext.available { Button("Retry availability") { retry += 1 } }
+            } else if let response, responseFor == lookupRequest {
                 let groups = Dictionary(grouping: response.offers) { $0.market }
                     .filter { country.isEmpty || $0.key.isEmpty || $0.key == country }
                 if groups.isEmpty {
@@ -852,30 +894,38 @@ struct CatalogOfferPanel: View {
                 }
             } else { ProgressView("Checking availability") }
         }
-            .task(id: origin) {
+            .task(id: lookupContext) {
+                let context = lookupContext
                 registry = []
-                guard let server = origin, !server.isEmpty else { return }
-                let fields: [String: Any] = ["server": server, "allowLocalHttp": store.session?.allowHttp ?? false]
-                if let result: Registry = try? await RustBridge.call("publicCatalogProviders", fields: fields), !Task.isCancelled {
+                registryFor = nil
+                guard context.available else { return }
+                if let result: Registry = try? await lookup("publicCatalogProviders", context: context) {
                     registry = result.countries
+                    registryFor = context
                 }
             }
-            .task(id: [origin ?? "", reference.kind, reference.source, reference.id, country, String(retry)]) {
+            .task(id: lookupRequest) {
+                let requested = lookupRequest
                 response = nil
+                responseFor = nil
                 unavailable = false
                 openMarkets = []
-                guard let server = origin, !server.isEmpty else { return }
+                guard requested.context.available else { return }
                 var fields: [String: Any] = [
-                    "server": server, "allowLocalHttp": store.session?.allowHttp ?? false,
-                    "kind": reference.kind, "source": reference.source, "id": reference.id
+                    "kind": requested.reference.kind, "source": requested.reference.source,
+                    "id": requested.reference.id
                 ]
-                if !country.isEmpty { fields["country"] = country }
+                if !requested.country.isEmpty { fields["country"] = requested.country }
                 do {
-                    let result: Response = try await RustBridge.call("publicCatalogOffers", fields: fields)
-                    try Task.checkCancellation()
+                    let result: Response = try await lookup("publicCatalogOffers", context: requested.context, fields: fields)
+                    guard requested == lookupRequest else { return }
                     response = result
+                    responseFor = requested
                 } catch {
-                    if !Task.isCancelled { unavailable = true }
+                    if !Task.isCancelled && requested == lookupRequest {
+                        unavailable = true
+                        responseFor = requested
+                    }
                 }
             }
     }
