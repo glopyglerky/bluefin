@@ -39,6 +39,8 @@ use crate::options::{DtoOptions, InternalItemsQuery};
 #[derive(Debug, Clone, Default)]
 #[allow(clippy::struct_excessive_bools)] // one field per upstream query property
 pub struct LiveTvChannelQuery {
+    /// Match the channel's displayed name or number.
+    pub search_term: Option<String>,
     /// Restrict to one channel type (TV or Radio).
     pub channel_type: Option<ChannelType>,
     /// The requesting user, if any.

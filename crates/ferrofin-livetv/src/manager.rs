@@ -6948,6 +6948,20 @@ fn push_program_filters(
             .push_bind(ferrofin_util::string_extensions::get_clean_value(name));
     }
 
+    if let Some(term) = query.search_term.as_deref().map(str::trim).filter(|term| !term.is_empty()) {
+        let clean = ferrofin_util::string_extensions::get_clean_value(term);
+        push_separator(qb, &mut first);
+        if clean.trim().is_empty() {
+            qb.push("0");
+        } else {
+            qb.push(r#"(instr(ferrofin_clean_value(p."Title"), "#)
+                .push_bind(clean.clone())
+                .push(r#") > 0 OR instr(ferrofin_clean_value(p."EpisodeTitle"), "#)
+                .push_bind(clean)
+                .push(") > 0)");
+        }
+    }
+
     for (column, wanted) in [
         (r#"p."IsMovie""#, query.is_movie),
         (r#"p."IsSeries""#, query.is_series),
@@ -11443,6 +11457,46 @@ mod tests {
             ..InternalItemsQuery::default()
         };
         assert_eq!(titles(&mgr, &query).await, ["Two Now"]);
+    }
+
+    #[tokio::test]
+    async fn guide_title_search_filters_before_paging_and_counting() {
+        let mgr = manager_with_relative_guide().await;
+        let page = mgr
+            .get_programs(
+                &InternalItemsQuery {
+                    search_term: Some("NOW".to_owned()),
+                    start_index: Some(1),
+                    limit: Some(1),
+                    ..InternalItemsQuery::default()
+                },
+                &DtoOptions::default(),
+            )
+            .await
+            .expect("programme search");
+        assert_eq!(page.total_record_count, 2);
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].name.as_deref(), Some("Two Now"));
+        let unmatched = InternalItemsQuery {
+            search_term: Some("%_".to_owned()),
+            ..InternalItemsQuery::default()
+        };
+        assert!(titles(&mgr, &unmatched).await.is_empty());
+
+        let channels = mgr
+            .get_channels(
+                &LiveTvChannelQuery {
+                    search_term: Some("CHANNEL TWO".to_owned()),
+                    limit: Some(1),
+                    ..LiveTvChannelQuery::default()
+                },
+                &DtoOptions::default(),
+            )
+            .await
+            .expect("channel search");
+        assert_eq!(channels.total_record_count, 1);
+        assert_eq!(channels.items.len(), 1);
+        assert_eq!(channels.items[0].name.as_deref(), Some("Channel Two"));
     }
 
     #[tokio::test]

@@ -634,6 +634,76 @@ test('moonlit all media includes server artists channels and programmes',async()
  assert.equal(t.requests.filter(r=>new URL(r.url).pathname==='/Bluefin/Home/Searches').length,0);
 });
 
+test('search publishes the playable library result while the guide is still loading',async()=>{
+ const movie={Id:'66666666666646668666666666666666',Type:'Movie',Name:'Ocean Crossing'};
+ let releaseGuide;
+ const t=setup({apiResponse:async u=>{
+  if(u.searchParams.get('SearchTerm')!=='ocean')return;
+  if(u.pathname==='/LiveTv/Programs')await new Promise(resolve=>releaseGuide=resolve);
+  return jsonReply({Items:u.pathname.endsWith('/Items')?[movie]:[],TotalRecordCount:u.pathname.endsWith('/Items')?1:0});
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ const search=t.ui.startSearch('ocean');
+ try{
+  const playResult=()=>findElement(t.root,e=>e.tagName==='BUTTON'&&e.attributes['aria-label']==='Play Ocean Crossing');
+  await until(()=>releaseGuide&&playResult());
+  assert.equal(t.ui.state.route.loading,true);
+  assert.equal(findElement(t.root,e=>e.id==='bluefin-scope-all').attributes['aria-pressed'],'true');
+  await playResult().listeners.click();
+  const open=t.requests.find(r=>new URL(r.url).pathname==='/Bluefin/Web/v1/leases'&&r.options.method==='POST');
+  assert.equal(JSON.parse(open.options.body).itemId,movie.Id);
+  assert.equal(t.video.playCalls,1);
+  assert.equal(t.ui.state.route.kind,'search');
+ }finally{releaseGuide?.();await search;}
+});
+
+test('sports search opens the scheduled programme without tuning to a different broadcast',async()=>{
+ const programme={Id:'77777777777747778777777777777777',Type:'LiveTvProgram',Name:'Cup Final',
+  StartDate:'2099-01-01T20:00:00Z',EndDate:'2099-01-01T22:00:00Z',
+  ChannelId:'66666666666646668666666666666666',ChannelName:'Arena TV'};
+ const t=setup({apiResponse:u=>u.pathname==='/LiveTv/Programs'&&u.searchParams.get('IsSports')==='true'
+  ?jsonReply({Items:[programme],TotalRecordCount:1}):undefined});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.openSearch();
+ const input=findElement(t.root,e=>e.id==='bluefin-search');
+ input.value='cup';input.oninput();
+ await findElement(t.root,e=>e.id==='bluefin-scope-sports').listeners.click();
+ const requests=t.requests.filter(r=>new URL(r.url).searchParams.get('SearchTerm')==='cup');
+ assert.equal(requests.length,1);
+ assert.equal(new URL(requests[0].url).searchParams.get('IsSports'),'true');
+ const result=findElement(t.root,e=>e.dataset.focusKey==='guide-result|'+programme.Id);
+ await result.listeners.click();
+ assert.equal(t.ui.state.route.kind,'programme');
+ assert.match(t.root.textContent,/Cup Final.+Arena TV/);
+ assert(!t.root.textContent.includes('Watch live channel'));
+ assert(!t.requests.some(r=>new URL(r.url).pathname.endsWith('/Items/'+programme.ChannelId)));
+ assert(!t.requests.some(r=>new URL(r.url).pathname.endsWith('/leases')));
+});
+
+test('public TV discovery works without any connected peer and keeps catalog requests credential-free',async()=>{
+ const t=setup({apiResponse:u=>u.origin==='https://api.tvmaze.com'?jsonReply([
+  {show:{id:47,name:'Unowned Stage',url:'https://unrelated.test/title',premiered:'2025-04-01',
+   image:{medium:'https://static.tvmaze.com/uploads/images/medium_portrait/2/47.jpg'}}},
+  {show:{id:48,name:'No Poster',image:{medium:'https://unrelated.test/image.jpg'}}},
+ ]):undefined});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search TV shows')).listeners.click();
+ await t.ui.startSearch('unowned stage');
+ assert.equal(t.requests.length,1);
+ const request=t.requests[0],url=new URL(request.url);
+ assert.equal(url.origin,'https://api.tvmaze.com');assert.equal(url.searchParams.get('q'),'unowned stage');
+ assert.equal(request.options.credentials,'omit');assert.equal(request.options.referrerPolicy,'no-referrer');
+ assert.equal(request.options.headers,undefined);
+ assert.equal(t.ui.state.session,null);
+ assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent.includes('Unowned Stage')).href,'https://www.tvmaze.com/shows/47');
+ assert(t.root.textContent.includes('Streaming availability for these results is unverified.'));
+ assert(!findElement(t.root,e=>String(e.src).includes('unrelated.test')));
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.startSearch('stage');
+ const publicRequests=t.requests.filter(r=>new URL(r.url).hostname==='api.tvmaze.com');
+ assert.equal(publicRequests.length,2);
+ assert(publicRequests.every(r=>r.options.headers===undefined&&r.options.credentials==='omit'));
+});
+
 test('moonlit explicit search history uses the current account revision and survives a stale write rejection',async()=>{
  let rejectOld;
  const t=setup({apiResponse:async(u,o)=>{

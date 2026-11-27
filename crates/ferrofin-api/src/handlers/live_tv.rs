@@ -112,6 +112,8 @@ async fn get_guide_info(
 #[serde(rename_all = "camelCase", default)]
 #[allow(clippy::struct_excessive_bools)] // one field per contract parameter
 struct ChannelsQuery {
+    /// Optional Bluefin channel-name search.
+    search_term: Option<String>,
     /// Filter by channel type (`TV`/`Radio`).
     #[serde(
         default,
@@ -192,6 +194,7 @@ async fn get_channels(
     // C# `dtoOptions.AddCurrentProgram = addCurrentProgram` (default true).
     options.add_current_program = query.add_current_program.unwrap_or(true);
     let channel_query = LiveTvChannelQuery {
+        search_term: guide_search_term(query.search_term)?,
         channel_type: query.type_,
         user,
         start_index: query.start_index,
@@ -259,6 +262,8 @@ struct UserIdQuery {
 #[serde(rename_all = "camelCase", default)]
 #[allow(clippy::struct_excessive_bools)] // one field per contract parameter
 struct ProgramsQuery {
+    /// Optional Bluefin programme and episode title search.
+    search_term: Option<String>,
     /// Comma-delimited channel ids to return guide information for.
     channel_ids: Option<String>,
     /// The target user; defaults to the authenticated caller when absent.
@@ -326,6 +331,7 @@ impl ProgramsQuery {
     /// parsing the delimited multi-value parameters. A malformed id is a `400`.
     fn into_parts(self) -> Result<(ProgramFilters, DtoOptions), ApiError> {
         let filters = ProgramFilters {
+            search_term: guide_search_term(self.search_term)?,
             channel_ids: parse_csv_uuids(self.channel_ids.as_deref())?,
             min_start_date: self.min_start_date,
             max_start_date: self.max_start_date,
@@ -359,6 +365,16 @@ impl ProgramsQuery {
         );
         Ok((filters, options))
     }
+}
+
+fn guide_search_term(value: Option<String>) -> Result<Option<String>, ApiError> {
+    let Some(term) = value.as_deref().map(str::trim).filter(|term| !term.is_empty()) else {
+        return Ok(None);
+    };
+    if term.chars().count() > 256 || term.chars().any(char::is_control) {
+        return Err(ApiError::BadRequest("Invalid guide search term".into()));
+    }
+    Ok(Some(term.to_owned()))
 }
 
 /// The `POST /LiveTv/Programs` request body — port of `GetProgramsDto`.
@@ -467,6 +483,7 @@ impl GetProgramsDto {
     /// fail here — JSON already carries the arrays typed.
     fn into_parts(self) -> (ProgramFilters, DtoOptions) {
         let filters = ProgramFilters {
+            search_term: None,
             channel_ids: self.channel_ids.unwrap_or_default(),
             min_start_date: self.min_start_date,
             max_start_date: self.max_start_date,
@@ -587,6 +604,7 @@ impl RecommendedProgramsQuery {
 #[derive(Debug, Default)]
 #[allow(clippy::struct_excessive_bools)] // one field per contract filter
 struct ProgramFilters {
+    search_term: Option<String>,
     /// Restrict to these channels.
     channel_ids: Vec<Uuid>,
     /// The minimum programme start date.
@@ -798,6 +816,7 @@ async fn query_programs_inner(
     let library_series_id = filters.library_series_id;
     let mut query = InternalItemsQuery {
         user,
+        search_term: filters.search_term,
         channel_ids: filters.channel_ids,
         min_start_date: filters.min_start_date,
         max_start_date: filters.max_start_date,
@@ -3549,6 +3568,15 @@ mod tests {
         assert!(query.sort_by.is_empty(), "{:?}", query.sort_by);
         assert!(options.enable_user_data);
         assert!(options.enable_images);
+    }
+
+    #[tokio::test]
+    async fn guide_search_binds_title_terms_for_both_get_routes() {
+        let (channels, _) = recorded_channels_query("/LiveTv/Channels?SearchTerm=%20Channel%20").await;
+        assert_eq!(channels.search_term.as_deref(), Some("Channel"));
+        let programs = recorded_programs_query("/LiveTv/Programs?SearchTerm=final&startIndex=2").await;
+        assert_eq!(programs.search_term.as_deref(), Some("final"));
+        assert_eq!(programs.start_index, Some(2));
     }
 
     #[tokio::test]

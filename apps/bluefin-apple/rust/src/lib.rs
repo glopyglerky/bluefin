@@ -27,6 +27,7 @@ mod offline;
 mod owned_music;
 mod playback_resources;
 mod premium;
+mod public_catalog;
 #[cfg(feature = "iroh-probe")]
 mod probe;
 mod sports;
@@ -538,6 +539,9 @@ fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
 /// JSON interface, also useful for non-FFI hosts. Synchronous and bounded.
 pub fn call(v: &Value) -> Result<Value> {
     let op = text(v, "operation")?;
+    if op == "publicTvSearch" {
+        return public_catalog::public_tv_search(v);
+    }
     if matches!(op, "ownedLibraryList" | "ownedLibraryImport" | "ownedLibraryRemove" | "ownedLibraryQueue"
         | "ownedLibrarySelect" | "ownedLibraryAdvance" | "ownedLibraryPlay" | "ownedLibrarySearch") {
         return owned_music::call(v, op);

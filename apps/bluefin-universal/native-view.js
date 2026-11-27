@@ -16,8 +16,8 @@ let modalWasOpen=false,focusReturn=null,pageRetired=false,authTask=false,playbac
 let meshBeginStarted=false;
 let localLibrary=null,routeController=null,lyricsView=null,lyricsFrame=null;
 const categories=[['Home','home'],['Sports','sports'],['TV Shows','shows'],['Movies','movies'],['Live TV','live'],['Music','music']];
-const searchScopes=[['all','All Media',null],['tvShows','TV Shows','Series,Season,Episode'],['movies','Movies','Movie'],['music','Music','Audio,MusicAlbum,MusicArtist,MusicVideo,Playlist'],['liveTv','Live TV','TvChannel,LiveTvProgram']];
-function aborted(){return Object.assign(Error('The library view changed.'),{name:'AbortError'});}
+const searchScopes=[['all','All',null],['movies','Movies','Movie'],['tvShows','TV Shows','Series,Season,Episode'],['music','Music','Audio,MusicAlbum,MusicArtist,MusicVideo,Playlist'],['sports','Sports',null],['liveTv','Live TV','TvChannel,LiveTvProgram']];
+function aborted(){return Object.assign(Error('The search or library view changed.'),{name:'AbortError'});}
 function notFound(error){return error?.status===404||/\bHTTP 404\b/.test(String(error?.message||error||''));}
 
 function isLocalItem(item){return item?.LocalSource===true&&globalThis.BluefinLocalMusic?.isLocalId(item.Id)===true;}
@@ -429,11 +429,13 @@ async function readInvitationImage(file) {
 function hasSearchFacets(filters){return !!(filters.studioID||filters.tag||filters.collectionID);}
 function cleanSearchFilters(value={}) {
  const scope=searchScopes.some(([key])=>key===value.scope)?value.scope:'all';
+ if(scope==='sports')return {scope,studioID:'',tag:'',collectionID:''};
  return {scope,studioID:uuid(value.studioID)?id(value.studioID):'',tag:typeof value.tag==='string'?value.tag.slice(0,512):'',
   collectionID:uuid(value.collectionID)?id(value.collectionID):''};
 }
 function searchLanes(filters){
  if(hasSearchFacets(filters))return ['library'];
+ if(filters.scope==='sports')return ['programmes'];
  if(filters.scope==='liveTv')return ['programmes','channels'];
  const lanes=['library'];if(['all','music'].includes(filters.scope))lanes.push('artists');
  if(filters.scope==='all')lanes.push('programmes','channels');return lanes;
@@ -448,7 +450,10 @@ function searchCall(lane,route,start=0){
   if(filters.studioID)query.push(['StudioIds',filters.studioID]);if(filters.tag)query.push(['Tags',filters.tag]);
   if(filters.collectionID)query.push(['ParentId',filters.collectionID]);
  }else if(lane==='artists'){path='Artists';query.push(['Recursive',true]);}
- else if(lane==='programmes'){path='LiveTv/Programs';query.push(['MinEndDate',route.liveAfter]);}
+ else if(lane==='programmes'){
+  path='LiveTv/Programs';query.push(['MinEndDate',route.liveAfter]);
+  if(filters.scope==='sports')query.push(['IsSports',true]);
+ }
  else path='LiveTv/Channels';
  return {path,query};
 }
@@ -458,32 +463,82 @@ function appendSearchPage(page,value){
  page.next+=(Array.isArray(value)?value:value.Items).length;
  page.total=entries.length?Math.max(page.next,Number(value.TotalRecordCount)||page.next):page.next;
 }
-async function loadSearch(route,get,current){
- const search=state.search={route,pages:[],problems:[]};
+async function publicTVSearch(term,signal){
+ const url=new URL('https://api.tvmaze.com/search/shows');
+ url.searchParams.set('q',term);
+ const limit=1024*1024,controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),6000);
+ const stop=()=>controller.abort();
+ signal.addEventListener('abort',stop,{once:true});
+ try{
+  if(signal.aborted)throw aborted();
+  const response=await fetch(url,{credentials:'omit',redirect:'error',referrerPolicy:'no-referrer',signal:controller.signal});
+  if(!response.ok)throw Error('Catalog unavailable');
+  const reader=response.body.getReader(),bytes=new Uint8Array(limit);
+  let length=0;
+  for(;;){
+   const {done,value}=await reader.read();if(done)break;
+   if(length+value.length>limit){await reader.cancel();throw Error('Catalog response too large');}
+   bytes.set(value,length);length+=value.length;
+  }
+  const rows=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(0,length)));
+  if(!Array.isArray(rows))throw Error('Invalid catalog response');
+  const titles=[],seen=new Set();
+  for(const {show} of rows.filter(row=>row&&typeof row==='object')){
+   if(!Number.isSafeInteger(show?.id)||show.id<=0||seen.has(show.id)||typeof show.name!=='string'||!show.name.trim()||show.name.length>256)continue;
+   seen.add(show.id);
+   const raw=show.image?.medium;
+   const art=typeof raw==='string'&&raw.length<=1024&&/^https:\/\/static\.tvmaze\.com\/uploads\/images\/medium_portrait\/[0-9]+\/[0-9]+\.jpg$/.test(raw)?raw:null;
+   const year=typeof show.premiered==='string'&&/^\d{4}-/.test(show.premiered)?show.premiered.slice(0,4):'';
+   titles.push({name:show.name,art,year,url:'https://www.tvmaze.com/shows/'+show.id});
+   if(titles.length===20)break;
+  }
+  return titles;
+ }finally{clearTimeout(timeout);signal.removeEventListener('abort',stop);}
+}
+async function loadSearch(route,get,current,signal){
+ const search=state.search={route,pages:[],problems:[],publicTV:null};
  if(!route.query&&route.filters.scope==='all'&&!hasSearchFacets(route.filters))return;
- const names={library:'Your library',artists:'Artists',programmes:'On now and upcoming',channels:'Channels'};
- search.pages=searchLanes(route.filters).map(lane=>({lane,title:names[lane],items:[],next:0,total:0,loading:true}));
- await Promise.all(search.pages.map(async page=>{
+ const names={library:'Your library',artists:'Artists',programmes:route.filters.scope==='sports'?'Sports broadcasts':'On now and upcoming',channels:'Channels'};
+ search.pages=state.session?searchLanes(route.filters).map(lane=>({lane,title:names[lane],items:[],next:0,total:0,loading:true})):[];
+ const lookups=search.pages.map(async page=>{
   try{const call=searchCall(page.lane,route),value=await get(call.path,call.query);current();appendSearchPage(page,value);}
   catch(error){current();if(error.name!=='AbortError')search.problems.push(page.title+': '+String(error.message||error));}
-  finally{page.loading=false;}
- }));
- current();state.rows=search.pages.flatMap(page=>page.items);
+  page.loading=false;
+  state.rows=search.pages.flatMap(page=>page.items);
+  render();
+ });
+ const publicTerm=Array.from(route.query).slice(0,160).join('');
+ if(publicTerm.length>=2&&!hasSearchFacets(route.filters)&&['all','tvShows'].includes(route.filters.scope)){
+  search.publicTV={loading:true,items:[],unavailable:false};
+  lookups.push(publicTVSearch(publicTerm,signal).then(titles=>{
+   current();search.publicTV.items=titles;
+  },()=>{
+   current();search.publicTV.unavailable=true;
+  }).then(()=>{search.publicTV.loading=false;render();}));
+ }
+ await Promise.all(lookups);
 }
 async function startSearch(query,filters={},record=false){
  const previous=state.route,route={kind:'search',title:'Search',query:String(query).trim().slice(0,256),
   filters:cleanSearchFilters(filters),refine:previous.kind==='search'&&previous.refine,liveAfter:new Date().toISOString()};
  state.query=route.query;state.route=route;state.error='';
  const search=loadRoute();render();
- if(route.refine&&(!state.facets||state.facets.loading))loadSearchFacets().catch(()=>{});
+ if(route.refine&&route.filters.scope!=='sports'&&(!state.facets||state.facets.loading))loadSearchFacets().catch(()=>{});
  if(record)recordHomeSearch(route.query).catch(()=>{});
  try{await search;}catch(error){if(route===state.route&&error.name!=='AbortError')state.error=String(error.message||error);}
  finally{if(route===state.route)render();}
 }
 async function openSearch(){
  if(!state.session&&state.local)return navigate('Search');
- if(state.route.kind!=='search')state.back.push({...state.route});
- await startSearch(state.query,{scope:'all'});
+ if(state.route.kind==='search'){
+  document.getElementById('bluefin-search')?.focus?.();
+  return;
+ }
+ if(!state.session)state.phase='public-search';
+ state.back.push({...state.route});
+ const pending=startSearch(state.query,{scope:'all'});
+ document.getElementById('bluefin-search')?.focus?.();
+ await pending;
 }
 async function loadMoreSearch(lane){
  const search=state.search,route=state.route,page=search?.pages.find(value=>value.lane===lane),controller=routeController;
@@ -565,7 +620,8 @@ async function loadRoute(){
  const current=()=>{assertLive(epoch,session);if(route!==state.route||controller!==routeController||controller.signal.aborted)throw aborted();};
  const get=(path,query=[])=>api(path,'GET',undefined,query,controller.signal);
  if(route.kind==='local_music'||route.kind==='local_search'){state.rows=route.kind==='local_search'?localOwner().search(state.localQuery).map(localItem):localItems();state.shelves=[];return;}
- if(!user)return;state.rows=[];state.shelves=[];state.featured=null;state.error='';route.loading=true;
+ if(!user&&route.kind!=='search')return;
+ state.rows=[];state.shelves=[];state.featured=null;state.error='';route.loading=true;
  if(route.kind!=='search')state.search=null;
  try{
   if(route.kind==='home'){
@@ -598,7 +654,7 @@ async function loadRoute(){
     if(!notFound(error))throw error;
     const rows=items(await get('LiveTv/Programs',[['UserId',user],['IsSports',true],['MinEndDate',new Date().toISOString()],['Limit',100]]));current();state.rows=rows;
    }
-  }else if(route.kind==='search'){route.filters=cleanSearchFilters(route.filters);route.query=route.query??state.query;route.liveAfter??=new Date().toISOString();await loadSearch(route,get,current);}
+  }else if(route.kind==='search'){route.filters=cleanSearchFilters(route.filters);route.query=route.query??state.query;route.liveAfter??=new Date().toISOString();await loadSearch(route,get,current,controller.signal);}
   else if(route.kind==='collection'){
    const q=[['Limit',100],['StartIndex',route.start||0],['Recursive',true],['Fields','Overview,PrimaryImageAspectRatio'],['SortBy',route.type==='Audio'&&route.parent?'ParentIndexNumber,IndexNumber,SortName':'SortName']];
    if(route.type)q.push(['IncludeItemTypes',route.type]);if(route.parent)q.push(['ParentId',route.parent]);if(route.artist)q.push(['ArtistIds',route.artist]);
@@ -687,7 +743,31 @@ function poster(item){
  b.append(cover(item,square),copy);return b;
 }
 function shelf(title,entries){if(!entries.length)return document.createDocumentFragment();const s=node('section',undefined,'shelf');s.append(node('h2',title));const row=node('div',undefined,'shelf-track');for(const item of entries.slice(0,18))row.append(poster(item));s.append(row);return s;}
-function row(item){const b=button('',()=>perform(()=>openItem(item)),'list-row'+(item.Type==='Audio'?' song':''));if(item.Type==='Audio')b.append(cover(item,true));else b.append(icon(item.CollectionType==='music'?'music':'library'));const t=node('span',undefined,'grow');t.append(node('strong',item.Name));if(subtitle(item))t.append(node('small',subtitle(item)));b.append(t,icon('chevron'));return b;}
+function row(item,select=()=>openItem(item),detail=subtitle(item)){const b=button('',()=>perform(select),'list-row'+(item.Type==='Audio'?' song':''));if(item.Type==='Audio')b.append(cover(item,true));else b.append(icon(item.CollectionType==='music'?'music':'library'));const t=node('span',undefined,'grow');t.append(node('strong',item.Name));if(detail)t.append(node('small',detail));b.append(t,icon('chevron'));return b;}
+function programmeTime(item){
+ const date=new Date(item.StartDate||'');
+ return Number.isFinite(date.valueOf())?date.toLocaleString():'';
+}
+function selectGuideResult(item){
+ if(!['Program','LiveTvProgram'].includes(item.Type))return openItem(item);
+ recordHomeSearch(state.route.query,item).catch(()=>{});
+ routeController?.abort();
+ state.back.push({...state.route});
+ state.route={kind:'programme',title:item.Name,item};
+}
+function programmeView(main,item){
+ main.append(node('p',[programmeTime(item),item.ChannelName].filter(Boolean).join(' · '),'secondary'));
+ if(item.Overview)main.append(node('p',item.Overview));
+ const now=Date.now(),start=Date.parse(item.StartDate),end=Date.parse(item.EndDate);
+ if(state.mode==='mesh'&&uuid(item.ChannelId)&&start<=now&&now<end){
+  main.append(action('Watch live channel',async()=>{
+   if(Date.now()>=end)throw Error('This programme has ended.');
+   const channel=await api('Users/'+state.session.user+'/Items/'+id(item.ChannelId));
+   if(!uuid(channel?.Id)||id(channel.Id)!==id(item.ChannelId)||!['TvChannel','LiveTvChannel'].includes(channel.Type))throw Error('This channel is no longer available.');
+   return play({...channel,Type:'TvChannel'});
+  },'primary','play'));
+ }
+}
 function empty(title,message){const d=node('section',undefined,'empty-state');d.append(icon('library'),node('h2',title),node('p',message,'secondary'));return d;}
 function toolbar(title,back=false){
  const d=node('div',undefined,'toolbar');
@@ -708,7 +788,7 @@ function installationLink(){
 }
 function sourceFooter(){const p=node('p',undefined,'source-links');for(const [label,file]of[['Source code','SOURCE.txt'],['License','LICENSE']]){const link=node('a',label);link.href=new URL('./'+file,document.baseURI).href;link.target='_blank';link.rel='noopener noreferrer';p.append(link);}return p;}
 function welcome(){const main=node('main',undefined,'welcome');main.id='content';const mark=node('div',undefined,'wordmark');mark.append(icon('waves'),node('h1','Bluefin'));main.append(mark);const stack=node('section',undefined,'account-stack');
- if(state.phase==='connect'){stack.append(button('Connect with QR and passkey',()=>{state.sheet='invite';state.error='';render();},'primary'));stack.append(action('Open local music',openLocalMusic,'','music'));const form=node('form');form.append(node('h2','Connect to your server'));const [w,i]=field('Server address','url',state.base,'server');i.autocomplete='url';i.placeholder='https://media.example.com';i.required=true;form.append(w);const submit=node('button','Continue','primary');submit.disabled=state.busy;form.append(submit);form.onsubmit=e=>{e.preventDefault();perform(()=>connect(i.value.trim()));};stack.append(form);}
+ if(state.phase==='connect'){stack.append(button('Search TV shows',openSearch,'','search'));stack.append(button('Connect with QR and passkey',()=>{state.sheet='invite';state.error='';render();},'primary'));stack.append(action('Open local music',openLocalMusic,'','music'));const form=node('form');form.append(node('h2','Connect to your server'));const [w,i]=field('Server address','url',state.base,'server');i.autocomplete='url';i.placeholder='https://media.example.com';i.required=true;form.append(w);const submit=node('button','Continue','primary');submit.disabled=state.busy;form.append(submit);form.onsubmit=e=>{e.preventDefault();perform(()=>connect(i.value.trim()));};stack.append(form);}
  else if(state.phase==='options'){stack.append(node('h2',state.server||'Sign in'));stack.append(button('Sign in with password',()=>{state.phase='password';render();},'primary'));if(state.options.passkeys)stack.append(action('Sign in with a passkey',startPasskey));if(state.options.quickConnect)stack.append(action('Quick Connect',startQuick));if(state.options.allowSignups)stack.append(button('Create account',()=>{state.phase='create';render();}));stack.append(button('Change server',()=>{state.phase='connect';render();},'plain'));}
  else if(state.phase==='password'||state.phase==='create'){const create=state.phase==='create';const f=node('form');f.append(node('h2',create?'Create account':'Sign in'));const [nw,ni]=field('Username','text','', 'username'),[pw,pi]=field('Password','password','','password');ni.autocomplete='username';pi.autocomplete=create?'new-password':'current-password';ni.required=true;pi.required=true;f.append(nw,pw);let confirm;if(create){const [w,i]=field('Confirm password','password','','confirm');confirm=i;i.autocomplete='new-password';f.append(w,node('p','Use at least 15 characters.','secondary'));}const b=node('button',create?'Create account':'Sign in','primary');b.disabled=state.busy;f.append(b);f.onsubmit=e=>{e.preventDefault();const password=pi.value,name=ni.value.trim();if(create&&password!==confirm.value){state.error='The passwords do not match.';render();return;}pi.value='';if(confirm)confirm.value='';perform(()=>signIn(name,password,create));};stack.append(f,button('Back to sign-in options',()=>{state.phase='options';render();},'plain'));}
  else if(state.phase==='device'){const d=state.device;stack.append(node('h2',d?.kind==='passkey'?'Sign in with a passkey':'Quick Connect'),node('p',d?.code||'','confirmation-code'));if(d?.url){const link=node('a','Open passkey page');link.href=d.url;link.target='_blank';link.rel='noopener noreferrer';stack.append(link,node('p','After verifying, return here to finish.','secondary'));}else stack.append(node('p','Enter this code in another client signed in to your server.'));stack.append(action('Finish sign-in',finishDevice,'primary'),action('Cancel',cancelDevice));}
@@ -722,19 +802,83 @@ function searchChoice(label,key,value,choices,changed,loading=false){
  select.disabled=loading;select.setAttribute('aria-busy',String(loading));
  select.value=value||'';select.onchange=()=>changed(select.value);wrap.append(lab,select);return wrap;
 }
+function searchPoster(item){
+ const card=node('article',undefined,'search-poster');
+ const details=poster(item);
+ details.dataset.focusKey='search-details|'+id(item.Id);
+ card.append(details);
+ if(!['Movie','Episode','Audio'].includes(item.Type))return card;
+ const verb=resumeTicks(item)>0?'Resume':'Play';
+ const playResult=action(verb,()=>{
+  recordHomeSearch(state.route.query,item).catch(()=>{});
+  return play(item);
+ },'search-play','play');
+ playResult.setAttribute('aria-label',verb+' '+item.Name);
+ playResult.dataset.focusKey='search-play|'+id(item.Id);
+ card.append(playResult);
+ return card;
+}
+function publicTVResults(catalog){
+ const section=node('section',undefined,'search-results');
+ section.append(node('h2','TV catalog'));
+ if(catalog.loading)section.append(node('p','Searching TV catalog…','loading'));
+ else if(catalog.unavailable)section.append(node('p','The TV catalog could not load.','error'));
+ else if(!catalog.items.length)section.append(node('p','No titles found in the TV catalog.','secondary'));
+ else{
+  const grid=node('div',undefined,'search-grid');
+  for(const item of catalog.items){
+   const link=node('a',undefined,'public-title');link.href=item.url;link.rel='noopener noreferrer';link.target='_blank';
+   const art=node('div',undefined,'artwork');
+   if(item.art){const image=node('img');image.alt='';image.loading='lazy';image.referrerPolicy='no-referrer';image.onerror=()=>art.replaceChildren(icon('shows'));image.src=item.art;art.append(image);}
+   else art.append(icon('shows'));
+   link.append(art,node('strong',item.name),node('small',[item.year,'TVmaze'].filter(Boolean).join(' · ')));
+   grid.append(link);
+  }
+  section.append(grid,node('p','TVmaze lists titles. Streaming availability for these results is unverified.','secondary'));
+ }
+ return section;
+}
+function publicSearchView(){
+ const main=node('main',undefined,'app-main search-screen');main.id='content';
+ main.append(button('Back',()=>{
+  routeController?.abort();state.phase='connect';state.route={kind:'home'};state.back=[];state.search=null;state.query='';render();
+ },'plain','back'),node('h1','Search TV shows'));
+ searchView(main);
+ return main;
+}
 function searchView(main){
- const route=state.route,filters=cleanSearchFilters(route.filters),form=node('form',undefined,'search-form'),input=node('input');
- input.id='bluefin-search';input.type='search';input.placeholder='Movies, shows, music and live TV';input.value=state.query;
- input.setAttribute('aria-label','Search all media');input.oninput=()=>{state.query=input.value;};
- const submit=node('button','Search','primary');form.append(input,submit);
- form.onsubmit=event=>{event.preventDefault();startSearch(input.value,filters,true);};main.append(form);
- const tools=node('section',undefined,'search-tools');
- tools.append(searchChoice('Media type','scope',filters.scope,searchScopes.map(([id,title])=>[id,title]),
-  scope=>startSearch(state.query,{...filters,scope})));
- const refine=button(route.refine?'Hide refinements':'Refine search',()=>{
+ const route=state.route,filters=cleanSearchFilters(route.filters);
+ const form=node('form',undefined,'search-form'),input=node('input');
+ form.setAttribute('role','search');
+ input.id='bluefin-search';input.type='search';input.placeholder=state.session?'Titles, artists, and channels':'TV show title';input.value=state.query;
+ input.setAttribute('aria-label',state.session?'Search all media':'Search TV shows');input.maxLength=256;
+ input.oninput=()=>{state.query=input.value;};
+ const submit=node('button','Search','primary');
+ submit.type='submit';submit.id='bluefin-search-submit';
+ form.append(icon('search'),input,submit);
+ form.onsubmit=event=>{event.preventDefault();startSearch(input.value,filters,true);};
+ main.append(form);
+ const search=state.search;
+ if(!state.session){
+  if(search?.publicTV)main.append(publicTVResults(search.publicTV));
+  return;
+ }
+ const tools=node('div',undefined,'search-tools'),scopes=node('div',undefined,'search-scopes');
+ scopes.setAttribute('role','group');scopes.setAttribute('aria-label','Media type');
+ for(const [scope,label] of searchScopes){
+  const select=button(label,()=>startSearch(state.query,{...filters,scope}));
+  select.id='bluefin-scope-'+scope;
+  select.setAttribute('aria-pressed',String(scope===filters.scope));
+  scopes.append(select);
+ }
+ tools.append(scopes);
+ const refine=button('Filters',()=>{
   route.refine=!route.refine;render();if(route.refine)loadSearchFacets().catch(error=>{state.error=String(error.message||error);render();});
- },'', 'search');refine.setAttribute('aria-expanded',String(!!route.refine));tools.append(refine);main.append(tools);
- if(route.refine){
+ },'search-filter');
+ refine.setAttribute('aria-expanded',String(!!route.refine));
+ if(filters.scope!=='sports')tools.append(refine);
+ main.append(tools);
+ if(route.refine&&filters.scope!=='sports'){
   const panel=node('section',undefined,'search-refinements'),facets=state.facets;
   panel.append(searchChoice('Studio','studio',filters.studioID,[['','All studios'],...(facets?.studios||[]).map(value=>[value.id,value.name])],
    studioID=>startSearch(state.query,{...filters,studioID}),facets?.pending?.has('studios')||false));
@@ -744,25 +888,33 @@ function searchView(main){
    collectionID=>startSearch(state.query,{...filters,collectionID}),facets?.pending?.has('collections')||false));
   main.append(panel);
   if(facets?.loading)main.append(node('p','Loading '+[...facets.pending].join(', ')+'…','loading'));
-  main.append(node('p','Studios, tags, and collections come from your server. Its tags can identify services or custom groups. Refinements search the metadata of titles in your account’s library.','secondary'));
   if(facets?.truncated)main.append(node('p','Your server has more refinements than this menu shows. Open Collections to browse all groups.','secondary'));
   if(facets?.problems.length){main.append(node('p',facets.problems.join(' '),'error'),button('Reload refinements',()=>{clearSearchFacets();loadSearchFacets();}));}
  }
  if(hasSearchFacets(filters))main.append(node('p','Filtering your library. The live guide is searched when these refinements are cleared.','secondary'),
   button('Clear refinements',()=>startSearch(state.query,{scope:filters.scope}),'plain'));
- const search=state.search;
+ if(search?.route===route&&search.publicTV)main.append(publicTVResults(search.publicTV));
  if(search?.route===route)for(const page of search.pages){
   if(!page.items.length)continue;
   const section=node('section',undefined,'search-results');section.append(node('h2',page.title));
-  const list=node('div',undefined,['channels','programmes'].includes(page.lane)?'group':'catalog-grid');
-  for(const item of page.items)list.append(['channels','programmes'].includes(page.lane)?row(item):poster(item));
+  const guide=['channels','programmes'].includes(page.lane);
+  const list=node('div',undefined,guide?'group':'search-grid');
+  for(const item of page.items){
+   if(!guide){list.append(searchPoster(item));continue;}
+   const result=row(item,()=>selectGuideResult(item),[programmeTime(item),item.ChannelName].filter(Boolean).join(' · '));
+   result.dataset.focusKey='guide-result|'+id(item.Id);
+   list.append(result);
+  }
   section.append(list);
   if(page.next<page.total){const more=button(page.loading?'Loading…':'More results',()=>loadMoreSearch(page.lane));more.disabled=page.loading;section.append(more);}
   main.append(section);
  }
  for(const problem of search?.problems||[])main.append(node('p',problem,'error'));
- if(!route.loading&&!search?.pages.some(page=>page.items.length))main.append(empty('Search your account',
-  route.query||filters.scope!=='all'||hasSearchFacets(filters)?'No matches. Try another title or refinement.':'Find movies, TV shows, artists, albums, songs, channels, and programmes.'));
+ const searched=route.query||filters.scope!=='all'||hasSearchFacets(filters);
+ if(!route.loading&&!search?.pages.some(page=>page.items.length)){
+  if(!searched)main.append(empty('Search titles, music, and live TV','Enter a title, artist, or channel, or choose a category to browse.'));
+  else if(!search?.problems.length&&!search?.publicTV?.items.length)main.append(empty('No matches in connected resources','Try a different title or clear your filters.'));
+ }
 }
 function sportsView(main){
  const games=state.route.sports||[];
@@ -788,6 +940,7 @@ function sportsView(main){
  if(!games.length&&!state.rows.length&&!state.route.loading)main.append(empty('Sports for your account','Your server’s selected games and available sports broadcasts will appear here.'));
 }
 function libraryView(){const main=node('main',undefined,'app-main');main.id='content';const route=state.route,title=route.title||(route.kind==='detail'?route.item.Name:state.tab);main.append(toolbar(title,state.back.length>0));if(state.back.length)main.append(node('h1',title));
+ if(route.kind==='search')main.classList.add('search-screen');
  if(route.kind==='local_music'||route.kind==='local_search')localMusicView(main);
  else if(route.kind==='local_connect'){main.append(empty('Connect to your live TV','Open your server’s Bluefin address or use a device invitation to access its channels.'),action('Connect account',openAccountConnection,'primary'));
  }
@@ -813,13 +966,24 @@ function libraryView(){const main=node('main',undefined,'app-main');main.id='con
   }
   const local=action('Music on this device',openLocalMusic,'','download'),chevron=icon('chevron');chevron.setAttribute('class','chevron');local.append(chevron);browse.append(local);main.append(browse);for(const s of state.shelves)main.append(shelf(s.title,s.items));if(!state.shelves.some(s=>s.items.length)&&!state.busy)main.append(empty('Your music, in one place','Albums from your connected library will appear here. Browse Songs to find individual tracks.'));}
  else if(route.kind==='search')searchView(main);
+ else if(route.kind==='programme')programmeView(main,route.item);
  else if(route.kind==='collection'||route.kind==='live'){if(route.kind==='live'&&state.mode!=='mesh')main.append(node('p','You can browse channels here. Live TV playback is not yet available on this server’s web connection.','secondary'));const audio=route.type==='Audio';if(audio&&state.rows.length){const a=node('div',undefined,'actions');a.append(action('Play',()=>play(state.rows[0],state.rows,0),'','play'),action('Shuffle',()=>playShuffled(state.rows),'','shuffle'));main.append(a);}const list=node('div',undefined,audio||route.kind==='live'?'group':'catalog-grid');for(const item of state.rows)list.append(audio||route.kind==='live'?row(item):poster(item));main.append(list);if(!state.rows.length&&!state.busy)main.append(empty('No items to show','Try another collection or refresh your library.'));if(route.kind==='collection'){const a=node('div',undefined,'actions');if(route.start>0)a.append(action('Previous page',async()=>{route.start=Math.max(0,route.start-100);await loadRoute();}));if(route.start+state.rows.length<route.total)a.append(action('Next page',async()=>{route.start+=100;await loadRoute();}));main.append(a);}}
  else if(route.kind==='detail'){const item=route.item;main.append(cover(item,item.Type==='Audio'));main.lastChild.style.maxWidth='360px';main.append(node('h2',item.Name),node('p',subtitle(item),'secondary'));if(item.Type==='TvChannel'&&state.mode!=='mesh')main.append(node('p','Live TV playback is not yet available on this server’s web connection.','secondary'));else if(['Movie','Episode','Audio','TvChannel'].includes(item.Type))main.append(action(resumeTicks(item)>0?'Resume':'Play',()=>play(item,[item],0),'primary','play'));main.append(node('p',item.Overview||''));}
  if(state.busy||route.loading)main.append(node('p',route.kind==='search'?'Searching your account…':'Loading your library…','loading'));main.append(status());if(state.error)main.append(action('Try again',loadRoute));return main;}
 function tabbar(){
  const nav=node('nav',undefined,'tabbar');nav.setAttribute('aria-label','Categories');
  const brand=node('div',undefined,'nav-brand');brand.append(icon('waves'),node('strong','Bluefin'));nav.append(brand);
- for(const [title,symbol]of categories){const entry=action(title,()=>navigate(title),'',symbol);entry.setAttribute('aria-current',state.tab===title?'page':'false');nav.append(entry);}
+ const searching=['search','local_search'].includes(state.route.kind);
+ for(const [title,symbol]of categories){
+  const entry=action(title,()=>navigate(title),'',symbol);
+  entry.setAttribute('aria-current',!searching&&state.tab===title?'page':'false');
+  nav.append(entry);
+  if(title==='Home'){
+   const group=node('div',undefined,'rail-search'),search=button('Search',()=>openSearch(),'','search');
+   search.setAttribute('aria-current',searching?'page':'false');
+   group.append(search);nav.append(group);
+  }
+ }
  return nav;
 }
 function sheet(){if(state.expanded)return nowPlaying();const outer=node('section',undefined,'sheet');outer.setAttribute('role','dialog');outer.setAttribute('aria-modal','true');outer.id='bluefin-dialog';outer.tabIndex=-1;outer.setAttribute('aria-label',state.sheet==='invite'?'Connect Bluefin':state.sheet==='connections'?'Connections':'Account and settings');const inner=node('div',undefined,'sheet-inner'),bar=node('div',undefined,'toolbar');bar.append(node('h2',state.sheet==='invite'?'Connect Bluefin':state.sheet==='connections'?'Connections':'Account and settings'),button('Done',closeSheet,'plain'));inner.append(bar);
@@ -1268,11 +1432,13 @@ function render(){
  if(pageRetired)return;
  lyricsView=null;
  const active=document.activeElement,activeId=active?.id,activeKey=active?.dataset?.focusKey;
+ const selection=activeId==='bluefin-search'?[active.selectionStart,active.selectionEnd,active.selectionDirection]:null;
  const videoModal=!state.capability&&!!state.player&&state.player.item.Type!=='Audio'&&!state.sheet&&!state.expanded;
  const modal=!!state.capability||!!state.sheet||state.expanded||videoModal;
  if(modal&&!modalWasOpen)focusReturn={id:activeId,key:activeKey};
  document.body.classList.toggle('signed-in',!!state.session||state.local);
- const fragment=document.createDocumentFragment(),main=state.session||state.local?libraryView():welcome();
+ const fragment=document.createDocumentFragment();
+ const main=state.session||state.local?libraryView():state.phase==='public-search'?publicSearchView():welcome();
  if(modal){main.inert=true;main.setAttribute('aria-hidden','true');}fragment.append(main);
  if(state.session||state.local){const nav=tabbar(),mini=miniPlayer();if(modal){nav.inert=true;mini.inert=true;nav.setAttribute('aria-hidden','true');mini.setAttribute('aria-hidden','true');}fragment.append(nav,mini);}
  if(state.sheet||state.expanded){
@@ -1297,7 +1463,10 @@ function render(){
  else if(!modal&&modalWasOpen){focus=findFocus(focusReturn);focusReturn=null;}
  else focus=findFocus({id:activeId,key:activeKey});
  modalWasOpen=modal;
- if(!help&&focus&&!focus.inert)focus.focus?.({preventScroll:true});
+ if(!help&&focus&&!focus.inert){
+  focus.focus?.({preventScroll:true});
+  if(selection&&focus.id===activeId&&selection[0]!==null)focus.setSelectionRange?.(...selection);
+ }
  pumpArtwork();updateLyrics(true);syncLyricsAnimation();
 }
 document.addEventListener('visibilitychange',()=>{updateLyrics(true);syncLyricsAnimation();});

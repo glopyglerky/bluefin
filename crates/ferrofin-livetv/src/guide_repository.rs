@@ -66,7 +66,18 @@ fn channel_rows_query(query: &LiveTvChannelQuery) -> sqlx::QueryBuilder<sqlx::Sq
             ));
         }
     }
-    qb.push(r#" FROM "FerrofinLiveTvChannels" ORDER BY "SortIndex", "Name""#);
+    qb.push(r#" FROM "FerrofinLiveTvChannels""#);
+    if let Some(term) = query.search_term.as_deref().map(str::trim).filter(|term| !term.is_empty()) {
+        let clean = ferrofin_util::string_extensions::get_clean_value(term);
+        qb.push(r#" WHERE ("Number" = "#).push_bind(term.to_owned());
+        if !clean.is_empty() {
+            qb.push(r#" OR instr(ferrofin_clean_value("Name"), "#)
+                .push_bind(clean)
+                .push(") > 0");
+        }
+        qb.push(")");
+    }
+    qb.push(r#" ORDER BY "SortIndex", "Name""#);
     qb
 }
 

@@ -273,6 +273,7 @@ struct TVWelcomeView: View {
     @State private var passwordConfirmation = ""
     @State private var quickConnect = false
     @State private var meshPairing = false
+    @State private var publicSearch = false
     @State private var working = false
     @State private var problem: String?
     @FocusState private var focus: Field?
@@ -310,6 +311,9 @@ struct TVWelcomeView: View {
                         VStack(spacing: 24) {
                             if let connectedServer { signInOptions(connectedServer) }
                             else {
+                                Button { publicSearch = true } label: {
+                                    AccountActionLabel(title: "Search TV shows")
+                                }.accountButtonStyle().accessibilityIdentifier("publicTVSearch")
                                 Button { meshPairing = true } label: {
                                     AccountActionLabel(title: "Connect with QR or invitation")
                                 }.accountButtonStyle().accessibilityIdentifier("meshPairing")
@@ -348,6 +352,7 @@ struct TVWelcomeView: View {
             .accountFocusScope(signInFocus)
         }
         .sheet(isPresented: $meshPairing) { MeshPairingView().environmentObject(store) }
+        .sheet(isPresented: $publicSearch) { PublicTVSearchView() }
         .sheet(isPresented: $quickConnect) {
             QuickConnectView(server: address, allowHttp: localHTTP && allowHTTP)
                 .environmentObject(store)

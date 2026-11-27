@@ -267,6 +267,9 @@ struct UnifiedSearchResults: View {
                 }
             }
             if active {
+                if !store.preview && !filters.hasFacets && (filters.scope == .all || filters.scope == .tvShows) {
+                    PublicTVSearchSection(query: query)
+                }
                 if !query.isEmpty && !filters.hasFacets {
                     if filters.scope.includesCatalog { ServerDiscoverySection(query: query, scope: filters.scope) }
                     if filters.scope == .all || filters.scope == .music { ServerDiscoverySection(query: query, scope: .music) }
@@ -292,13 +295,13 @@ struct UnifiedSearchResults: View {
                 if model.loading { ProgressView("Searching") }
                 ForEach(model.failures, id: \.self) { Text($0).font(.callout).foregroundStyle(.secondary) }
                 if !model.loading && current && model.isEmpty {
-                    Text(filters.hasFacets ? "No titles match these refinements in your library." : "No matching results for your account.")
+                    Text(filters.hasFacets ? "No titles match these refinements." : "No matching titles in your connected library or guide.")
                         .foregroundStyle(.secondary)
                 }
             } else {
                 Section {
                     Label("Find your next favorite", systemImage: "magnifyingglass").font(.headline)
-                    Text("Search your movies, TV shows, music, channels, and programmes. Choose a category or refine your account’s library.")
+                    Text("Search for a title or choose a media type. Connected libraries and the public TV catalog can appear together.")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -388,6 +391,93 @@ struct UnifiedSearchResults: View {
     }
 }
 
+struct PublicTVSearchView: View {
+    @State private var query = ""
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        BluefinNavigation {
+            List {
+                TextField("TV show title", text: $query)
+                    .accessibilityIdentifier("publicTVQuery")
+                PublicTVSearchSection(query: query)
+            }
+            .navigationTitle("Search TV shows")
+            .toolbar { Button("Done") { dismiss() } }
+        }
+    }
+}
+
+private struct PublicTVSearchSection: View {
+    struct Page: Decodable, Sendable { let results: [Title] }
+    struct Title: Decodable, Identifiable, Sendable {
+        let id: UInt64
+        let title: String
+        let year: String?
+        let artwork: URL?
+        let sourceUrl: URL
+    }
+
+    let query: String
+    @State private var page: Page?
+    @State private var failed = false
+    @State private var completedQuery = ""
+    private var term: String { String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160)) }
+
+    var body: some View {
+        Group {
+            if term.count >= 2 {
+                Section("TV catalog") {
+                    if completedQuery != term {
+                        ProgressView("Searching TV catalog")
+                    } else if failed {
+                        Text("The TV catalog is temporarily unavailable.").foregroundStyle(.secondary)
+                    } else if let page, page.results.isEmpty {
+                        Text("No titles found in the TV catalog.").foregroundStyle(.secondary)
+                    } else if let page {
+                        ForEach(page.results) { item in
+                            Link(destination: item.sourceUrl) {
+                                HStack(spacing: 14) {
+                                    AsyncImage(url: item.artwork) { image in
+                                        image.resizable().scaledToFill()
+                                    } placeholder: {
+                                        Image(systemName: "tv").foregroundStyle(.secondary)
+                                    }
+                                    .frame(width: 46, height: 64).clipped().accessibilityHidden(true)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.title).font(.headline)
+                                        Text(item.year.map { "\($0) · TVmaze" } ?? "TVmaze")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }.accessibilityHint("Open title information on TVmaze")
+                        }
+                        Text("TVmaze lists titles. Streaming availability for these results is unverified.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .task(id: term) {
+            let requested = term
+            guard requested.count >= 2 else { page = nil; failed = false; completedQuery = ""; return }
+            do {
+                try await Task.sleep(for: .milliseconds(650))
+                let response: Page = try await RustBridge.call("publicTvSearch", fields: ["query": requested])
+                try Task.checkCancellation()
+                page = response
+                failed = false
+                completedQuery = requested
+            } catch is CancellationError {} catch {
+                guard !Task.isCancelled else { return }
+                page = nil
+                failed = true
+                completedQuery = requested
+            }
+        }
+    }
+}
+
 /// Navigation activates this screen for every supported input method. A merely
 /// rendered search result does not write a preference or visit the owner.
 struct HomeSearchDestination: View {
@@ -423,22 +513,44 @@ private struct SearchProgrammeDestination: View {
     @EnvironmentObject private var store: LibraryStore
     @State private var channel: MediaItem?
     @State private var problem: String?
+    @State private var opening = false
+    private var isAiring: Bool {
+        guard let start = programme.start, let end = programme.end else { return false }
+        let now = Date()
+        return start <= now && now < end
+    }
+
     var body: some View {
         Group {
             if let channel { LiveChannelView(channel: channel) }
-            else if let problem { Text(problem).padding() }
-            else { ProgressView("Opening channel") }
+            else {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(programme.title).font(.title.bold())
+                    if let start = programme.start {
+                        Text(start.formatted(date: .abbreviated, time: .shortened)).foregroundStyle(.secondary)
+                    }
+                    if let overview = programme.Overview, !overview.isEmpty { Text(overview) }
+                    if let problem { Text(problem).foregroundStyle(.secondary) }
+                    if opening { ProgressView("Opening channel") }
+                    else if isAiring && programme.ChannelId != nil {
+                        Button("Watch live channel") { opening = true }
+                    }
+                }.padding()
+            }
         }
         .bluefinBackNavigation(onBack)
-        .task(id: store.accountContext) {
+        .task(id: opening) {
+            guard opening else { return }
+            defer { opening = false }
             let context = store.accountContext
-            channel = nil; problem = nil
-            guard let id = programme.ChannelId else { problem = "This programme has no available channel."; return }
+            problem = nil
+            guard isAiring, let id = programme.ChannelId else { return }
             do {
                 let value = try await store.detail(MediaItem(Id: id))
                 try Task.checkCancellation()
-                guard store.accountContext == context else { return }
-                guard ["TvChannel", "LiveTvChannel"].contains(value.Type ?? "") else {
+                guard store.accountContext == context, isAiring else { return }
+                guard value.Id.lowercased() == id.lowercased(),
+                      ["TvChannel", "LiveTvChannel"].contains(value.Type ?? "") else {
                     problem = "This channel is no longer available."; return
                 }
                 channel = value

@@ -41,6 +41,12 @@ can add licensed catalog results; finding a title does not make it playable.
 Unknown provider access remains unknown. Only deliberate authorized actions may
 be forwarded, and requests must not trigger automatic behavior on installation.
 
+Public TV title search can run on an instance before any resource is connected.
+The Apple and browser presentations query the public TVmaze API without peer
+credentials and credit TVmaze on the result. Its data is distributed under
+CC BY-SA. A source link displays title information. Current watch offers and
+playback authorization require separate evidence. [TVmaze API](https://www.tvmaze.com/api)
+
 Bluefin does not include the arr stack. A separately installed Seerr service
 retains its own integrations, policy, permissions and terms. An administrator's
 opt-in and a user's request do not establish copyright ownership or provider
