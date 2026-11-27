@@ -13,7 +13,7 @@ const state={phase:'connect',base:hostedBase(),server:null,options:{},session:nu
   featured:null,homeHistory:null,facets:null,search:null,
   queue:[],unshuffledQueue:[],queueIndex:0,shuffle:false,repeat:'off',query:'',local:false,localQuery:'',localSnapshot:null,images:new Map(),imageEpoch:0};
 let modalWasOpen=false,focusReturn=null,pageRetired=false,authTask=false,playbackGeneration=0,leaseRenew=null,progressTimer=null,meshPoll=null,hlsPromise,meshRetirement=null;
-let meshBeginStarted=false;
+let meshBeginStarted=false,watchRoom=null,roomList=null,videoRoomActions=null;
 let localLibrary=null,routeController=null,lyricsView=null,lyricsFrame=null;
 const categories=[['Home','home'],['Sports','sports'],['TV Shows','shows'],['Movies','movies'],['Live TV','live'],['Music','music']];
 const searchScopes=[['all','All',null],['library','Library only',null],['movies','Movies','Movie'],['tvShows','TV Shows','Series,Season,Episode'],['music','Music','Audio,MusicAlbum,MusicArtist,MusicVideo,Playlist'],['people','People',null],['sports','Sports',null],['liveTv','Live TV','TvChannel,LiveTvProgram'],['publicTv','Public TV catalog (TVmaze)',null]];
@@ -142,6 +142,7 @@ function playbackTimeline(){
  return {position,duration,minimum:offset};
 }
 function seekPlayback(position){
+ if(watchRoom){perform(()=>roomControl({kind:'seek',positionTicks:roomTicks(position)}));return;}
  const p=state.player;if(!p||!Number.isFinite(position)||p.item.Type==='TvChannel')return;
  if(p.mode==='mesh')runtime()?.ready()?.webMeshControl(p.handle,'seek',position);
  else media.currentTime=Math.max(0,position-(p.offset||0));
@@ -1247,7 +1248,7 @@ function tabbar(){
  }
  return nav;
 }
-function sheet(){if(state.expanded)return nowPlaying();const outer=node('section',undefined,'sheet');outer.setAttribute('role','dialog');outer.setAttribute('aria-modal','true');outer.id='bluefin-dialog';outer.tabIndex=-1;outer.setAttribute('aria-label',state.sheet==='invite'?'Connect Bluefin':state.sheet==='connections'?'Connections':'Account and settings');const inner=node('div',undefined,'sheet-inner'),bar=node('div',undefined,'toolbar');bar.append(node('h2',state.sheet==='invite'?'Connect Bluefin':state.sheet==='connections'?'Connections':'Account and settings'),button('Done',closeSheet,'plain'));inner.append(bar);
+function sheet(){if(state.expanded)return nowPlaying();const outer=node('section',undefined,'sheet');outer.setAttribute('role','dialog');outer.setAttribute('aria-modal','true');outer.id='bluefin-dialog';outer.tabIndex=-1;outer.setAttribute('aria-label',state.sheet==='invite'?'Connect Bluefin':state.sheet==='connections'?'Connections':state.sheet==='watchRoom'?'Watch together':'Account and settings');const inner=node('div',undefined,'sheet-inner'),bar=node('div',undefined,'toolbar');bar.append(node('h2',state.sheet==='invite'?'Connect Bluefin':state.sheet==='connections'?'Connections':state.sheet==='watchRoom'?'Watch together':'Account and settings'),button('Done',closeSheet,'plain'));inner.append(bar);
  if(state.sheet==='invite'){const g=group(state.pairing?'Saved connection':'Connect with an invitation');if(state.pairing){g.append(node('p',state.remember?'This request is saved on this device.':'This request stays in this tab. Keep it open until your connection is complete.'));if(state.pairing.awaitingApproval)g.append(node('p','Your request is waiting for administrator approval.'));if(state.pairing.externalUrl){const u=new URL(state.pairing.externalUrl);if(u.protocol==='https:'&&!u.username&&!u.password){const a=node('a','Open passkey page');a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';g.append(a,node('p','After verifying, return here to finish.','secondary'));}}g.append(action(state.pairing.awaitingApproval?'Check approval':state.pairing.needsBeginRetry?'Resume connection':'Verify and finish',continueMesh,'primary'));}
  else {
   g.append(node('p','Scan a Bluefin QR code, open an invitation image, or paste the full connection code. You will use a passkey to connect.'));
@@ -1288,7 +1289,8 @@ function sheet(){if(state.expanded)return nowPlaying();const outer=node('section
  }
  if(!state.pairing)g.append(installationLink());
  g.append(action('Resume request in this tab',()=>resumeMesh(false)),action('Restore a remembered device',()=>resumeMesh(true)));inner.append(g,node('p','The QR verifies a device connection. Your browser still uses its normal trusted HTTPS certificate.','secondary'));
- }else if(state.sheet==='account'){const g=group(state.session?.name||'Music on this device');g.append(node('p',!state.session?'Temporary local music · no account connected':state.mode==='mesh'?'Connected through the encrypted Bluefin mesh':'Signed in through the server address'));if(state.session)g.append(button('Connections',()=>{state.sheet='connections';render();},'','qr'));else g.append(action('Connect account',openAccountConnection,'','qr'));g.append(action(state.session?'Sign out':'Close local library',signOut,'danger'));inner.append(g);}
+ }else if(state.sheet==='account'){const g=group(state.session?.name||'Music on this device');g.append(node('p',!state.session?'Temporary local music · no account connected':state.mode==='mesh'?'Connected through the encrypted Bluefin mesh':'Signed in through the server address'));if(state.session)g.append(button('Connections',()=>{state.sheet='connections';render();},'','qr'),action('Watch together',openWatchRoom));else g.append(action('Connect account',openAccountConnection,'','qr'));g.append(action(state.session?'Sign out':'Close local library',signOut,'danger'));inner.append(g);}
+ else if(state.sheet==='watchRoom'){inner.append(watchRoomSheet());}
  else if(state.sheet==='connections'){const device=group('This device');device.append(node('p',state.mode==='mesh'?'Connected through the encrypted Bluefin mesh':'Signed in through the server address'));if(state.mode==='mesh')device.append(node('p',state.remember?'Your connection key is saved in protected storage on this browser.':'Your connection key exists only in this tab.','secondary'));inner.append(device);const g=group('Connect another device to your account');g.append(node('p','Use this invitation on a device you own. Your account passkey is still required.'),action('Create one-use invitation',issueInvite));if(state.invitation){const invite=state.invitation,image=node('img',undefined,'qr');image.src=invite.image;image.alt='One-use Bluefin device invitation';g.append(image,node('p','Every copy is the same invitation. Once claimed, no copy can connect another device.','secondary'));g.append(button('Copy invitation',()=>copy(invite.webLink)),button('Copy connection code',()=>copy(invite.code)));const save=node('a','Save QR image');save.href=invite.image;save.download='bluefin-invitation.png';g.append(save);const d=node('details'),summary=node('summary','Manual connection code');d.append(summary,node('p',invite.code,'code'));g.append(d);}g.append(node('p','Sharing a library with another person requires a separate grant to that person’s own account. A device invitation does not authorize shared storage or onward sharing.','secondary'));inner.append(g);}
  if(state.sheet==='account'&&state.session){const home=group('Home personalization');home.append(node('p','Your viewing progress and favorites shape Home on your account’s server.','secondary'));if(state.homeHistory)home.append(node('p','Submitted searches and selected results also help. History stays with this account for up to 90 days, with at most 64 recent events.','secondary'),action('Clear search history',clearHomeSearchHistory,'danger'));inner.append(home);}if(state.sheet==='account')inner.append(sourceFooter());if(state.busy)inner.append(node('p','Connecting…','loading'));inner.append(status());outer.append(inner);return outer;}
 async function copy(value){try{await navigator.clipboard.writeText(value);state.notice='Copied.';}catch(_){state.error='Copy was not available. Open the manual code and select it.';}render();}
@@ -1406,7 +1408,8 @@ function resumeTicks(item){
  const value=item.UserData?.PlaybackPositionTicks,duration=item.RunTimeTicks;
  return Number.isSafeInteger(value)&&value>0&&Number.isSafeInteger(duration)&&value<duration?value:0;
 }
-async function play(item,queue=[item],index=0,original=null){
+async function play(item,queue=[item],index=0,original=null,room=null){
+ if(watchRoom&&watchRoom!==room)await leaveWatchRoom();
  if(isLocalItem(item))return playLocal(item,queue,index,original);
  const epoch=state.epoch,session=state.session,mode=state.mode,base=state.base,preserve=queue===state.queue&&state.player?.mode===state.mode,presentation={expanded:state.expanded,panel:state.nowPanel};assertLive(epoch,session);
  if(!session)throw Error('Sign in to play your library.');
@@ -1424,7 +1427,7 @@ async function play(item,queue=[item],index=0,original=null){
    throw error;
   }current();
   const engine=await meshEngine(()=>play(item,queue,index),false,true);current();
-  engine.webMeshPlay(session.handle,JSON.stringify(item));current();
+  engine.webMeshPlay(session.handle,JSON.stringify(item),!!room);current();
   state.player={mode:'mesh',handle:session.handle,item,session,offset:0,snapshot:null};
   meshPoll=setInterval(()=>{
    if(pageRetired||generation!==playbackGeneration||session!==state.session)return;
@@ -1467,15 +1470,169 @@ async function play(item,queue=[item],index=0,original=null){
   },60000);
   progressTimer=setInterval(()=>{if(!pageRetired&&generation===playbackGeneration)reportProgress('progress').catch(()=>{});},10000);
   reportProgress('started').catch(()=>{});current();
-  media.play().catch(()=>{if(!pageRetired&&generation===playbackGeneration)document.getElementById('media-status').textContent='Press Play to begin.';});
+  if(!room)media.play().catch(()=>{if(!pageRetired&&generation===playbackGeneration)document.getElementById('media-status').textContent='Press Play to begin.';});
  }
  current();state.expanded=item.Type==='Audio'&&presentation.expanded;state.nowPanel=presentation.panel;loadLyrics(state.player);
   document.body.classList.toggle('audio-playing',item.Type==='Audio');
  document.body.classList.toggle('video-playing',item.Type!=='Audio');document.body.classList.add('with-player');render();
 }
 async function reportProgress(phase){const p=state.player;if(!p||p.mode!=='https'||p.session!==state.session||!p.reportingReady)return;await api('Sessions/Playing'+(phase==='started'?'':phase==='stopped'?'/Stopped':'/Progress'),'POST',{ItemId:p.item.Id,PlaySessionId:p.lease.playSessionId,PositionTicks:Math.floor(playbackTimeline().position*10000000),IsPaused:media.paused,CanSeek:p.item.Type!=='TvChannel',PlayMethod:'Transcode'});}
-async function skip(forward,automatic=false){if(!state.player||!state.queue.length)return;let next=state.queueIndex+(forward?1:-1);if(automatic&&state.repeat==='one')next=state.queueIndex;if(next>=state.queue.length){if(state.repeat!=='all')return stopPlayback();next=0;}if(next<0){if(state.repeat!=='all')next=0;else next=state.queue.length-1;}await play(state.queue[next],state.queue,next);}
-function toggle(){if(media.paused)media.play().catch(()=>{state.error='Press Play in the media controls.';render();});else media.pause();updatePlayback();}
+async function skip(forward,automatic=false){if(watchRoom)return;if(!state.player||!state.queue.length)return;let next=state.queueIndex+(forward?1:-1);if(automatic&&state.repeat==='one')next=state.queueIndex;if(next>=state.queue.length){if(state.repeat!=='all')return stopPlayback();next=0;}if(next<0){if(state.repeat!=='all')next=0;else next=state.queue.length-1;}await play(state.queue[next],state.queue,next);}
+function toggle(){if(watchRoom){perform(()=>roomControl({kind:media.paused?'resume':'pause'}));return;}if(media.paused)media.play().catch(()=>{state.error='Press Play in the media controls.';render();});else media.pause();updatePlayback();}
+
+// The DOM only adapts the current decoder and browser clock. The Rust client
+// owns room RPCs and projects the authoritative timeline onto this clock.
+function roomTicks(seconds){return Math.floor(Math.max(0,Math.min(Number.MAX_SAFE_INTEGER/1e7,seconds))*1e7);}
+function localRoomClock(){return Math.floor(performance.now());}
+async function roomRequest(operation,session=state.session,epoch=state.epoch){
+ assertLive(epoch,session);if(!session)throw Error('Sign in to watch together.');
+ const engine=await runtime().engine();assertLive(epoch,session);
+ const request=JSON.stringify(operation);
+ const response=state.mode==='mesh'
+  ?await engine.webMeshRoom(session.handle,request)
+  :await engine.webRoomHttp(async(method,path,body)=>{
+    assertLive(epoch,session);return JSON.stringify(await api(path,method,body===undefined?undefined:JSON.parse(body)));
+   },request);
+ assertLive(epoch,session);return JSON.parse(response);
+}
+async function openWatchRoom(){
+ state.sheet='watchRoom';state.expanded=false;roomList=null;render();
+ roomList=await roomRequest({kind:'list'});
+}
+function retireWatchRoom(){
+ const room=watchRoom;if(!room)return;
+ watchRoom=null;clearTimeout(room.timer);clearTimeout(room.deadline);media.pause();media.controls=room.controls;media.preload=room.preload;
+ return room;
+}
+async function leaveWatchRoom(localOnly=false){
+ const room=retireWatchRoom();if(!room)return;
+ const remote=localOnly?Promise.resolve():roomRequest({kind:'leave'},room.session,room.epoch);
+ try{await Promise.all([stopPlayback(),remote]);}finally{render();}
+}
+function roomIsCurrent(room){return !!room&&watchRoom===room&&!pageRetired&&room.epoch===state.epoch&&room.session===state.session;}
+async function enterWatchRoom(operation){
+ if(watchRoom)await leaveWatchRoom();
+ const session=state.session,epoch=state.epoch;
+ const reply=await roomRequest(operation,session,epoch);
+ if(!uuid(reply?.GroupId))throw Error('Room admission was not confirmed.');
+ await stopPlayback();assertLive(epoch,session);
+ const room={id:id(reply.GroupId),epoch,session,controls:media.controls,preload:media.preload,clock:null,item:null,
+  occurrence:null,waiting:null,buffering:false,timer:null,deadline:null,needsGesture:false,target:null};
+ watchRoom=room;media.controls=false;media.preload='auto';state.sheet=null;render();followWatchRoom(room);
+}
+async function roomControl(operation){
+ const room=watchRoom;if(!roomIsCurrent(room))return;
+ const snapshot=await roomRequest({kind:'current'},room.session,room.epoch);
+ if(!roomIsCurrent(room)||!uuid(snapshot?.GroupId)||id(snapshot.GroupId)!==room.id)
+  throw Error('This device is no longer in that room.');
+ await roomRequest(operation,room.session,room.epoch);
+}
+function failWatchRoom(room){
+ if(!roomIsCurrent(room))return;
+ leaveWatchRoom(true).catch(()=>{});
+ state.error='Watch together stopped because the room or its playback became unavailable.';render();
+}
+async function followWatchRoom(room){
+ if(!roomIsCurrent(room))return;
+ clearTimeout(room.deadline);
+ room.deadline=setTimeout(()=>failWatchRoom(room),7000);
+ let delay=400;
+ try{
+  if(!room.clock||localRoomClock()-room.clock.localReceived>8000){
+   const localSent=localRoomClock(),response=await roomRequest({kind:'clock'},room.session,room.epoch);
+   room.clock={localSent,localReceived:localRoomClock(),serverReceived:Date.parse(response.RequestReceptionTime),serverSent:Date.parse(response.ResponseTransmissionTime)};
+  }
+  const timeline=await roomRequest({kind:'current'},room.session,room.epoch);
+  if(!roomIsCurrent(room))return;
+  if(!uuid(timeline?.GroupId)||id(timeline.GroupId)!==room.id)throw Error('Room access was lost.');
+  if(!timeline.Item){if(state.player)await stopPlayback();room.item=room.occurrence=null;return;}
+  const itemId=id(timeline.Item.ItemId),occurrence=id(timeline.Item.PlaylistItemId);
+  if(room.occurrence!==occurrence){
+   const item=await api('Users/'+room.session.user+'/Items/'+itemId);
+   if(!roomIsCurrent(room))return;
+   if(!uuid(item?.Id)||id(item.Id)!==itemId||!['Movie','Episode'].includes(item.Type))
+    throw Error('This room does not have a supported video you can access.');
+   room.item=itemId;room.occurrence=occurrence;room.waiting=null;room.buffering=false;
+   await play({...item,UserData:{...item.UserData,PlaybackPositionTicks:timeline.PositionTicks}},undefined,0,null,room);
+   if(!roomIsCurrent(room))return;media.controls=false;return;
+  }
+  const player=state.player;
+  if(!player||id(player.item.Id)!==room.item)throw Error('The room player changed.');
+  if(player.mode==='mesh'&&!player.snapshot?.plan)return;
+  const outputTime=playbackTimeline(),localPosition=()=>outputTime.minimum+media.currentTime,engine=runtime().ready();
+  const target=JSON.parse(engine.webRoomProjection(JSON.stringify({...room.clock,localNow:localRoomClock(),
+   anchorMs:Date.parse(timeline.AnchorTime),playing:timeline.State==='Playing',positionTicks:timeline.PositionTicks,
+   playerTicks:roomTicks(localPosition())})));
+  room.target=target;
+  if(target.paused||timeline.State==='Idle'){if(!media.paused)media.pause();room.needsGesture=false;}
+  if(timeline.State==='Idle')return;
+  if(target.seek&&media.readyState>=1&&!media.seeking)
+   media.currentTime=Math.max(0,target.positionTicks/1e7-outputTime.minimum);
+  if(!target.paused&&media.paused&&media.readyState>=3&&!room.needsGesture)
+   await playRoomOutput(room);
+  if(!roomIsCurrent(room))return;
+  const ready=media.readyState>=3&&!media.seeking&&Math.abs(localPosition()-target.positionTicks/1e7)<0.45;
+  const report={playlistItem:occurrence,positionTicks:roomTicks(localPosition()),
+   when:new Date(target.serverNowMs).toISOString(),playing:!media.paused};
+  const waiting=occurrence+'/'+timeline.AnchorTime+'/'+timeline.PositionTicks;
+  if(timeline.State!=='Waiting')room.waiting=null;
+  if(ready&&((timeline.State==='Waiting'&&room.waiting!==waiting)||room.buffering)){
+   room.waiting=waiting;room.buffering=false;
+   await roomRequest({kind:'ready',...report},room.session,room.epoch);
+  }else if(!ready&&!room.buffering&&!target.paused&&media.readyState<3){
+   room.buffering=true;await roomRequest({kind:'buffering',...report},room.session,room.epoch);
+  }
+  if(timeline.State==='Playing'&&target.paused)
+   delay=Math.max(30,Math.min(delay,Date.parse(timeline.AnchorTime)-target.serverNowMs));
+ }catch(_){failWatchRoom(room);}
+ finally{
+  clearTimeout(room.deadline);
+  if(roomIsCurrent(room))room.timer=setTimeout(()=>followWatchRoom(room),delay);
+ }
+}
+async function playRoomOutput(room){
+ if(!roomIsCurrent(room)||!room.target||room.target.paused)return;
+ try{await media.play();room.needsGesture=false;}catch(_){room.needsGesture=true;}
+ if(roomIsCurrent(room))updateWatchRoomControls();
+}
+function watchRoomSheet(){
+ const panel=group('Playback rooms');
+ if(watchRoom){
+  panel.append(button('Copy room code',()=>copy(watchRoom.id)),action('Leave room',()=>leaveWatchRoom()));
+  if(state.player){
+   const [wrap,input]=field('Seek to seconds','number',String(Math.floor(playbackTimeline().position)),'watch-room-seek');
+   input.min='0';input.required=true;
+   const seek=node('form');const submit=node('button','Seek together');submit.disabled=state.busy;
+   seek.append(wrap,submit);
+   seek.onsubmit=event=>{event.preventDefault();const position=input.valueAsNumber;if(Number.isFinite(position))
+    perform(()=>roomControl({kind:'seek',positionTicks:roomTicks(position)}));};
+   panel.append(seek);
+  }
+
+  return panel;
+ }
+ if(roomList)for(const entry of roomList){if(uuid(entry.GroupId))panel.append(action(entry.GroupName||'Playback room',()=>enterWatchRoom({kind:'join',group:id(entry.GroupId)})));}
+ const [wrap,input]=field('Room code','text','','watch-room-code');
+ const form=node('form');const join=node('button','Join room');join.disabled=state.busy;input.maxLength=36;input.required=true;
+ form.append(wrap,join);
+ form.onsubmit=event=>{event.preventDefault();perform(()=>enterWatchRoom({kind:'join',group:id(input.value.trim())}));};
+ panel.append(form);
+ const item=state.player?.item;
+ if(item&&['Movie','Episode'].includes(item.Type))
+  panel.append(action('Start a room with this video',()=>enterWatchRoom({kind:'create',name:Array.from(item.Name||'Watch together').slice(0,100).join(''),item:id(item.Id),
+   positionTicks:roomTicks(playbackTimeline().position)}),'primary'));
+ return panel;
+}
+function updateWatchRoomControls(){
+ if(!videoRoomActions)return;
+ if(!state.session){videoRoomActions.replaceChildren();return;}
+ if(!watchRoom){videoRoomActions.replaceChildren(action('Watch together',openWatchRoom,'plain'));return;}
+ const room=watchRoom;
+ videoRoomActions.replaceChildren(action('Room controls',openWatchRoom,'plain'),
+  action('Pause for everyone',()=>roomControl({kind:'pause'}),'plain'),
+  action('Resume for everyone',()=>roomControl({kind:'resume'}),'plain'));
+ if(room.needsGesture)videoRoomActions.append(button('Enable playback',()=>playRoomOutput(room),'plain'));
+}
 
 // Lyrics use the authenticated library route and the current media clock. Word
 // timing is rendered only when the server supplies real, valid UTF-16 cues.
@@ -1675,7 +1832,7 @@ function updatePlayback(){
  updateLyrics();syncLyricsAnimation();
 }
 async function signOut(){
- const session=state.session,mode=state.mode,base=state.base;state.epoch++;state.pairingView++;
+ const session=state.session,mode=state.mode,base=state.base;retireWatchRoom();state.epoch++;state.pairingView++;
  clearTimeout(state.inviteTimer);state.sheet=null;state.phase='connect';state.session=null;clearPrivateView();clearImages();
  let cleanup;
  try{await stopPlayback();}catch(error){cleanup=error;}
@@ -1691,6 +1848,7 @@ async function signOut(){
 function clearImages(){state.imageEpoch++;clearTimeout(artworkScrollTimer);for(const controller of imageControllers)controller.abort();imageControllers.clear();artworkPending.clear();artworkMissing.clear();for(const url of state.images.values())URL.revokeObjectURL(url);state.images.clear();}
 function render(){
  if(pageRetired)return;
+ updateWatchRoomControls();
  lyricsView=null;
  const active=document.activeElement,activeId=active?.id,activeKey=active?.dataset?.focusKey;
  const selection=activeId==='bluefin-search'?[active.selectionStart,active.selectionEnd,active.selectionDirection]:null;
@@ -1779,7 +1937,7 @@ media.addEventListener('error',()=>{if(pageRetired||!media.getAttribute('src'))r
 window.addEventListener('pagehide',()=>{
  if(pageRetired)return;
  const p=state.player,session=state.session,mode=state.mode,base=state.base;
- pageRetired=true;state.epoch++;state.pairingView++;playbackGeneration++;
+ retireWatchRoom();pageRetired=true;state.epoch++;state.pairingView++;playbackGeneration++;
  for(const controller of requestControllers)controller.abort();requestControllers.clear();
  clearTimeout(state.inviteTimer);clearInterval(leaseRenew);clearInterval(progressTimer);clearInterval(meshPoll);
  state.player=null;retireLyrics(p);clearOutput(p);
@@ -1793,7 +1951,8 @@ window.addEventListener('pagehide',()=>{
 });
 window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
 const videoBar=node('div',undefined,'video-toolbar');
-videoBar.append(button('Done',()=>perform(()=>stopPlayback()),'plain'),
+videoRoomActions=node('div',undefined,'utility-actions');
+videoBar.append(button('Done',()=>perform(async()=>{if(watchRoom)await leaveWatchRoom();else await stopPlayback();}),'plain'),videoRoomActions,
  button('Full screen',()=>{if(media.requestFullscreen)media.requestFullscreen().catch(()=>{});else if(media.webkitEnterFullscreen)media.webkitEnterFullscreen();},'plain'));
 document.getElementById('media-host').append(videoBar);
 document.getElementById('startup-status')?.remove();

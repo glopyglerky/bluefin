@@ -362,3 +362,52 @@ impl Room {
         })
     }
 }
+
+/// A timeline read from the authenticated room owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimelineState {
+    pub position_ticks: u64,
+    pub anchor_ms: i64,
+    pub playing: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlayerTarget {
+    pub position_ticks: u64,
+    pub server_now_ms: i64,
+    pub paused: bool,
+    pub seek: bool,
+}
+
+impl TimelineState {
+    /// Uses the same clock mapping as scheduled commands. A future anchor
+    /// keeps the decoder paused. Correction obeys the sample uncertainty.
+    pub fn target(
+        self,
+        clock: RoomClock,
+        local_now: u64,
+        player_position_ticks: u64,
+    ) -> Option<PlayerTarget> {
+        let now = clock.server_time(local_now)?;
+        let uncertainty = clock.uncertainty_ms();
+        if uncertainty > 250 {
+            return None;
+        }
+        let paused = !self.playing || now < self.anchor_ms;
+        let position = if paused {
+            self.position_ticks
+        } else {
+            let advance = now
+                .abs_diff(self.anchor_ms)
+                .checked_mul(TICKS_PER_MILLISECOND)?;
+            self.position_ticks.checked_add(advance)?
+        };
+        let tolerance = if paused { 150 } else { 200 + 2 * uncertainty };
+        Some(PlayerTarget {
+            position_ticks: position,
+            server_now_ms: now,
+            paused,
+            seek: position.abs_diff(player_position_ticks) > tolerance * TICKS_PER_MILLISECOND,
+        })
+    }
+}

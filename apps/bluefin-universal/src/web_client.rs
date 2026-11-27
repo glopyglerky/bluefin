@@ -81,7 +81,7 @@ fn player(handle: &str) -> Result<(), JsValue> {
     })
 }
 #[wasm_bindgen(js_name = webMeshPlay)]
-pub fn play(handle: String, serialized: String) -> Result<(), JsValue> {
+pub fn play(handle: String, serialized: String, start_paused: Option<bool>) -> Result<(), JsValue> {
     if serialized.len()>128*1024 {return Err(JsValue::from_str("Item limit."));}
     let value: Value = serde_json::from_str(&serialized).map_err(|_| JsValue::from_str("Invalid library item."))?;
     let item: Item = serde_json::from_value(value.clone()).map_err(|_| JsValue::from_str("Invalid library item."))?;
@@ -92,7 +92,7 @@ pub fn play(handle: String, serialized: String) -> Result<(), JsValue> {
     if item.id.is_nil() || !item.playable() {return Err(JsValue::from_str("Choose a playable item."));}
     player(&handle)?;
     PLAYER.with(|player| {if let Some((_,service))=player.borrow().as_ref() {
-        service.send(Command::Play(Box::new(item),Selection {position,..Selection::default()},None));
+        service.send(Command::Play(Box::new(item),Selection {position,start_paused:start_paused.unwrap_or(false),..Selection::default()},None));
     }});
     Ok(())
 }
@@ -192,4 +192,89 @@ pub fn page_exit() {
         if let Some((_,service))=player.borrow().as_ref() {service.send(Command::Stop);}
     });
     mesh::retire_page();
+}
+
+/// Keeps ordinary HTTPS room traffic inside the existing same-origin account
+/// adapter, including its per-tab device identity and cancellation checks.
+#[wasm_bindgen(js_name = webRoomHttp)]
+pub async fn room_http(adapter: js_sys::Function, request: String) -> Result<String, JsValue> {
+    if request.len() > 4096 {
+        return Err(JsValue::from_str("Room request limit."));
+    }
+    let operation =
+        serde_json::from_str(&request).map_err(|_| JsValue::from_str("Invalid room request."))?;
+    crate::sync_play::request_using(operation, &mut move |method, path, body| {
+        let adapter = adapter.clone();
+        Box::pin(async move {
+            let result = adapter
+                .call3(
+                    &JsValue::UNDEFINED,
+                    &JsValue::from_str(method),
+                    &JsValue::from_str(&path),
+                    &body.map_or(JsValue::UNDEFINED, |body| {
+                        JsValue::from_str(&body.to_string())
+                    }),
+                )
+                .map_err(|value| {
+                    value
+                        .as_string()
+                        .unwrap_or_else(|| "Room request failed.".into())
+                })?;
+            let result = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&result))
+                .await
+                .map_err(|value| {
+                    value
+                        .as_string()
+                        .unwrap_or_else(|| "Room connection failed.".into())
+                })?;
+            serde_json::from_str(&result.as_string().ok_or("Invalid room response.")?)
+                .map_err(|_| "Invalid room response.".into())
+        })
+    })
+    .await
+    .map(serialize)
+    .map_err(error)
+}
+
+#[wasm_bindgen(js_name = webRoomProjection)]
+pub fn room_projection(observation: &str) -> Result<String, JsValue> {
+    use bluefin_sync_play::{ClockExchange, RoomClock, TimelineState};
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Observation {
+        local_sent: u64,
+        local_received: u64,
+        server_received: i64,
+        server_sent: i64,
+        local_now: u64,
+        anchor_ms: i64,
+        position_ticks: u64,
+        player_ticks: u64,
+        playing: bool,
+    }
+    if observation.len() > 1024 {
+        return Err(JsValue::from_str("Room observation limit."));
+    }
+    let input: Observation = serde_json::from_str(observation)
+        .map_err(|_| JsValue::from_str("Invalid room clock observation."))?;
+    let target = RoomClock::measure(ClockExchange {
+        local_sent: input.local_sent,
+        local_received: input.local_received,
+        server_received: input.server_received,
+        server_sent: input.server_sent,
+    })
+    .and_then(|clock| {
+        TimelineState {
+            position_ticks: input.position_ticks,
+            anchor_ms: input.anchor_ms,
+            playing: input.playing,
+        }
+        .target(clock, input.local_now, input.player_ticks)
+    });
+    let target =
+        target.ok_or_else(|| JsValue::from_str("The room clock could not be synchronized."))?;
+    Ok(serialize(json!({
+        "positionTicks":target.position_ticks, "serverNowMs":target.server_now_ms,
+        "paused":target.paused, "seek":target.seek,
+    })))
 }

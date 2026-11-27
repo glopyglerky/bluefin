@@ -286,3 +286,22 @@ fn a_fresh_command_can_reference_a_timeline_that_started_long_ago() {
     );
     assert_eq!(room.take_due(membership(1), 1024), Some(Action::Stop));
 }
+
+#[test]
+fn timeline_projection_waits_for_the_anchor_and_corrects_only_meaningful_drift() {
+    use bluefin_sync_play::TimelineState;
+    let timeline = TimelineState {
+        position_ticks: 20_000_000,
+        anchor_ms: 50_050,
+        playing: true,
+    };
+    let pending = timeline.target(clock(), 1024, 20_000_000).unwrap();
+    assert!(pending.paused);
+    assert!(!pending.seek);
+    let advancing = timeline.target(clock(), 1100, 21_000_000).unwrap();
+    assert!(!advancing.paused);
+    assert_eq!(advancing.position_ticks, 20_500_000);
+    assert!(!advancing.seek);
+    assert!(timeline.target(clock(), 1100, 15_000_000).unwrap().seek);
+    assert!(timeline.target(clock(), 32_000, 0).is_none());
+}

@@ -41,10 +41,16 @@ pub struct Timeline {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum RoomRequest {
     List,
     Current,
+    Clock,
     Create {
         name: String,
         item: Uuid,
@@ -73,12 +79,14 @@ pub enum RoomRequest {
     },
 }
 
-async fn call(session: &Session, method: &str, path: &str, body: Option<Value>) -> Result<Value> {
-    protocol::request(&session.base, &session.token, method, path, &[], body).await
-}
+type Requester = dyn FnMut(
+    &'static str,
+    String,
+    Option<Value>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>>>>;
 
-async fn current(session: &Session) -> Result<Option<Timeline>> {
-    let value = call(session, "GET", "Bluefin/SyncPlay/Current", None).await?;
+async fn current(send: &mut Requester) -> Result<Option<Timeline>> {
+    let value = send("GET", "Bluefin/SyncPlay/Current".into(), None).await?;
     let state: Option<Timeline> =
         serde_json::from_value(value).map_err(|_| "Invalid room timeline.")?;
     if let Some(timeline) = &state {
@@ -95,10 +103,10 @@ async fn current(session: &Session) -> Result<Option<Timeline>> {
     Ok(state)
 }
 
-async fn joined(session: &Session, group: Uuid) -> Result<Timeline> {
+async fn joined(send: &mut Requester, group: Uuid) -> Result<Timeline> {
     // Join can return 204 and still withhold admission when the server denies
     // library access. Only the caller's own joined-session timeline proves it.
-    current(session)
+    current(send)
         .await?
         .filter(|room| room.group_id == group)
         .ok_or_else(|| "This account could not join the room.".into())
@@ -111,12 +119,12 @@ fn tick_range(ticks: u64) -> Result<u64> {
     Ok(ticks)
 }
 
-async fn post(session: &Session, resource: &str, body: Option<Value>) -> Result<Value> {
-    call(session, "POST", &format!("SyncPlay/{resource}"), body).await
+async fn post(send: &mut Requester, resource: &str, body: Option<Value>) -> Result<Value> {
+    send("POST", format!("SyncPlay/{resource}"), body).await
 }
 
 async fn report(
-    session: &Session,
+    send: &mut Requester,
     ready: bool,
     playlist_item: Uuid,
     position_ticks: u64,
@@ -133,13 +141,24 @@ async fn report(
         "When": when,
         "IsPlaying": playing,
     });
-    post(session, resource, Some(body)).await
+    post(send, resource, Some(body)).await
 }
 
 pub async fn request(session: &Session, operation: RoomRequest) -> Result<Value> {
+    let session = session.clone();
+    request_using(operation, &mut move |method, path, body| {
+        let session = session.clone();
+        Box::pin(async move {
+            protocol::request(&session.base, &session.token, method, &path, &[], body).await
+        })
+    })
+    .await
+}
+
+pub async fn request_using(operation: RoomRequest, send: &mut Requester) -> Result<Value> {
     match operation {
         RoomRequest::List => {
-            let result = call(session, "GET", "SyncPlay/List", None).await?;
+            let result = send("GET", "SyncPlay/List".into(), None).await?;
             let rooms: Vec<RoomInfo> =
                 serde_json::from_value(result).map_err(|_| "Invalid room list.")?;
             if rooms.len() > 200
@@ -151,13 +170,14 @@ pub async fn request(session: &Session, operation: RoomRequest) -> Result<Value>
             }
             Ok(json!(rooms))
         }
-        RoomRequest::Current => Ok(json!(current(session).await?)),
+        RoomRequest::Current => Ok(json!(current(send).await?)),
+        RoomRequest::Clock => send("GET", "GetUtcTime".into(), None).await,
         RoomRequest::Join { group } => {
             if group.is_nil() {
                 return Err("Invalid room code.".into());
             }
-            post(session, "Join", Some(json!({ "GroupId": group }))).await?;
-            Ok(json!(joined(session, group).await?))
+            post(send, "Join", Some(json!({ "GroupId": group }))).await?;
+            Ok(json!(joined(send, group).await?))
         }
         RoomRequest::Create {
             name,
@@ -169,12 +189,12 @@ pub async fn request(session: &Session, operation: RoomRequest) -> Result<Value>
                 return Err("Choose an authorized item and enter a room name.".into());
             }
             let position = tick_range(position_ticks)?;
-            let reply = post(session, "New", Some(json!({ "GroupName": group_name }))).await?;
+            let reply = post(send, "New", Some(json!({ "GroupName": group_name }))).await?;
             let group: RoomInfo =
                 serde_json::from_value(reply).map_err(|_| "Invalid room response.")?;
-            let _ = joined(session, group.group_id).await?;
+            let _ = joined(send, group.group_id).await?;
             post(
-                session,
+                send,
                 "SetNewQueue",
                 Some(json!({
                     "PlayingQueue": [item],
@@ -183,7 +203,7 @@ pub async fn request(session: &Session, operation: RoomRequest) -> Result<Value>
                 })),
             )
             .await?;
-            let room = joined(session, group.group_id).await?;
+            let room = joined(send, group.group_id).await?;
             if room
                 .item
                 .as_ref()
@@ -193,24 +213,24 @@ pub async fn request(session: &Session, operation: RoomRequest) -> Result<Value>
             }
             Ok(json!(room))
         }
-        RoomRequest::Pause => post(session, "Pause", None).await,
-        RoomRequest::Resume => post(session, "Unpause", None).await,
-        RoomRequest::Leave => post(session, "Leave", None).await,
+        RoomRequest::Pause => post(send, "Pause", None).await,
+        RoomRequest::Resume => post(send, "Unpause", None).await,
+        RoomRequest::Leave => post(send, "Leave", None).await,
         RoomRequest::Seek { position_ticks } => {
             let body = json!({ "PositionTicks": tick_range(position_ticks)? });
-            post(session, "Seek", Some(body)).await
+            post(send, "Seek", Some(body)).await
         }
         RoomRequest::Ready {
             playlist_item,
             position_ticks,
             when,
             playing,
-        } => report(session, true, playlist_item, position_ticks, when, playing).await,
+        } => report(send, true, playlist_item, position_ticks, when, playing).await,
         RoomRequest::Buffering {
             playlist_item,
             position_ticks,
             when,
             playing,
-        } => report(session, false, playlist_item, position_ticks, when, playing).await,
+        } => report(send, false, playlist_item, position_ticks, when, playing).await,
     }
 }

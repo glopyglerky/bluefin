@@ -11,6 +11,12 @@ pub struct Selection {
     pub audio: Option<i32>,
     pub subtitle: Option<i32>,
     pub position: f64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub start_paused: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]

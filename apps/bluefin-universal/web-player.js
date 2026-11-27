@@ -105,8 +105,10 @@ export function startMedia(base,authorization,serialized,fixture,meshHandle) {
         state.hls.on(Hls.Events.ERROR,(_,data)=>{if(data.fatal&&current===state&&owns(state)){state.failed=true;state.error='HLS playback failed';status(state.error);}});
         state.hls.loadSource(ack.route);state.hls.attachMedia(video);
       }else{video.src=ack.route;video.load();}
-      status('Prepared. Press Play if your browser blocks autoplay.');
-      video.play().catch(()=>{if(current===state&&owns(state))status('Prepared. Press Play to begin.');});
+      if(!plan.selection.startPaused){
+        status('Prepared. Press Play if your browser blocks autoplay.');
+        video.play().catch(()=>{if(current===state&&owns(state))status('Prepared. Press Play to begin.');});
+      }
       return state.owner;
     }catch(error){
       if(state&&current===state)stopLocal();
