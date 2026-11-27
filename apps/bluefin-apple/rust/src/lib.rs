@@ -548,6 +548,9 @@ pub fn call(v: &Value) -> Result<Value> {
     if op == "publicFilmSources" {
         return public_catalog::public_film_sources(v);
     }
+    if op == "publicFilmIdentity" {
+        return public_catalog::public_film_identity(v);
+    }
     if matches!(op, "ownedLibraryList" | "ownedLibraryImport" | "ownedLibraryRemove" | "ownedLibraryQueue"
         | "ownedLibrarySelect" | "ownedLibraryAdvance" | "ownedLibraryPlay" | "ownedLibrarySearch") {
         return owned_music::call(v, op);
