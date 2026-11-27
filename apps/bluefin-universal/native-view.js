@@ -1017,6 +1017,7 @@ addEventListener('scroll',()=>{clearTimeout(artworkScrollTimer);artworkScrollTim
 
 function poster(item,open=()=>openItem(item),landscape=false){
  const square=['MusicAlbum','MusicArtist'].includes(item.Type),b=button('',()=>perform(open),'poster'+(square?' album':'')+(item.Type==='MusicArtist'?' artist':'')+(landscape&&!square?' landscape-card':''));
+ b.dataset.focusKey='poster|'+item.Id;
  const copy=node('span',undefined,'poster-copy');copy.append(node('strong',mediaTitle(item)));
  if(subtitle(item))copy.append(node('small',subtitle(item)));
  const duration=Number(item.RunTimeTicks),position=Number(item.UserData?.PlaybackPositionTicks);
@@ -1026,7 +1027,7 @@ function poster(item,open=()=>openItem(item),landscape=false){
  b.append(cover(item,square,landscape&&!square),copy);return b;
 }
 function shelf(title,entries){if(!entries.length)return document.createDocumentFragment();const s=node('section',undefined,'shelf');s.append(node('h2',title));const row=node('div',undefined,'shelf-track');for(const item of entries.slice(0,18))row.append(poster(item,()=>openItem(item),true));s.append(row);return s;}
-function row(item,select=()=>openItem(item),detail=subtitle(item)){const b=button('',()=>perform(select),'list-row'+(item.Type==='Audio'?' song':''));if(item.Type==='Audio')b.append(cover(item,true));else b.append(icon(item.CollectionType==='music'?'music':'library'));const t=node('span',undefined,'grow');t.append(node('strong',mediaTitle(item)));if(detail)t.append(node('small',detail));b.append(t,icon('chevron'));return b;}
+function row(item,select=()=>openItem(item),detail=subtitle(item)){const b=button('',()=>perform(select),'list-row'+(item.Type==='Audio'?' song':''));b.dataset.focusKey='row|'+item.Id;if(item.Type==='Audio')b.append(cover(item,true));else b.append(icon(item.CollectionType==='music'?'music':'library'));const t=node('span',undefined,'grow');t.append(node('strong',mediaTitle(item)));if(detail)t.append(node('small',detail));b.append(t,icon('chevron'));return b;}
 async function loadLiveGuide(route,get,current,signal,user){
  route.guideStart??=Math.floor(Date.now()/1800000)*1800000;route.guideHours??=3;
  const beginning=route.guideStart,end=beginning+route.guideHours*3600000;
@@ -2124,6 +2125,7 @@ function render(){
  const help=state.capability?capabilitySheet():null;
  if(help)fragment.append(help);
  app.replaceChildren(fragment);
+ for(const view of virtualViews)view.update();
  if(help){
   if(typeof help.showModal==='function')help.showModal();
   else{help.setAttribute('open','');help.querySelector?.('button')?.focus?.();}

@@ -1198,3 +1198,27 @@ test('an older server cannot silently claim explicit search sorting',async()=>{
  const q=new URL(t.requests.at(-1).url).searchParams;assert.equal(q.has('SortBy'),false);assert.equal(q.has('SearchOrder'),false);
  assert.match(t.root.textContent,/Other sort options need an updated server/);
 });
+
+test('connected virtual cards restore keyboard focus after redraw and closing a dialog',async()=>{
+ const movies=[{Id:'66666666666646668666666666666666',Type:'Movie',Name:'First movie'},{Id:'77777777777747778777777777777777',Type:'Movie',Name:'Second movie'}];
+ const t=setup({apiResponse:u=>u.pathname.endsWith('/Items')?jsonReply({Items:movies,TotalRecordCount:movies.length}):undefined}),document=t.context.document,create=document.createElement;
+ const elements=()=>{const all=[];const visit=e=>{if(!e?.children)return;all.push(e);for(const child of e.children)visit(child);};visit(t.root);return all;};
+ document.createElement=tag=>{
+  const element=create(tag);
+  Object.defineProperty(element,'isConnected',{get:()=>elements().includes(element)});
+  element.focus=()=>{if(element.isConnected)document.activeElement=element;};
+  return element;
+ };
+ document.querySelectorAll=selector=>selector==='[data-focus-key]'?elements().filter(e=>e.dataset.focusKey):[];
+ document.querySelector=selector=>selector.startsWith('#')?elements().find(e=>e.id===selector.slice(1)):null;
+ t.context.CSS={escape:value=>value};
+ const replace=t.root.replaceChildren.bind(t.root);
+ t.root.replaceChildren=(...children)=>{replace(...children);if(document.activeElement&&!elements().includes(document.activeElement))document.activeElement=null;};
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);await t.ui.navigate('Movies');t.ui.render();
+ const card=findElement(t.root,e=>e.dataset.focusKey==='poster|'+movies[1].Id);
+ assert(card,'visible virtual cards mount when the new document is attached');
+ card.focus();const key=card.dataset.focusKey;
+ t.ui.render();assert.notEqual(document.activeElement,card);assert.equal(document.activeElement?.dataset.focusKey,key);
+ t.ui.state.sheet='account';t.ui.render();assert.equal(document.activeElement?.id,'bluefin-dialog');
+ t.ui.state.sheet=null;t.ui.render();assert.equal(document.activeElement?.dataset.focusKey,key);
+});
