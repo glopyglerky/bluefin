@@ -43,3 +43,29 @@ relay path, the browser policy, a trusted and reachable relying-party ceremony
 path, and a real one-use invite/passkey/library journey. Local file playback and
 ordinary same-origin HTTPS login are independently available interfaces; they
 do not silently replace a pinned PQ connection.
+
+## Restoring account data
+
+A scheduled Bluefin backup restore invalidates mesh authority on its staged
+SQLite database before the backup owner replaces any live file. This removes
+mesh device bearers, sessions, signup requests, invitation state and completion
+receipts. The next activation creates a fresh issuer, and devices must pair
+again through a new owner-approved invitation. Ordinary restarts retain their
+existing session behavior.
+
+Unrelated Jellyfin device rows, accounts, passkeys and media data retain the
+existing backup contract. If the staged database cannot be sanitized, the
+restore replaces no live file. This is a Bluefin extension to restore behavior;
+it does not change the Jellyfin HTTP contract or claim upstream parity for mesh.
+
+This hook covers the server's scheduled backup restore only. Direct database
+replacement, host snapshots and filesystem rollback can bypass it. Those paths
+still require a surviving current recovery authority or explicit re-enrollment
+before exposing mesh access. They are not qualified by this hook.
+
+Qualification must restore a backup taken before revocation, then exercise both
+mesh session authorization and the ordinary HTTP handler with the old mesh
+bearer. Both must refuse, while an unrelated device and the account data remain
+usable. Include failure before the staged-file swap and a database without mesh
+tables. Source-authored regressions do not replace the admitted Forge run and
+actual server acceptance.
