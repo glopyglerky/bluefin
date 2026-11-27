@@ -9,30 +9,20 @@ ClockExchange and the existing membership/media scheduling types without a
 second clock implementation. This is a Rust integration seam, not a Swift
 room operation or native playback implementation.
 
-The minimal next shared seam is extraction of universal/src/sync_play.rs's
-RoomRequest, response validation and request_using into a shared crate with
-an injected request callback and a transport-independent error type. Its
-current private crate::protocol dependency prevents direct dependency reuse.
-That extraction is outside this worker's owned paths. Do not copy the wire
-implementation into Apple: retain join -> Current admission verification,
-create -> admission -> queue -> exact-item verification and tick bounds.
+The shared room wire contract now lives in bluefin-sync-play's optional
+requests module. Both clients use its typed operations, room-bound controls
+and admission readback. The contract depends on alloc and leaves I/O with the
+caller. Apple exposes syncPlay through the existing Rust bridge and
+Api::request. The room operation requires a persistent, explicit device ID
+and refuses the shared platform fallback.
 
-The Apple adapter should bind the callback to Api::request with auth=true,
-preserving its mesh_connection::request authenticated Iroh route. Capture
-the exact explicit device identity and current account generation at operation
-start; reject stale completion after account change or reconnect. A new
-portable Membership epoch is required on either transition. Api currently
-allows a fallback device identity, so room operations must require an explicit
-identity before invoking it. No room receipt authorizes media: resolve each
-item through the existing independently authenticated playback path and keep
-session capabilities local. A shared room cannot transfer a session token.
+The native player still needs to bind room observation and controls to the
+current account generation. Discard stale responses when the account or
+connection changes. Playback still uses the existing independent permission
+and lease checks. Keep one synchronization controller per player so native
+SharePlay and a Bluefin room cannot issue competing commands.
 
-Native Apple SharePlay is untouched. Swift playback, lifecycle, account
-generation ownership and FFI wiring remain with their existing owners.
-
-No builds, tests, lockfile resolution, installs or runtime qualification ran:
-the executor is blocked and no Apple executor exists. Parent owns Forge and
-production. Required subsequent checks include clock expiry, stale epoch and
-decoder callbacks, denied join despite HTTP success, denied queue item,
-account/device change during admission, and mesh control-path preservation.
-Cargo.lock needs admitted dependency resolution before --locked qualification.
+Tests cover missing or wrong-room admission, exact item confirmation and
+room-scoped command refusal. The lock entries use dependencies already
+present in each workspace. Forge and an admitted Apple device executor are
+required to establish compilation, playback and installed-device behavior.

@@ -411,3 +411,8 @@ impl TimelineState {
         })
     }
 }
+
+#[cfg(feature = "requests")]
+extern crate alloc;
+#[cfg(feature = "requests")]
+pub mod requests;
