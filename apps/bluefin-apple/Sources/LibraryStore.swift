@@ -37,6 +37,13 @@ import CryptoKit
     @Published var deviceMusicVisible = false
     let audio = AudioPreferences()
     let sports = SportsStore()
+    @Published private(set) var librarySearchCapability: LibrarySearchCapability?
+    private var librarySearchCapabilityContext: UUID?
+    private var librarySearchCapabilityObserved = Date.distantPast
+    private var librarySearchCapabilityRequest = UUID()
+    var supportsExplicitSearchSort: Bool {
+        preview || (librarySearchCapabilityContext == accountContext && librarySearchCapability?.supported == true)
+    }
     private var accountGeneration = UUID()
     private var refreshID: UUID?
     private var pendingPreparation: PendingPlayback?
@@ -339,22 +346,62 @@ import CryptoKit
         }
     }
 
-    func items(parent: MediaItem? = nil, query: String = "", start: Int = 0, includeItemTypes: String? = nil) async throws -> ItemPage {
+    func loadSearchCapabilities() async {
+        let context = accountContext
+        guard !preview else { return }
+        if librarySearchCapabilityContext == context,
+           Date().timeIntervalSince(librarySearchCapabilityObserved) < 60 { return }
+        let request = UUID()
+        librarySearchCapabilityRequest = request
+        if librarySearchCapabilityContext != context { librarySearchCapability = nil }
+        let capability: BluefinCapabilities? = try? await authenticated("bluefinCapabilities")
+        guard accountContext == context, librarySearchCapabilityRequest == request, !Task.isCancelled else { return }
+        librarySearchCapabilityContext = context
+        librarySearchCapabilityObserved = Date()
+        librarySearchCapability = capability?.librarySearch
+    }
+
+    func items(parent: MediaItem? = nil, query: String = "", start: Int = 0, includeItemTypes: String? = nil,
+               limit: Int = MediaPageWindow.pageSize, filters: UnifiedSearchFilters = .init()) async throws -> ItemPage {
         if preview {
+            if filters.studioID != nil || filters.tag != nil || filters.collectionID != nil {
+                return .init(Items: [], TotalRecordCount: 0)
+            }
             let source = query.isEmpty ? MediaItem.preview : MediaItem.preview + [.previewAudio, .previewAlbum, .previewArtist]
             let kinds = includeItemTypes.map { Set($0.split(separator: ",").map(String.init)) }
-            let values = source.filter { item in
+            var values = source.filter { item in
                 (kinds?.contains(item.Type ?? "") ?? true) &&
-                (query.isEmpty || [item.title, item.Album, item.AlbumArtist, item.Artists?.joined(separator: " ")].compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(query) })
+                (query.isEmpty || [item.title, item.SeriesName, item.Album, item.AlbumArtist, item.Artists?.joined(separator: " ")].compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(query) }) &&
+                (!filters.favoritesOnly || item.UserData?.IsFavorite == true) &&
+                (filters.watched == .all || (item.UserData?.Played == true) == (filters.watched == .watched)) &&
+                (filters.year == nil || item.ProductionYear == filters.year) &&
+                (filters.genre == nil || item.Genres?.contains(filters.genre ?? "") == true)
             }
-            return .init(Items: start == 0 ? values : [], TotalRecordCount: values.count)
+            switch filters.sort {
+            case .titleAscending: values.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            case .titleDescending: values.sort { $0.title.localizedStandardCompare($1.title) == .orderedDescending }
+            case .newestReleased: values.sort { ($0.ProductionYear ?? 0) > ($1.ProductionYear ?? 0) }
+            case .oldestReleased: values.sort { ($0.ProductionYear ?? Int.max) < ($1.ProductionYear ?? Int.max) }
+            case .relevance, .recentlyAdded: break
+            }
+            return .init(Items: Array(values.dropFirst(max(0, start)).prefix(max(1, limit))), TotalRecordCount: values.count)
         }
         guard let session else { throw BluefinError.message("Sign in to browse your library.") }
         let generation = accountGeneration
-        var fields: [String: Any] = ["startIndex": start, "limit": 60]
+        var fields: [String: Any] = ["startIndex": start, "limit": limit]
         if let parent { fields["parentId"] = parent.Id }
         if let includeItemTypes { fields["includeItemTypes"] = includeItemTypes }
         if !query.isEmpty { fields["searchTerm"] = query }
+        filters.apply(to: &fields)
+        if query.isEmpty {
+            fields.removeValue(forKey: "searchOrder")
+        } else if filters.sort != .relevance {
+            await loadSearchCapabilities()
+            guard accountGeneration == generation else { throw CancellationError() }
+            guard supportsExplicitSearchSort else {
+                throw BluefinError.message("This server does not support sorting search results. Choose Relevance.")
+            }
+        }
         let page: ItemPage = try await RustBridge.call("items", session: session, fields: fields)
         try Task.checkCancellation()
         guard accountGeneration == generation else { throw CancellationError() }

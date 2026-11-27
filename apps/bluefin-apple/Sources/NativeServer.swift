@@ -7,6 +7,18 @@ struct BluefinCapabilities: Decodable {
     var maxQueueItems: Int
     var discovery: ServerDiscoveryCapability?
     var irohMediaTransport: ServerIrohTransport?
+    var librarySearch: LibrarySearchCapability?
+}
+struct LibrarySearchCapability: Decodable, Sendable {
+    let version: Int
+    let explicitSort: Bool
+    let sortBy: [String]
+    let sortOrder: [String]
+    var supported: Bool {
+        version == 1 && explicitSort &&
+        ["SortName", "DateCreated", "PremiereDate"].allSatisfy(sortBy.contains) &&
+        ["Ascending", "Descending"].allSatisfy(sortOrder.contains)
+    }
 }
 struct ServerIrohTransport: Decodable, Sendable {
     var version: Int
