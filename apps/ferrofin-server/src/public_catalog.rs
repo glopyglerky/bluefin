@@ -15,16 +15,12 @@ use uuid::Uuid;
 
 pub(crate) struct SpecialistCatalog {
     musicbrainz: Arc<MusicBrainzClient>,
-    tmdb: Option<TmdbClient>,
+    tmdb: Arc<TmdbClient>,
     requests: Semaphore,
 }
 
 impl SpecialistCatalog {
-    pub(crate) fn new(musicbrainz: Arc<MusicBrainzClient>) -> Self {
-        let tmdb = std::env::var("BLUEFIN_TMDB_API_KEY")
-            .ok()
-            .filter(|key| !key.trim().is_empty())
-            .map(TmdbClient::with_api_key);
+    pub(crate) fn new(musicbrainz: Arc<MusicBrainzClient>, tmdb: Arc<TmdbClient>) -> Self {
         Self {
             musicbrainz,
             tmdb,
@@ -40,7 +36,6 @@ impl PublicCatalog for SpecialistCatalog {
         if let Some(entity) = video_entity(kind) {
             let value = self
                 .tmdb
-                .as_ref()?
                 .catalog_search(entity, query, page)
                 .await?;
             let results = value["results"]
@@ -78,7 +73,7 @@ impl PublicCatalog for SpecialistCatalog {
         let _slot = self.requests.try_acquire().ok()?;
         if let Some(entity) = video_entity(kind) {
             let id = id.parse::<u64>().ok().filter(|id| *id != 0)?;
-            let value = self.tmdb.as_ref()?.catalog_details(entity, id).await?;
+            let value = self.tmdb.catalog_details(entity, id).await?;
             return (value["id"].as_u64() == Some(id))
                 .then(|| video_record(kind, &value))
                 .flatten();

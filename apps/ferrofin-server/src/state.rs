@@ -3015,6 +3015,7 @@ pub async fn build_app_state(
     // ---- SyncPlay ---------------------------------------------------------
     let state = state.with_public_catalog(Arc::new(crate::public_catalog::SpecialistCatalog::new(
         Arc::clone(&musicbrainz_client),
+        Arc::clone(&tmdb_client),
     )));
     let state = match bluefin_discovery::DiscoveryService::open(
         &config.config_dir.join("bluefin-discovery.json"),

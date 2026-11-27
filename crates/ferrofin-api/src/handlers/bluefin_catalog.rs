@@ -47,7 +47,8 @@ async fn offers_post(
 }
 async fn lookup(state:&AppState, request:LookupRequest) -> Result<Json<OfferResponse>,ApiError> {
     let discovery=state.discovery.as_ref().ok_or_else(unavailable)?;
-    Ok(Json(discovery.catalog().lookup(request).await.map_err(error)?))
+    let catalog = discovery.catalog().ok_or_else(unavailable)?;
+    Ok(Json(catalog.lookup(request).await.map_err(error)?))
 }
 async fn providers(
     State(state): State<AppState>, Query(query):Query<ProvidersQuery>,
@@ -58,7 +59,8 @@ async fn providers(
         (Some(kind),Some(source),Some(id))=>Some(CatalogIdentity{kind,ids:vec![CatalogId{source,id}]}),
         _=>return Err(ApiError::BadRequest("Catalog context requires kind, source and id".into())),
     };
-    Ok(Json(discovery.catalog().providers_for(query.country,identity).await.map_err(error)?))
+    let catalog = discovery.catalog().ok_or_else(unavailable)?;
+    Ok(Json(catalog.providers_for(query.country,identity).await.map_err(error)?))
 }
 
 /// Adds public read-only offers and dynamic regional provider discovery.

@@ -1501,8 +1501,15 @@ impl TmdbClient {
     }
 
     async fn catalog_get(&self, path: &str, params: &[(&str, String)]) -> Option<serde_json::Value> {
+        let cfg = self.settings().await;
+        // Keep the optional catalog override while sharing the normal client,
+        // transport and live plugin settings. No separate credential is required.
+        let catalog_key = std::env::var("BLUEFIN_TMDB_API_KEY")
+            .ok()
+            .filter(|key| !key.trim().is_empty());
+        let key = cfg.api_key(catalog_key.as_deref().unwrap_or(self.api_key.expose_secret()));
         let response = self.http.get(format!("{}/{path}", self.base_url))
-            .query(&[("api_key", self.api_key.expose_secret())])
+            .query(&[("api_key", key)])
             .query(params).send_limited(&self.limiter).await.ok()?;
         if !response.status().is_success() { return None; }
         response.counted_json().await.ok()
@@ -2898,6 +2905,28 @@ fn year_from(date: Option<&str>) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn public_catalog_uses_the_shared_origin_and_configured_plugin_key() {
+        let server = crate::mock_http::MockServer::always(r#"{"id":42,"results":[]}"#).await;
+        let client = TmdbClient::with_api_key("constructor-fixture-key".into())
+            .with_base_url(&server.base_url);
+        client.attach_plugin_manager(crate::plugin_config::tests_support::manager_with(
+            crate::builtin_plugins::TMDB.id,
+            br#"{"TmdbApiKey":"configured-catalog-fixture-key"}"#.to_vec(),
+        ));
+        assert!(client.catalog_search(CatalogVideoEntity::Movie, "A title", 1).await.is_some());
+        assert!(client.catalog_details(CatalogVideoEntity::Series, 42).await.is_some());
+        assert_eq!(
+            server.query_values("/search/movie", "api_key"),
+            ["configured-catalog-fixture-key"]
+        );
+        assert_eq!(
+            server.query_values("/tv/42", "api_key"),
+            ["configured-catalog-fixture-key"]
+        );
+        assert_eq!(server.query_values("/search/movie", "query"), ["A title"]);
+    }
 
     #[rstest::rstest]
     #[case(Some("pt"), Some("BR"), Some("pt-BR"), Some("pt-BR"))]

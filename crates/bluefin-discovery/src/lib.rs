@@ -123,7 +123,7 @@ pub struct DiscoveryService {
     submissions: Mutex<()>,
     network: Semaphore,
     upstream: upstream::Upstream,
-    catalog: catalog::CatalogService,
+    catalog: Option<catalog::CatalogService>,
 }
 
 impl DiscoveryService {
@@ -136,13 +136,17 @@ impl DiscoveryService {
             submissions: Mutex::new(()),
             network: Semaphore::new(8),
             upstream: upstream::Upstream::new()?,
-            catalog: catalog::CatalogService::open(&path.with_file_name("bluefin-catalog.json"))?,
+            // Optional public offers have separate private configuration. A bad
+            // adapter must neither disable authenticated discovery nor fall back
+            // to unconfigured public fetching.
+            catalog: catalog::CatalogService::open(&path.with_file_name("bluefin-catalog.json")).ok(),
         }))
     }
 
     /// Public catalog reads are independent of optional library/request grants.
-    pub fn catalog(&self) -> &catalog::CatalogService {
-        &self.catalog
+    /// Invalid optional configuration disables this adapter alone.
+    pub fn catalog(&self) -> Option<&catalog::CatalogService> {
+        self.catalog.as_ref()
     }
 
     pub async fn settings(&self) -> SettingsSnapshot {

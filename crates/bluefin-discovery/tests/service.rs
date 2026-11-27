@@ -309,6 +309,32 @@ fn input(id: Uuid, selections: &[&str]) -> SubmitAction {
 }
 
 #[tokio::test]
+async fn invalid_optional_catalog_preserves_configured_discovery_and_authority() {
+    let f = Fixture::new().await;
+    f.enable().await;
+    let catalog_path = f.root.path().join("bluefin-catalog.json");
+    std::fs::write(&catalog_path, b"{invalid").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&catalog_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let path = f.root.path().join("discovery.json");
+    let service = DiscoveryService::open(&path).unwrap();
+    assert!(service.catalog().is_none());
+    let page = service.search(viewer(), Audience::Client, "film", 1).await.unwrap();
+    assert_eq!(page.results.len(), 3);
+    assert!(matches!(
+        service.search(Viewer::new(Uuid::from_u128(43), false), Audience::Client, "film", 1).await,
+        Err(Error::Forbidden)
+    ));
+    assert_eq!(f.fake.search_calls.load(Ordering::SeqCst), 1);
+    // This isolation does not turn malformed authoritative settings into defaults.
+    std::fs::write(&path, b"{invalid").unwrap();
+    assert!(DiscoveryService::open(&path).is_err());
+}
+
+#[tokio::test]
 async fn default_off_and_web_opt_in_do_not_contact_upstream_for_denied_clients() {
     let f = Fixture::new().await;
     assert!(
