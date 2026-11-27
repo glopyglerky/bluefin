@@ -429,15 +429,22 @@ async function readInvitationImage(file) {
 
 function hasSearchFacets(filters){return !!(filters.studioID||filters.tag||filters.collectionID||filters.played||filters.favorite||filters.year);}
 const librarySearchSorts=[['relevance','Relevance'],['titleAsc','Title A–Z'],['titleDesc','Title Z–A'],['added','Recently added'],['newest','Release date: newest'],['oldest','Release date: oldest']];
+const librarySortColumns={titleAsc:['SortName','Ascending'],titleDesc:['SortName','Descending'],added:['DateCreated','Descending'],newest:['PremiereDate','Descending'],oldest:['PremiereDate','Ascending']};
+const libraryMediaTypes=[['all','All media'],['movies','Movies'],['series','TV series'],['episodes','Episodes'],['music','Music']];
+function canSearchSort(key){
+ if(key==='relevance')return true;const capability=state.capabilities?.librarySearch,sort=librarySortColumns[key];
+ return !!(sort&&capability?.version===1&&capability.explicitSort===true&&capability.sortBy?.includes(sort[0])&&capability.sortOrder?.includes(sort[1]));
+}
 function cleanSearchFilters(value={}) {
  const scope=searchScopes.some(([key])=>key===value.scope)?value.scope:'all';
- if(['sports','publicTv','people'].includes(scope))return {scope,studioID:'',tag:'',collectionID:'',sort:'relevance',played:'',favorite:false,year:''};
+ if(['sports','publicTv','people'].includes(scope))return {scope,studioID:'',tag:'',collectionID:'',sort:'relevance',played:'',favorite:false,year:'',mediaType:'all'};
  return {scope,studioID:uuid(value.studioID)?id(value.studioID):'',tag:typeof value.tag==='string'?value.tag.slice(0,512):'',
-  collectionID:uuid(value.collectionID)?id(value.collectionID):'',sort:librarySearchSorts.some(([key])=>key===value.sort)?value.sort:'relevance',
+  collectionID:uuid(value.collectionID)?id(value.collectionID):'',sort:scope==='library'&&canSearchSort(value.sort)?value.sort:'relevance',
+  mediaType:scope==='library'&&libraryMediaTypes.some(([key])=>key===value.mediaType)?value.mediaType:'all',
   played:['true','false'].includes(value.played)?value.played:'',favorite:value.favorite===true,year:/^\d{4}$/.test(String(value.year||''))?String(value.year):''};
 }
 function explicitSearchSort(filters,query){
- const sort={titleAsc:['SortName','Ascending'],titleDesc:['SortName','Descending'],added:['DateCreated','Descending'],newest:['PremiereDate','Descending'],oldest:['PremiereDate','Ascending']}[filters.sort];
+ const sort=canSearchSort(filters.sort)?librarySortColumns[filters.sort]:null;
  if(sort)query.push(['SearchOrder','SortBy'],['SortBy',sort[0]],['SortOrder',sort[1]]);
 }
 function searchLanes(filters){
@@ -456,7 +463,7 @@ function searchCall(lane,route,start=0){
  let path;
  if(lane==='library'){
   path='Users/'+state.session.user+'/Items';query.push(['Recursive',true],['Fields','Overview,PrimaryImageAspectRatio,ProviderIds']);
-  const type=searchScopes.find(([key])=>key===filters.scope)?.[2];if(type)query.push(['IncludeItemTypes',type]);
+  const type=filters.scope==='library'?({movies:'Movie',series:'Series',episodes:'Episode',music:'Audio,MusicAlbum,MusicArtist,MusicVideo,Playlist'}[filters.mediaType]):searchScopes.find(([key])=>key===filters.scope)?.[2];if(type)query.push(['IncludeItemTypes',type]);
   if(filters.studioID)query.push(['StudioIds',filters.studioID]);if(filters.tag)query.push(['Tags',filters.tag]);
   if(filters.collectionID)query.push(['ParentId',filters.collectionID]);
    explicitSearchSort(filters,query);if(filters.played)query.push(['IsPlayed',filters.played]);if(filters.favorite)query.push(['IsFavorite',true]);if(filters.year)query.push(['Years',filters.year]);
@@ -1516,10 +1523,10 @@ function searchView(main){
  refine.setAttribute('aria-expanded',String(!!route.refine));
  if(state.session&&!['sports','publicTv','people'].includes(filters.scope))tools.append(refine);
  main.append(tools);
- if(state.session&&!['sports','publicTv','people','liveTv'].includes(filters.scope)){
+ if(state.session&&filters.scope==='library'){
   const sorting=node('div',undefined,'library-sort');
-  sorting.append(searchChoice('Sort your library','sort',filters.sort,librarySearchSorts,sort=>startSearch(state.query,{...filters,sort})));
-  if(filters.scope!=='library')sorting.append(node('small','Public catalogs keep their provider relevance order.','secondary'));
+  sorting.append(searchChoice('Sort your library','sort',filters.sort,librarySearchSorts.filter(([key])=>canSearchSort(key)),sort=>startSearch(state.query,{...filters,sort})));
+  if(!librarySearchSorts.some(([key])=>key!=='relevance'&&canSearchSort(key)))sorting.append(node('small','This server supports relevance order for search. Other sort options need an updated server.','secondary'));
   main.append(sorting);
  }
  if(!state.session){
@@ -1528,6 +1535,7 @@ function searchView(main){
  }
  if(route.refine&&!['sports','publicTv','people'].includes(filters.scope)){
   const panel=node('section',undefined,'search-refinements'),facets=state.facets;
+  if(filters.scope==='library')panel.append(searchChoice('Media type','media-type',filters.mediaType,libraryMediaTypes,mediaType=>startSearch(state.query,{...filters,mediaType})));
   panel.append(searchChoice('Watch status','played',filters.played,[['','Any watch status'],['false','Unwatched'],['true','Watched']],played=>startSearch(state.query,{...filters,played})));
   panel.append(searchChoice('Favorites','favorite',filters.favorite?'true':'',[['','All titles'],['true','Favorites only']],value=>startSearch(state.query,{...filters,favorite:value==='true'})));
   const yearLabel=node('label','Release year'),yearInput=node('input');yearInput.type='number';yearInput.min='1800';yearInput.max='2200';yearInput.placeholder='Any year';yearInput.value=filters.year;yearInput.setAttribute('aria-label','Release year');

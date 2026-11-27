@@ -43,7 +43,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
   else if(u.pathname==='/Users/AuthenticateByName')body={AccessToken:'synthetic-private-bearer',User:{Id:user,Name:'Listener'}};
   else if(u.pathname==='/Bluefin/Home/Recommendations')return new Response('{}',{status:404});
   else if(u.pathname==='/Movies/Recommendations')body=[];
-  else if(u.pathname==='/Bluefin/Capabilities')body={protocolVersion:1,viewer:{userId:user}};
+  else if(u.pathname==='/Bluefin/Capabilities')body={protocolVersion:1,viewer:{userId:user},librarySearch:{version:1,explicitSort:true,sortBy:['SortName','DateCreated','PremiereDate'],sortOrder:['Ascending','Descending']}};
   else if(u.pathname==='/Bluefin/Accounts/Mesh/Invite')body={singleUse:true,intent:'login',code:'MC1-INVITATION',webLink:'https://bluefin.test/web/bluefin/#bluefin-connect=MC1-INVITATION',pngBase64:'iVBORw0KGgo=',handle:'a'.repeat(64)};
   else if(u.pathname==='/Bluefin/Web/v1')body={version:cookieMalformed?99:1,cookieMediaLease:true,expiresInSeconds:300,maxSessionSeconds:7200,idleSeconds:90};
   else if(u.pathname==='/Bluefin/Web/v1/leases')body={version:1,mediaUrl:leaseOrigin+'/Bluefin/Web/v1/media/'+'a'.repeat(64)+'/0',
@@ -1185,8 +1185,16 @@ test('mesh browsing serializes each sort/filter/range value for the Rust String-
   const query=JSON.parse(serialized);assert(query.every(pair=>pair.length===2&&pair.every(value=>typeof value==='string')));requests.push(new Map(query));
   return JSON.stringify({Items:[movie],TotalRecordCount:120});
  }});
- const t=setup({engine});t.ui.state.mode='mesh';t.ui.state.phase='library';t.ui.state.session={user:'11111111111141118111111111111111',handle:'bluefin-mesh-v1:synthetic'};
+ const t=setup({engine});t.ui.state.mode='mesh';t.ui.state.phase='library';t.ui.state.capabilities={librarySearch:{version:1,explicitSort:true,sortBy:['SortName','DateCreated','PremiereDate'],sortOrder:['Ascending','Descending']}};t.ui.state.session={user:'11111111111141118111111111111111',handle:'bluefin-mesh-v1:synthetic'};
  await t.ui.startSearch('ocean',{scope:'library',sort:'titleDesc',favorite:true,played:'false',year:'2026'});await t.ui.loadMoreSearch('library');
  assert.equal(requests.length,2);for(const q of requests){assert.equal(q.get('SearchOrder'),'SortBy');assert.equal(q.get('SortBy'),'SortName');assert.equal(q.get('SortOrder'),'Descending');assert.equal(q.get('IsFavorite'),'true');assert.equal(q.get('IsPlayed'),'false');assert.equal(q.get('Years'),'2026');}
  assert.equal(requests[0].get('StartIndex'),'0');assert.equal(requests[1].get('StartIndex'),'1');
+});
+
+test('an older server cannot silently claim explicit search sorting',async()=>{
+ const t=setup({apiResponse:u=>u.pathname==='/Bluefin/Capabilities'?jsonReply({protocolVersion:1}):undefined});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);await t.ui.startSearch('ocean',{scope:'library',sort:'newest'});
+ assert.equal(t.ui.state.route.filters.sort,'relevance');
+ const q=new URL(t.requests.at(-1).url).searchParams;assert.equal(q.has('SortBy'),false);assert.equal(q.has('SearchOrder'),false);
+ assert.match(t.root.textContent,/Other sort options need an updated server/);
 });
