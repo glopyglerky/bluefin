@@ -542,6 +542,9 @@ pub fn call(v: &Value) -> Result<Value> {
     if op == "publicTvSearch" {
         return public_catalog::public_tv_search(v);
     }
+    if op == "publicFilmSearch" {
+        return public_catalog::public_film_search(v);
+    }
     if matches!(op, "ownedLibraryList" | "ownedLibraryImport" | "ownedLibraryRemove" | "ownedLibraryQueue"
         | "ownedLibrarySelect" | "ownedLibraryAdvance" | "ownedLibraryPlay" | "ownedLibrarySearch") {
         return owned_music::call(v, op);
