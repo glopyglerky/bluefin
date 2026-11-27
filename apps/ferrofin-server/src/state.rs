@@ -3013,12 +3013,27 @@ pub async fn build_app_state(
     )));
 
     // ---- SyncPlay ---------------------------------------------------------
-    let state = state.with_public_catalog(Arc::new(crate::public_catalog::SpecialistCatalog::new(
-        Arc::clone(&musicbrainz_client),
-        Arc::clone(&tmdb_client),
-    )));
-    let state = match bluefin_discovery::DiscoveryService::open(
+    let catalog = match bluefin_discovery::catalog::CatalogService::open(
+        &config.config_dir.join("bluefin-catalog.json"),
+    ) {
+        Ok(catalog) => Some(Arc::new(catalog.with_metadata_reader(Arc::new(
+            crate::public_catalog::SpecialistCatalog::new(
+                Arc::clone(&musicbrainz_client),
+                Arc::clone(&tmdb_client),
+            ),
+        )))),
+        Err(error) => {
+            tracing::error!(%error, "Bluefin public catalog disabled: optional settings require repair");
+            None
+        }
+    };
+    let state = match catalog.as_ref() {
+        Some(catalog) => state.with_public_catalog(Arc::clone(catalog)),
+        None => state,
+    };
+    let state = match bluefin_discovery::DiscoveryService::open_with_catalog(
         &config.config_dir.join("bluefin-discovery.json"),
+        catalog,
     ) {
         Ok(discovery) => state.with_discovery(discovery),
         Err(error) => {

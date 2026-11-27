@@ -30,7 +30,6 @@ pub mod iroh_media;
 pub mod mesh_transport;
 pub mod karaoke;
 pub mod openapi;
-pub mod public_catalog;
 pub mod panic_boundary;
 mod query;
 mod request_culture;

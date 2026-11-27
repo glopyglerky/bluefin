@@ -636,6 +636,7 @@ dependencies = [
 name = "bluefin-contract"
 version = "1.0.0"
 dependencies = [
+ "bluefin-catalog",
  "serde",
  "serde_json",
  "uuid",

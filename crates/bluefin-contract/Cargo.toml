@@ -6,6 +6,7 @@ license = "GPL-3.0-only"
 publish = false
 
 [dependencies]
+bluefin-catalog = { path = "../bluefin-catalog", default-features = false }
 serde = { version = "1", features = ["derive"] }
 uuid = { version = "1", features = ["serde"] }
 

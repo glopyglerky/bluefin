@@ -1479,9 +1479,24 @@ impl TmdbClient {
         query: &str,
         page: u32,
     ) -> Option<serde_json::Value> {
+        self.catalog_search_result(entity, query, page).await.ok()
+    }
+
+    pub async fn catalog_search_result(
+        &self,
+        entity: CatalogVideoEntity,
+        query: &str,
+        page: u32,
+    ) -> Result<serde_json::Value, crate::public_catalog::CatalogFetchError> {
+        if !(2..=160).contains(&query.trim().chars().count())
+            || query.chars().any(char::is_control)
+            || !(1..=100).contains(&page)
+        {
+            return Err(crate::public_catalog::CatalogFetchError::UnsupportedIdentity);
+        }
         let resource = entity.resource();
         self.catalog_get(&format!("search/{resource}"), &[
-            ("query", query.to_owned()),
+            ("query", query.trim().to_owned()),
             ("page", page.to_string()),
             ("include_adult", "false".to_owned()),
         ]).await
@@ -1492,6 +1507,17 @@ impl TmdbClient {
         entity: CatalogVideoEntity,
         id: u64,
     ) -> Option<serde_json::Value> {
+        self.catalog_details_result(entity, id).await.ok()
+    }
+
+    pub async fn catalog_details_result(
+        &self,
+        entity: CatalogVideoEntity,
+        id: u64,
+    ) -> Result<serde_json::Value, crate::public_catalog::CatalogFetchError> {
+        if id == 0 {
+            return Err(crate::public_catalog::CatalogFetchError::UnsupportedIdentity);
+        }
         let resource = entity.resource();
         let includes = match entity {
             CatalogVideoEntity::Person => "combined_credits,external_ids",
@@ -1500,19 +1526,26 @@ impl TmdbClient {
         self.catalog_get(&format!("{resource}/{id}"), &[("append_to_response", includes.to_owned())]).await
     }
 
-    async fn catalog_get(&self, path: &str, params: &[(&str, String)]) -> Option<serde_json::Value> {
-        let cfg = self.settings().await;
-        // Keep the optional catalog override while sharing the normal client,
-        // transport and live plugin settings. No separate credential is required.
-        let catalog_key = std::env::var("BLUEFIN_TMDB_API_KEY")
-            .ok()
-            .filter(|key| !key.trim().is_empty());
-        let key = cfg.api_key(catalog_key.as_deref().unwrap_or(self.api_key.expose_secret()));
-        let response = self.http.get(format!("{}/{path}", self.base_url))
-            .query(&[("api_key", key)])
-            .query(params).send_limited(&self.limiter).await.ok()?;
-        if !response.status().is_success() { return None; }
-        response.counted_json().await.ok()
+    async fn catalog_get(
+        &self,
+        path: &str,
+        params: &[(&str, String)],
+    ) -> Result<serde_json::Value, crate::public_catalog::CatalogFetchError> {
+        use crate::public_catalog::{self, CatalogFetchError};
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let cfg = self.settings().await;
+            let catalog_key = std::env::var("BLUEFIN_TMDB_API_KEY")
+                .ok()
+                .filter(|key| !key.trim().is_empty());
+            let key = cfg.api_key(catalog_key.as_deref().unwrap_or(self.api_key.expose_secret()));
+            let response = public_catalog::client()?
+                .get(format!("{}/{path}", self.base_url))
+                .query(&[("api_key", key)])
+                .query(params)
+                .send_limited(&self.limiter)
+                .await?;
+            public_catalog::json(response).await
+        }).await.map_err(|_| CatalogFetchError::Unavailable)?
     }
 
     /// A client using Jellyfin's built-in API key (zero configuration).

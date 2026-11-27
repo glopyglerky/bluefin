@@ -67,7 +67,7 @@ pub fn create_router(state: AppState) -> Router {
         api = api.route(&path, stub);
     }
     // Mount the real First-Light handlers over the (now-skipped) stub slots.
-    api = crate::public_catalog::register(handlers::register(api));
+    api = handlers::register(api);
     if let Some(pins) = state.tv_playback_pins.clone() {
         api = handlers::bluefin_tv_playback::register(api, state.clone(), pins);
     }

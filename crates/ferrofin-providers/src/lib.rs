@@ -41,6 +41,7 @@ pub mod opensubtitles;
 pub mod playlist_file;
 pub mod plugin_config;
 pub mod provider_manager;
+pub mod public_catalog;
 pub mod rate_limit;
 pub mod refresh_plan;
 pub mod remote_images;

@@ -123,11 +123,23 @@ pub struct DiscoveryService {
     submissions: Mutex<()>,
     network: Semaphore,
     upstream: upstream::Upstream,
-    catalog: Option<catalog::CatalogService>,
+    catalog: Option<Arc<catalog::CatalogService>>,
 }
 
 impl DiscoveryService {
     pub fn open(path: &Path) -> Result<Arc<Self>> {
+        // Optional public configuration never replaces private discovery authority.
+        let catalog = catalog::CatalogService::open(&path.with_file_name("bluefin-catalog.json"))
+            .ok()
+            .map(Arc::new);
+        Self::open_with_catalog(path, catalog)
+    }
+
+    /// Uses the process-owned public reader while loading private discovery grants normally.
+    pub fn open_with_catalog(
+        path: &Path,
+        catalog: Option<Arc<catalog::CatalogService>>,
+    ) -> Result<Arc<Self>> {
         Ok(Arc::new(Self {
             path: path.to_owned(),
             config: RwLock::new(config::load(path)?),
@@ -136,16 +148,13 @@ impl DiscoveryService {
             submissions: Mutex::new(()),
             network: Semaphore::new(8),
             upstream: upstream::Upstream::new()?,
-            // Optional public offers have separate private configuration. A bad
-            // adapter must neither disable authenticated discovery nor fall back
-            // to unconfigured public fetching.
-            catalog: catalog::CatalogService::open(&path.with_file_name("bluefin-catalog.json")).ok(),
+            catalog,
         }))
     }
 
     /// Public catalog reads are independent of optional library/request grants.
     /// Invalid optional configuration disables this adapter alone.
-    pub fn catalog(&self) -> Option<&catalog::CatalogService> {
+    pub fn catalog(&self) -> Option<&Arc<catalog::CatalogService>> {
         self.catalog.as_ref()
     }
 

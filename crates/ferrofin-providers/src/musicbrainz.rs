@@ -451,7 +451,9 @@ pub struct MusicBrainzClient {
 pub enum CatalogMusicEntity {
     Artist,
     ReleaseGroup,
+    Release,
     Recording,
+    Work,
 }
 
 impl CatalogMusicEntity {
@@ -460,6 +462,8 @@ impl CatalogMusicEntity {
             Self::Artist => "artist",
             Self::ReleaseGroup => "release-group",
             Self::Recording => "recording",
+            Self::Release => "release",
+            Self::Work => "work",
         }
     }
 }
@@ -474,15 +478,31 @@ impl std::fmt::Debug for MusicBrainzClient {
 }
 
 impl MusicBrainzClient {
-    /// Public search uses the same transport, contact agent and rate limiter as enrichment.
+    /// Public search shares configured origin, contact agent and rate limiter with enrichment.
     pub async fn catalog_search(
         &self,
         entity: CatalogMusicEntity,
         title: &str,
         offset: u32,
     ) -> Option<serde_json::Value> {
+        self.catalog_search_result(entity, title, offset).await.ok()
+    }
+
+    pub async fn catalog_search_result(
+        &self,
+        entity: CatalogMusicEntity,
+        title: &str,
+        offset: u32,
+    ) -> Result<serde_json::Value, crate::public_catalog::CatalogFetchError> {
+        if !matches!(entity, CatalogMusicEntity::Artist | CatalogMusicEntity::ReleaseGroup | CatalogMusicEntity::Recording)
+            || !(2..=160).contains(&title.trim().chars().count())
+            || title.chars().any(char::is_control)
+            || offset > 1_980
+        {
+            return Err(crate::public_catalog::CatalogFetchError::UnsupportedIdentity);
+        }
         self.public_catalog_get(&format!("/ws/2/{}", entity.resource()), &[
-            ("query", lucene_escape(title)),
+            ("query", lucene_escape(title.trim())),
             ("limit", "20".to_owned()),
             ("offset", offset.to_string()),
         ]).await
@@ -493,20 +513,46 @@ impl MusicBrainzClient {
         entity: CatalogMusicEntity,
         id: uuid::Uuid,
     ) -> Option<serde_json::Value> {
+        self.catalog_details_result(entity, id).await.ok()
+    }
+
+    pub async fn catalog_details_result(
+        &self,
+        entity: CatalogMusicEntity,
+        id: uuid::Uuid,
+    ) -> Result<serde_json::Value, crate::public_catalog::CatalogFetchError> {
+        if id.is_nil() {
+            return Err(crate::public_catalog::CatalogFetchError::UnsupportedIdentity);
+        }
         let resource = entity.resource();
         let includes = match entity {
-            CatalogMusicEntity::Artist => "release-groups+genres",
-            CatalogMusicEntity::ReleaseGroup => "artists+releases+genres",
-            CatalogMusicEntity::Recording => "artists+releases+genres",
+            CatalogMusicEntity::Artist => "url-rels+release-groups+genres",
+            CatalogMusicEntity::ReleaseGroup => "artists+releases+url-rels+genres",
+            CatalogMusicEntity::Release => "artists+recordings+release-groups+url-rels+genres",
+            CatalogMusicEntity::Recording => "artists+releases+isrcs+url-rels+genres",
+            CatalogMusicEntity::Work => "url-rels+genres",
         };
         self.public_catalog_get(&format!("/ws/2/{resource}/{id}"), &[("inc", includes.to_owned())]).await
     }
 
-    async fn public_catalog_get(&self, path: &str, params: &[(&str, String)]) -> Option<serde_json::Value> {
-        let request = self.http.get(format!("{DEFAULT_BASE_URL}{path}"))
-            .header(reqwest::header::USER_AGENT, &self.user_agent)
-            .query(&[("fmt", "json")]).query(params);
-        self.limiter.get_json(request, MIN_INTERVAL).await
+    async fn public_catalog_get(
+        &self,
+        path: &str,
+        params: &[(&str, String)],
+    ) -> Result<serde_json::Value, crate::public_catalog::CatalogFetchError> {
+        use crate::public_catalog::{self, CatalogFetchError};
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let cfg = self.settings().await;
+            let request = public_catalog::client()?
+                .get(format!("{}{path}", cfg.server))
+                .header(reqwest::header::USER_AGENT, &self.user_agent)
+                .query(&[("fmt", "json")])
+                .query(params);
+            let response = self.limiter
+                .send_request(request, Self::request_interval(&cfg.server, cfg.rate_limit))
+                .await?;
+            public_catalog::json(response).await
+        }).await.map_err(|_| CatalogFetchError::Unavailable)?
     }
     /// A client against `base_url` (empty → [`DEFAULT_BASE_URL`]); `version` is
     /// stamped into the required descriptive `User-Agent`.
@@ -1007,6 +1053,28 @@ fn lucene_escape(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn public_catalog_uses_configured_origin_and_keeps_release_identity() {
+        let server = crate::mock_http::MockServer::always(
+            r#"{"id":"a1b2c3d4-1111-2222-3333-444455556666","title":"Fixture edition","recordings":[]}"#
+        ).await;
+        let client = MusicBrainzClient::new(&server.base_url, "catalog-fixture");
+        client.attach_plugin_manager(crate::plugin_config::tests_support::manager_with(
+            crate::builtin_plugins::MUSICBRAINZ.id,
+            br#"{"Server":"https://unused.example.invalid","RateLimit":0.01}"#.to_vec(),
+        ));
+        assert!(client.catalog_search_result(CatalogMusicEntity::Recording, "AC/DC", 20).await.is_ok());
+        let id = uuid::Uuid::parse_str("a1b2c3d4-1111-2222-3333-444455556666").unwrap();
+        let edition = client.catalog_details_result(CatalogMusicEntity::Release, id).await.unwrap();
+        assert_eq!(edition["id"], id.to_string());
+        assert_eq!(server.query_values("/ws/2/recording", "query"), ["AC\\/DC"]);
+        assert_eq!(server.query_values("/ws/2/recording", "offset"), ["20"]);
+        assert_eq!(
+            server.query_values("/ws/2/release/", "inc"),
+            ["artists+recordings+release-groups+url-rels+genres"]
+        );
+    }
+
     #[test]
     fn partial_dates_default_the_missing_parts_to_the_first() {
         assert_eq!(
