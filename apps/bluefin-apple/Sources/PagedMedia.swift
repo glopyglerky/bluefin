@@ -20,9 +20,13 @@ struct MediaPageWindow {
     var hasMore: Bool { nextIndex < total }
     var cachedPageCount: Int { cachedPositions.count }
     var cachedItemCount: Int { cachedPositions.reduce(0) { $0 + (pages[$1].items?.count ?? 0) } }
+    private static func identity(of item: MediaItem) -> String {
+        if let entry = item.PlaylistItemId, !entry.isEmpty { return item.Id + ":" + entry }
+        return item.Id
+    }
     var items: [MediaItem] {
         var ids = Set<String>()
-        return cachedPositions.sorted().flatMap { pages[$0].items ?? [] }.filter { ids.insert($0.Id).inserted }
+        return cachedPositions.sorted().flatMap { pages[$0].items ?? [] }.filter { ids.insert(Self.identity(of: $0)).inserted }
     }
     private func pagePosition(containing index: Int) -> Int? {
         // Pages are ordered. Binary search avoids scanning the scroll history.
@@ -58,7 +62,7 @@ struct MediaPageWindow {
         return cachedPositions.contains { position in
             let page = pages[position]
             guard page.start <= index, let values = page.items else { return false }
-            return values.prefix(max(0, index - page.start)).contains { $0.Id == item.Id }
+            return values.prefix(max(0, index - page.start)).contains { Self.identity(of: $0) == Self.identity(of: item) }
         }
     }
     mutating func append(_ result: ItemPage) { install(result, at: nextIndex) }

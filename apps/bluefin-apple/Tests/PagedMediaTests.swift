@@ -39,6 +39,19 @@ import XCTest
         XCTAssertLessThanOrEqual(window.cachedItemCount, 300)
     }
 
+    func testDistinctPlaylistEntriesKeepRepeatedSongs() {
+        var first = MediaItem(Id: "same-song")
+        first.PlaylistItemId = "entry-one"
+        var second = first
+        second.PlaylistItemId = "entry-two"
+        var window = MediaPageWindow()
+        window.append(.init(Items: [first, second], TotalRecordCount: 2))
+        XCTAssertEqual(window.items.count, 2)
+        XCTAssertFalse(window.isDuplicate(at: 1))
+        window.append(.init(Items: [second], TotalRecordCount: 3))
+        XCTAssertTrue(window.isDuplicate(at: 2))
+    }
+
     func testRehydratingRemovedTitlesPreservesSlotsWithoutRepeatedLoading() {
         var window = MediaPageWindow()
         window.append(page(0))

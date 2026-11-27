@@ -73,8 +73,8 @@ struct MusicPlayActions: View {
     let play: (Bool) -> Void
     var body: some View {
         HStack(spacing: 14) {
-            Button { play(false) } label: { Label(pageOnly ? "Play page" : "Play", systemImage: "play.fill").frame(maxWidth: .infinity, minHeight: 44) }
-            Button { play(true) } label: { Label(pageOnly ? "Shuffle page" : "Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity, minHeight: 44) }
+            Button { play(false) } label: { Label(pageOnly ? "Play loaded songs" : "Play", systemImage: "play.fill").frame(maxWidth: .infinity, minHeight: 44) }
+            Button { play(true) } label: { Label(pageOnly ? "Shuffle loaded songs" : "Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity, minHeight: 44) }
         }.buttonStyle(.bordered).tint(BluefinStyle.accent).disabled(disabled)
     }
 }
