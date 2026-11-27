@@ -709,6 +709,11 @@ test('film catalog resolves ranked Wikidata titles without connecting a library'
   if(u.hostname!=='www.wikidata.org')return undefined;
   if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[
    {title:'Q184843'},{title:'Q184843'},{title:'Q1234567890123456789'},{title:'File:Unrelated'}]}});
+  if(u.searchParams.get('action')==='wbgetclaims')return jsonReply({claims:{P9586:[
+   {rank:'normal',mainsnak:{datavalue:{value:'umc.cmc.abcdefghijklmnopqrstuv'}}},
+   {rank:'deprecated',mainsnak:{datavalue:{value:'umc.cmc.zzzzzzzzzzzzzzzzzzzzzz'}}},
+   {rank:'normal',mainsnak:{datavalue:{value:'https://unrelated.test/play'}}}
+  ]}});
   return jsonReply({entities:{Q184843:{labels:{en:{value:'Blade Runner'}},
    descriptions:{en:{value:'1982 film directed by Ridley Scott'}}}}});
  }});
@@ -725,6 +730,15 @@ test('film catalog resolves ranked Wikidata titles without connecting a library'
  assert.equal(link.href,'https://www.wikidata.org/wiki/Q184843');
  assert(link.textContent.includes('1982 film directed by Ridley Scott'));
  assert(t.root.textContent.includes('Streaming availability for these results is unverified.'));
+ assert(!findElement(t.root,e=>e.tagName==='A'&&e.textContent.includes('Open title in Apple TV')));
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Find provider links')).listeners.click();
+ const provider=t.requests.find(r=>new URL(r.url).searchParams.get('action')==='wbgetclaims');
+ assert.equal(new URL(provider.url).searchParams.get('entity'),'Q184843');
+ assert.equal(provider.options.credentials,'omit');
+ assert.equal(findElement(t.root,e=>e.tagName==='A'&&e.textContent==='Open title in Apple TV').href,
+  'https://tv.apple.com/movie/umc.cmc.abcdefghijklmnopqrstuv');
+ assert(!findElement(t.root,e=>String(e.href).includes('unrelated.test')||String(e.href).includes('zzzzzzzz')));
+ assert(t.root.textContent.includes('Apple TV checks regional availability and account access.'));
 });
 
 test('moonlit explicit search history uses the current account revision and survives a stale write rejection',async()=>{
