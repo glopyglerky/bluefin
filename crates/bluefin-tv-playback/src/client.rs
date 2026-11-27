@@ -137,20 +137,8 @@ pub fn apply(input: &[u8]) -> Result<Value, &'static str> {
             Ok(json!(current))
         }
         Command::Handoff { url } => {
-            // Exact public provider watch URL, no arbitrary scheme, credentials,
-            // redirects, fragments, tracking parameters or caller-selected apps.
-            let prefix = "https://www.youtube.com/watch?v=";
-            let id = url
-                .strip_prefix(prefix)
-                .ok_or("unsupported provider link")?;
-            if id.len() != 11
-                || !id
-                    .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
-            {
-                return Err("invalid provider link");
-            }
-            Ok(json!({"url":url,"provider":"YouTube"}))
+            let (provider, kind) = direct_destination(&url).ok_or("unsupported provider link")?;
+            Ok(json!({"url":url,"provider":provider,"kind":kind}))
         }
         Command::Seek {
             position,
@@ -158,6 +146,132 @@ pub fn apply(input: &[u8]) -> Result<Value, &'static str> {
             duration,
         } => Ok(json!(position.saturating_add_signed(delta).min(duration))),
     }
+}
+
+fn direct_destination(url: &str) -> Option<(&'static str, &'static str)> {
+    let alphanumeric = |id: &str| id.bytes().all(|ch| ch.is_ascii_alphanumeric());
+    let number = |id: &str| (6..=8).contains(&id.len()) && id.bytes().all(|ch| ch.is_ascii_digit());
+    let slug = |id: &str| {
+        (1..=200).contains(&id.len())
+            && id.split('-').all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+            })
+    };
+    let uuid = |id: &str| {
+        id.len() == 36
+            && id.bytes().enumerate().all(|(i, ch)| {
+                if matches!(i, 8 | 13 | 18 | 23) {
+                    ch == b'-'
+                } else {
+                    ch.is_ascii_hexdigit()
+                }
+            })
+    };
+    let opaque = |id: &str| {
+        id.bytes()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'_' | b'-'))
+    };
+    let routes: [(&str, &str, &str, &dyn Fn(&str) -> bool); 17] = [
+        (
+            "https://www.youtube.com/watch?v=",
+            "YouTube",
+            "player",
+            &|id| id.len() == 11 && opaque(id),
+        ),
+        (
+            "https://www.netflix.com/watch/",
+            "Netflix",
+            "player",
+            &number,
+        ),
+        (
+            "https://www.netflix.com/title/",
+            "Netflix",
+            "title",
+            &number,
+        ),
+        (
+            "https://www.disneyplus.com/browse/entity-",
+            "Disney+",
+            "title",
+            &uuid,
+        ),
+        (
+            "https://www.disneyplus.com/browse/page-",
+            "Disney+",
+            "title",
+            &uuid,
+        ),
+        (
+            "https://www.disneyplus.com/movies/wd/",
+            "Disney+",
+            "title",
+            &|id| id.len() == 12 && alphanumeric(id),
+        ),
+        (
+            "https://www.disneyplus.com/series/wp/",
+            "Disney+",
+            "title",
+            &|id| id.len() == 12 && alphanumeric(id),
+        ),
+        ("https://www.hulu.com/movie/", "Hulu", "title", &uuid),
+        ("https://www.hulu.com/series/", "Hulu", "title", &uuid),
+        (
+            "https://www.paramountplus.com/shows/video/",
+            "Paramount+",
+            "player",
+            &|id| {
+                id.strip_suffix('/')
+                    .is_some_and(|id| (8..=80).contains(&id.len()) && opaque(id))
+            },
+        ),
+        (
+            "https://www.peacocktv.com/stream-tv/",
+            "Peacock",
+            "title",
+            &slug,
+        ),
+        (
+            "https://www.peacocktv.com/stream-movies/",
+            "Peacock",
+            "title",
+            &slug,
+        ),
+        (
+            "https://www.amazon.com/gp/video/detail/",
+            "Prime Video",
+            "title",
+            &|id| {
+                id.len() == 10
+                    && id.starts_with('B')
+                    && id
+                        .bytes()
+                        .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+            },
+        ),
+        ("https://www.hbomax.com/movie/", "HBO Max", "title", &uuid),
+        ("https://www.hbomax.com/show/", "HBO Max", "title", &uuid),
+        ("https://tubitv.com/movies/", "Tubi", "title", &|id| {
+            (1..=12).contains(&id.len())
+                && !id.starts_with('0')
+                && id.bytes().all(|ch| ch.is_ascii_digit())
+        }),
+        ("https://tubitv.com/series/", "Tubi", "title", &|id| {
+            (1..=12).contains(&id.len())
+                && !id.starts_with('0')
+                && id.bytes().all(|ch| ch.is_ascii_digit())
+        }),
+    ];
+    routes
+        .into_iter()
+        .find_map(|(prefix, provider, kind, valid)| {
+            url.strip_prefix(prefix)
+                .filter(|id| valid(id))
+                .map(|_| (provider, kind))
+        })
 }
 fn valid_id(id: &str) -> bool {
     id.len() == 32 && id.bytes().all(|c| c.is_ascii_hexdigit())
@@ -188,5 +302,21 @@ mod tests {
             apply(br#"{"op":"handoff","url":"https://www.youtube.com/watch?v=abcdefghijk"}"#)
                 .is_ok()
         );
+        assert_eq!(
+            apply(br#"{"op":"handoff","url":"https://www.netflix.com/watch/80234304"}"#).unwrap()["kind"],
+            "player"
+        );
+        assert_eq!(
+            apply(br#"{"op":"handoff","url":"https://www.peacocktv.com/stream-movies/psych-3-this-is-gus"}"#).unwrap()["provider"],
+            "Peacock"
+        );
+        for invalid in [
+            "https://www.netflix.com/watch/80234304?token=secret",
+            "https://www.netflix.com@unrelated.test/watch/80234304",
+            "https://www.paramountplus.com/shows/video/abc12345/extra/",
+            "https://tv.apple.com/movie/umc.cmc.intermediary",
+        ] {
+            assert_eq!(direct_destination(invalid), None);
+        }
     }
 }

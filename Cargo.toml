@@ -7,6 +7,7 @@ members = [
     "crates/bluefin-sync-play",
     "crates/bluefin-iroh-server",
     "crates/bluefin-discovery",
+    "crates/bluefin-catalog",
     "crates/bluefin-karaoke",
     "crates/bluefin-karaoke-engine",
     "crates/bluefin-tv-playback",
@@ -71,6 +72,7 @@ needless_collect = "warn"
 or_fun_call = "warn"
 
 [workspace.dependencies]
+bluefin-catalog = { path = "crates/bluefin-catalog", default-features = false }
 if-addrs = { version = "0.15.0", features = ["link-local"] }
 # ── intra-workspace (path deps added as crates land) ───────────────
 ferrofin-util = { path = "crates/ferrofin-util" }

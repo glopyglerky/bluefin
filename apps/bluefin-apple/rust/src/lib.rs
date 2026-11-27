@@ -548,11 +548,11 @@ pub fn call(v: &Value) -> Result<Value> {
     if op == "publicFilmSearch" {
         return public_catalog::public_film_search(v);
     }
-    if op == "publicFilmSources" {
-        return public_catalog::public_film_sources(v);
+    if op == "publicTitleSources" {
+        return public_catalog::public_title_sources(v);
     }
-    if op == "publicFilmIdentity" {
-        return public_catalog::public_film_identity(v);
+    if matches!(op, "publicCatalogOffers" | "publicCatalogProviders") {
+        return public_catalog::regional_access(v, op == "publicCatalogOffers");
     }
     if matches!(op, "ownedLibraryList" | "ownedLibraryImport" | "ownedLibraryRemove" | "ownedLibraryQueue"
         | "ownedLibrarySelect" | "ownedLibraryAdvance" | "ownedLibraryPlay" | "ownedLibrarySearch") {
@@ -773,7 +773,11 @@ pub fn call(v: &Value) -> Result<Value> {
                 ),
                 ("Limit", count(v, "limit", 50, 200)?.to_string()),
                 ("Recursive", "true".into()),
-                ("Fields", "PrimaryImageAspectRatio,Overview".into()),
+                ("Fields", if v.get("searchScope").and_then(Value::as_str).is_some() {
+                    "PrimaryImageAspectRatio,Overview,ProviderIds"
+                } else {
+                    "PrimaryImageAspectRatio,Overview"
+                }.into()),
             ];
             for (key, out) in [
                 ("parentId", "ParentId"),

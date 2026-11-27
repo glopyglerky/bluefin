@@ -133,6 +133,9 @@ struct MusicCollection: View {
         ScrollViewReader { reader in
             List {
                 if let parent { Section { collectionHeader(parent).listRowBackground(Color.clear) } }
+                if let parent, let offer = CatalogOfferReference(item: parent) {
+                    Section("Availability") { CatalogOfferPanel(reference: offer) }
+                }
                 if !isPlaylist && !isAlbum {
                     Section {
                         HStack {

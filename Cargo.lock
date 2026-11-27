@@ -620,6 +620,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bluefin-catalog"
+version = "0.4.1"
+dependencies = [
+ "base64 0.22.1",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "bluefin-contract"
 version = "1.0.0"
 dependencies = [
@@ -633,6 +646,7 @@ name = "bluefin-discovery"
 version = "0.4.1"
 dependencies = [
  "axum",
+ "bluefin-catalog",
  "bluefin-contract",
  "reqwest",
  "serde",

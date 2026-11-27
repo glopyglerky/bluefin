@@ -10,6 +10,8 @@ android {
         applicationId = "org.bluefin.android"
         minSdk = 26
         targetSdk = 36
+        manifestPlaceholders["bluefinPublicCatalogOrigin"] =
+            providers.gradleProperty("bluefinPublicCatalogOrigin").getOrElse("")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = 1
         versionName = "0.1.0-prealpha"

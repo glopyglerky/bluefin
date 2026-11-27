@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 pub mod discovery;
 pub mod owned_library;
+pub mod public_catalog;
 pub mod search;
 pub mod sports;
 pub mod transport;

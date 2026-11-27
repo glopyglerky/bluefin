@@ -447,6 +447,23 @@ pub struct MusicBrainzClient {
     limiter: RateLimiter,
 }
 
+#[derive(Clone, Copy)]
+pub enum CatalogMusicEntity {
+    Artist,
+    ReleaseGroup,
+    Recording,
+}
+
+impl CatalogMusicEntity {
+    fn resource(self) -> &'static str {
+        match self {
+            Self::Artist => "artist",
+            Self::ReleaseGroup => "release-group",
+            Self::Recording => "recording",
+        }
+    }
+}
+
 impl std::fmt::Debug for MusicBrainzClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MusicBrainzClient")
@@ -457,6 +474,40 @@ impl std::fmt::Debug for MusicBrainzClient {
 }
 
 impl MusicBrainzClient {
+    /// Public search uses the same transport, contact agent and rate limiter as enrichment.
+    pub async fn catalog_search(
+        &self,
+        entity: CatalogMusicEntity,
+        title: &str,
+        offset: u32,
+    ) -> Option<serde_json::Value> {
+        self.public_catalog_get(&format!("/ws/2/{}", entity.resource()), &[
+            ("query", lucene_escape(title)),
+            ("limit", "20".to_owned()),
+            ("offset", offset.to_string()),
+        ]).await
+    }
+
+    pub async fn catalog_details(
+        &self,
+        entity: CatalogMusicEntity,
+        id: uuid::Uuid,
+    ) -> Option<serde_json::Value> {
+        let resource = entity.resource();
+        let includes = match entity {
+            CatalogMusicEntity::Artist => "release-groups+genres",
+            CatalogMusicEntity::ReleaseGroup => "artists+releases+genres",
+            CatalogMusicEntity::Recording => "artists+releases+genres",
+        };
+        self.public_catalog_get(&format!("/ws/2/{resource}/{id}"), &[("inc", includes.to_owned())]).await
+    }
+
+    async fn public_catalog_get(&self, path: &str, params: &[(&str, String)]) -> Option<serde_json::Value> {
+        let request = self.http.get(format!("{DEFAULT_BASE_URL}{path}"))
+            .header(reqwest::header::USER_AGENT, &self.user_agent)
+            .query(&[("fmt", "json")]).query(params);
+        self.limiter.get_json(request, MIN_INTERVAL).await
+    }
     /// A client against `base_url` (empty → [`DEFAULT_BASE_URL`]); `version` is
     /// stamped into the required descriptive `User-Agent`.
     #[must_use]

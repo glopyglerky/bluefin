@@ -439,7 +439,10 @@ private struct PublicTitleSearchSection: View {
         let year: String?
         let description: String?
         let artwork: URL?
+        let artworkCredit: PublicTitleProviderChoices.ArtworkCredit?
         let sourceUrl: URL
+        let imdbId: String?
+        let links: [PublicTitleProviderChoices.Destination]?
     }
 
     let query: String
@@ -462,29 +465,33 @@ private struct PublicTitleSearchSection: View {
                         Text("No matches from \(catalog.provider).").foregroundStyle(.secondary)
                     } else if let page {
                         ForEach(page.results) { item in
-                            VStack(alignment: .leading, spacing: 8) {
-                                Link(destination: item.sourceUrl) {
-                                    HStack(spacing: 14) {
-                                        AsyncImage(url: item.artwork) { image in
-                                            image.resizable().scaledToFill()
-                                        } placeholder: {
-                                            Image(systemName: catalog.icon).foregroundStyle(.secondary)
-                                        }
+                            NavigationLink {
+                                PublicTitleProviderChoices(
+                                catalogID: item.sourceUrl.lastPathComponent,
+                                kind: catalog == .film ? "movie" : "series",
+                                imdbId: item.imdbId,
+                                title: item.title,
+                                subtitle: [item.description ?? item.year, catalog.provider].compactMap { $0 }.joined(separator: " · "),
+                                artwork: item.artwork,
+                                artworkCredit: item.artworkCredit,
+                                overview: item.description,
+                                initialLinks: item.links ?? [],
+                                icon: catalog.icon,
+                                library: library
+                                )
+                            } label: {
+                                HStack(spacing: 14) {
+                                    AsyncImage(url: item.artwork) { image in image.resizable().scaledToFill() }
+                                    placeholder: { Image(systemName: catalog.icon).foregroundStyle(.secondary) }
                                         .frame(width: 46, height: 64).clipped().accessibilityHidden(true)
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(item.title).font(.headline)
-                                            Text([item.description ?? item.year, catalog.provider].compactMap { $0 }.joined(separator: " · "))
-                                                .font(.caption).foregroundStyle(.secondary)
-                                        }
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.title).font(.headline)
+                                        Text([item.year, catalog.provider].compactMap { $0 }.joined(separator: " · "))
+                                            .font(.caption).foregroundStyle(.secondary)
                                     }
-                                }.accessibilityHint("Open title information on \(catalog.provider)")
-                                if catalog == .film {
-                                    PublicFilmProviderLinks(catalogID: item.sourceUrl.lastPathComponent, library: library)
                                 }
                             }
                         }
-                        Text("Streaming availability for these results is unverified.")
-                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -511,112 +518,366 @@ private struct PublicTitleSearchSection: View {
     }
 }
 
-private struct PublicFilmProviderLinks: View {
+private struct PublicTitleProviderChoices: View {
     struct Result: Decodable, Sendable {
-        let checked: Bool
-        let offers: [Offer]
-        let sources: [URL]
+        let links: [Destination]
+        let imdbIds: [String]
+        let tmdbId: String?
+        let description: String?
+        let credits: [Credit]?
     }
-    struct Offer: Decodable, Identifiable, Sendable {
-        let id: String
-        let currency: String
-        let rent: Double?
-        let buy: Double?
-        let destination: URL
+    struct Credit: Decodable, Sendable, Hashable { let name: String; let role: String }
+    struct ArtworkCredit: Decodable, Sendable { let author: String; let url: URL; let license: String; let licenseUrl: URL? }
+    struct Destination: Decodable, Sendable, Identifiable {
+        let provider: String
+        let url: URL
+        let kind: String
+        var id: URL { url }
+        var action: String { (kind == "player" ? "Watch on " : "Open on ") + provider }
     }
-    struct Request: Hashable {
-        let region: String
-        let attempt: Int
-    }
-    struct Identity: Decodable, Sendable { let imdbIds: [String] }
 
     let catalogID: String
+    let kind: String
+    let imdbId: String?
+    let title: String
+    let subtitle: String
+    let artwork: URL?
+    let artworkCredit: ArtworkCredit?
+    let overview: String?
+    let initialLinks: [Destination]
+    let icon: String
     let library: [MediaItem]
     @EnvironmentObject private var store: LibraryStore
-    @State private var attempt = 0
-    @State private var region = (Locale.current.regionCode ?? "US").uppercased()
-    @State private var completed: Request?
+    @State private var attempt = 1
+    @State private var completed = 0
     @State private var result: Result?
-    @State private var identities: Set<String> = []
-    private var request: Request { Request(region: region, attempt: attempt) }
-    private static let regions = Locale.isoRegionCodes.compactMap { code in
-        Locale.current.localizedString(forRegionCode: code).map { (code: code, name: $0) }
-    }.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    private var destinations: [Destination] {
+        var seen = Set<URL>()
+        return ((result?.links ?? []) + initialLinks).filter { seen.insert($0.url).inserted }
+    }
+
+    private var playableLibraryItems: [MediaItem] {
+        guard kind == "movie" else { return [] }
+        return library.filter { media in
+            guard media.Type == "Movie", let id = media.ProviderIds?["Imdb"] ?? media.ProviderIds?["IMDb"] else {
+                return false
+            }
+            return id == imdbId || result?.imdbIds.contains(id) == true
+        }
+    }
 
     var body: some View {
-        Group {
-            if attempt == 0 {
-                Button("Where to watch") { attempt += 1 }
-            } else {
-                ForEach(library.filter { media in
-                    media.Type == "Movie" && (media.ProviderIds?["Imdb"] ?? media.ProviderIds?["IMDb"]).map(identities.contains) == true
-                }) { media in
-                    Button(media.resumeTicks > 0 ? "Resume in Bluefin" : "Play in Bluefin") {
-                        Task { await store.play(media) }
+        List {
+            Section {
+                HStack(spacing: 14) {
+                    AsyncImage(url: artwork) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        Image(systemName: icon).foregroundStyle(.secondary)
+                    }
+                    .frame(width: 100, height: 145).clipped().accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title).font(.headline)
+                        Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                        if let text = result?.description ?? overview, !text.isEmpty { Text(text) }
                     }
                 }
-                Picker("Storefront region", selection: $region) {
-                    ForEach(Self.regions, id: \.code) { choice in Text(choice.name).tag(choice.code) }
+                if let artworkCredit {
+                    Link(artworkCredit.author, destination: artworkCredit.url)
+                    if let license = artworkCredit.licenseUrl { Link(artworkCredit.license, destination: license) }
                 }
-                if completed != request {
-                    ProgressView("Checking availability")
-                } else if let result {
-                    if result.checked {
-                        Text("Apple storefront · \(Locale.current.localizedString(forRegionCode: region) ?? region)")
-                        if result.offers.isEmpty {
-                            Text("No rent or buy offer returned for this region.").foregroundStyle(.secondary)
-                        }
-                        ForEach(result.offers) { offer in
-                            VStack(alignment: .leading, spacing: 4) {
-                                if let rent = offer.rent {
-                                    Text("Rent \(rent.formatted(.currency(code: offer.currency)))")
-                                }
-                                if let buy = offer.buy {
-                                    Text("Buy \(buy.formatted(.currency(code: offer.currency)))")
-                                }
-                                Link("Continue to Apple TV", destination: offer.destination)
-                            }
-                        }
-                    } else {
-                        Text("No regional offers could be verified for this film.").foregroundStyle(.secondary)
-                        ForEach(result.sources, id: \.self) { destination in
-                            Link("Open title in Apple TV", destination: destination)
+            }
+            if !playableLibraryItems.isEmpty {
+                Section {
+                    ForEach(playableLibraryItems) { media in
+                        Button(media.resumeTicks > 0 ? "Resume in Bluefin" : "Play in Bluefin") {
+                            Task { await store.play(media) }
                         }
                     }
-                } else {
-                    Text("The Apple storefront could not be checked.").foregroundStyle(.secondary)
-                    Button("Retry availability") { attempt += 1 }
+                }
+            }
+            if let reference = CatalogOfferReference.video(kind: kind, tmdb: result?.tmdbId,
+                                                            imdb: imdbId ?? result?.imdbIds.first) {
+                Section("Availability") { CatalogOfferPanel(reference: reference) }
+            }
+            Section("Catalog links") {
+                ForEach(destinations) { destination in
+                    Link(destination.action, destination: destination.url)
+                }
+                if attempt > completed { ProgressView("Looking up providers") }
+                else if result == nil { Button("Retry provider lookup") { attempt += 1 } }
+                else if destinations.isEmpty { Text("No direct provider destinations found.").foregroundStyle(.secondary) }
+            }
+            if let credits = result?.credits, !credits.isEmpty {
+                Section("Credits") {
+                    ForEach(credits.indices, id: \.self) { index in
+                        VStack(alignment: .leading) {
+                            Text(credits[index].name)
+                            Text(credits[index].role).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
         }
-        .font(.caption)
-        .task(id: attempt > 0 && !library.isEmpty) {
-            guard attempt > 0, !library.isEmpty else { identities = []; return }
+        .navigationTitle(title)
+        .task(id: attempt) {
+            let request = attempt
+            guard request > 0 else { return }
+            var fields = ["id": catalogID, "kind": kind]
+            fields["imdbId"] = imdbId
             do {
-                let identity: Identity = try await RustBridge.call("publicFilmIdentity", fields: ["id": catalogID])
-                try Task.checkCancellation()
-                identities = Set(identity.imdbIds)
-            } catch is CancellationError {} catch {
-                guard !Task.isCancelled else { return }
-                identities = []
-            }
-        }
-        .task(id: request) {
-            let current = request
-            guard current.attempt > 0 else { return }
-            do {
-                let response: Result = try await RustBridge.call("publicFilmSources", fields: [
-                    "id": catalogID, "region": current.region
-                ])
+                let response: Result = try await RustBridge.call("publicTitleSources", fields: fields)
                 try Task.checkCancellation()
                 result = response
-                completed = current
+                completed = request
             } catch is CancellationError {} catch {
                 guard !Task.isCancelled else { return }
                 result = nil
-                completed = current
+                completed = request
             }
         }
+    }
+}
+
+struct CatalogOfferReference: Hashable, Sendable {
+    let kind: String
+    let source: String
+    let id: String
+
+    static func video(kind: String, tmdb: String?, imdb: String?) -> Self? {
+        guard kind == "movie" || kind == "series" else { return nil }
+        if let tmdb, tmdb.range(of: #"^[1-9][0-9]{0,11}$"#, options: .regularExpression) != nil {
+            return Self(kind: kind, source: "tmdb", id: tmdb)
+        }
+        if let imdb, imdb.range(of: #"^tt[0-9]{7,12}$"#, options: .regularExpression) != nil {
+            return Self(kind: kind, source: "imdb", id: imdb)
+        }
+        return nil
+    }
+
+    init?(item: MediaItem) {
+        let ids = item.ProviderIds ?? [:]
+        func provider(_ key: String) -> String? {
+            ids.first { $0.key.caseInsensitiveCompare(key) == .orderedSame }?.value
+        }
+        switch item.Type {
+        case "Movie", "Series":
+            guard let video = Self.video(kind: item.Type == "Movie" ? "movie" : "series",
+                                         tmdb: provider("Tmdb"), imdb: provider("Imdb")) else { return nil }
+            self = video
+        case "MusicArtist", "MusicAlbum", "Audio":
+            let mapping: (String, String)
+            if item.Type == "MusicArtist" { mapping = ("artist", "MusicBrainzArtist") }
+            else if item.Type == "Audio" { mapping = ("recording", "MusicBrainzRecording") }
+            else if let group = provider("MusicBrainzReleaseGroup"), UUID(uuidString: group) != nil { mapping = ("releaseGroup", "MusicBrainzReleaseGroup") }
+            else { mapping = ("release", "MusicBrainzAlbum") }
+            guard let raw = provider(mapping.1), let uuid = UUID(uuidString: raw), uuid.uuidString != "00000000-0000-0000-0000-000000000000" else { return nil }
+            self = Self(kind: mapping.0, source: "musicbrainz", id: uuid.uuidString.lowercased())
+        default: return nil
+        }
+    }
+
+    private init(kind: String, source: String, id: String) {
+        self.kind = kind
+        self.source = source
+        self.id = id
+    }
+}
+
+struct CatalogOfferPanel: View {
+    private struct Country: Decodable, Sendable { let code: String; let name: String }
+    private struct Registry: Decodable, Sendable { let countries: [Country] }
+    private struct Response: Decodable, Sendable {
+        let offers: [Offer]
+        let sources: [Source]
+    }
+    private struct Source: Decodable, Sendable {
+        struct Attribution: Decodable, Sendable { let name: String; let url: URL }
+        let source: String
+        let attributions: [Attribution]
+        let scope: String
+        let status: String
+        var label: String {
+            switch status {
+            case "complete": return "Reported coverage"
+            case "partial": return "Partial coverage"
+            case "noOffers": return "No offers reported"
+            case "missingCredentials": return "Source not configured"
+            case "notFound": return "Title not found"
+            case "identityMismatch": return "Title could not be confirmed"
+            case "denied": return "Access denied"
+            case "invalidResponse": return "Invalid response"
+            case "rateLimited": return "Rate limited"
+            case "unsupportedCountry": return "Country unsupported"
+            case "unsupportedIdentity": return "Title type unsupported"
+            default: return "Unavailable"
+            }
+        }
+    }
+    private struct Offer: Decodable, Sendable, Identifiable {
+        struct Service: Decodable, Sendable { let name: String }
+        struct Destination: Decodable, Sendable { let kind: String; let url: URL }
+        struct Price: Decodable, Sendable { let amount: String?; let currency: String?; let formatted: String? }
+        struct Evidence: Decodable, Sendable {
+            let source: String
+            let observedAt: UInt64
+            let expiresAt: UInt64?
+            let regionVerified: Bool
+        }
+        let id: String
+        let country: String?
+        let service: Service
+        let accessType: String
+        let rawAccessType: String?
+        let addon: Service?
+        let destinations: [Destination]
+        let price: Price?
+        let quality: String?
+        let evidence: Evidence
+        var market: String {
+            guard evidence.regionVerified, let country,
+                  country.range(of: #"^[A-Z]{2}$"#, options: .regularExpression) != nil else { return "" }
+            return country
+        }
+        var expired: Bool {
+            guard let expiry = evidence.expiresAt else { return false }
+            return Date(timeIntervalSince1970: TimeInterval(expiry)) <= Date()
+        }
+        var destination: Destination? {
+            guard !expired else { return nil }
+            let order = accessType == "download" ? ["download", "title"] : ["player", "title", "download"]
+            for kind in order {
+                if let option = destinations.first(where: {
+                    $0.kind == kind && $0.url.scheme?.lowercased() == "https" &&
+                        $0.url.host != nil && $0.url.user == nil && $0.url.password == nil
+                }) { return option }
+            }
+            return nil
+        }
+        var accessLabel: String {
+            ["ads": "With ads", "free": "Free", "subscription": "Subscription", "rent": "Rent",
+             "buy": "Buy", "download": "Download", "addon": "Add-on"][accessType] ?? rawAccessType ?? "Other access"
+        }
+        func action(_ destination: Destination) -> String {
+            if ["rent", "buy", "download"].contains(accessType) { return "\(accessLabel) on \(service.name)" }
+            let verb = destination.kind == "player" ? "Play" : destination.kind == "download" ? "Download" : "Open"
+            return "\(verb) on \(service.name)"
+        }
+        var facts: String {
+            let priceLabel = price?.formatted ?? [price?.amount, price?.currency].compactMap { $0 }.joined(separator: " ")
+            let checked = evidence.observedAt > 0 ?
+                Date(timeIntervalSince1970: TimeInterval(evidence.observedAt)).formatted(date: .abbreviated, time: .shortened) : nil
+            return [accessLabel, addon?.name, quality, priceLabel, expired ? "Expired" : nil,
+                    !evidence.regionVerified ? "Region unverified" : nil, evidence.source, checked]
+                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        }
+    }
+
+    let reference: CatalogOfferReference
+    @EnvironmentObject private var store: LibraryStore
+    @State private var country = ""
+    @State private var registry: [Country] = []
+    @State private var response: Response?
+    @State private var unavailable = false
+    @State private var retry = 0
+    @State private var openMarkets: Set<String> = []
+
+    private var origin: String? {
+        if let configured = Bundle.main.object(forInfoDictionaryKey: "BluefinPublicCatalogOrigin") as? String,
+           let url = URL(string: configured), url.scheme == "https", url.host != nil {
+            return configured
+        }
+        return store.session?.server
+    }
+    private func name(_ code: String) -> String {
+        if code.isEmpty { return "Region unverified" }
+        return registry.first { $0.code == code }?.name ?? Locale.current.localizedString(forRegionCode: code) ?? code
+    }
+    private var countries: [String] {
+        let listed = registry.map(\.code) + (response?.offers.map(\.market) ?? []) + [country]
+        return Array(Set(listed.filter { !$0.isEmpty })).sorted { name($0) < name($1) }
+    }
+
+    var body: some View {
+        Group {
+            Picker("Country", selection: $country) {
+                Text("All regions").tag("")
+                ForEach(countries, id: \.self) { Text(name($0)).tag($0) }
+            }
+            if unavailable || origin?.isEmpty != false {
+                Text("Availability is unavailable.").foregroundStyle(.secondary)
+                if origin?.isEmpty == false { Button("Retry availability") { retry += 1 } }
+            } else if let response {
+                let groups = Dictionary(grouping: response.offers) { $0.market }
+                    .filter { country.isEmpty || $0.key.isEmpty || $0.key == country }
+                if groups.isEmpty {
+                    let reported = response.sources.contains {
+                        $0.scope == "regionalAvailability" && ["complete", "noOffers"].contains($0.status)
+                    }
+                    Text(reported ? "No offers were reported for this selection." : "Availability is unknown.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(groups.keys.sorted(), id: \.self) { market in
+                    let expanded = openMarkets.contains(market)
+                    if groups.count == 1 {
+                        Text(name(market)).font(.headline)
+                    } else {
+                        Button {
+                            if expanded { openMarkets.remove(market) }
+                            else { openMarkets.insert(market) }
+                        } label: {
+                            Label(name(market), systemImage: expanded ? "chevron.down" : "chevron.right")
+                        }
+                    }
+                    if groups.count == 1 || expanded {
+                        ForEach(groups[market] ?? []) { offer in
+                            VStack(alignment: .leading, spacing: 4) {
+                                if let destination = offer.destination {
+                                    Link(offer.action(destination), destination: destination.url)
+                                } else { Text(offer.service.name) }
+                                Text(offer.facts).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                ForEach(response.sources.indices, id: \.self) { index in
+                    let source = response.sources[index]
+                    Text("\(source.source) · \(source.label)").font(.caption).foregroundStyle(.secondary)
+                    ForEach(source.attributions, id: \.name) { attribution in
+                        if attribution.url.scheme == "https", attribution.url.host != nil,
+                           attribution.url.user == nil, attribution.url.password == nil {
+                            Link(attribution.name, destination: attribution.url).font(.caption)
+                        }
+                    }
+                }
+            } else { ProgressView("Checking availability") }
+        }
+            .task(id: origin) {
+                registry = []
+                guard let server = origin, !server.isEmpty else { return }
+                let fields: [String: Any] = ["server": server, "allowLocalHttp": store.session?.allowHttp ?? false]
+                if let result: Registry = try? await RustBridge.call("publicCatalogProviders", fields: fields), !Task.isCancelled {
+                    registry = result.countries
+                }
+            }
+            .task(id: [origin ?? "", reference.kind, reference.source, reference.id, country, String(retry)]) {
+                response = nil
+                unavailable = false
+                openMarkets = []
+                guard let server = origin, !server.isEmpty else { return }
+                var fields: [String: Any] = [
+                    "server": server, "allowLocalHttp": store.session?.allowHttp ?? false,
+                    "kind": reference.kind, "source": reference.source, "id": reference.id
+                ]
+                if !country.isEmpty { fields["country"] = country }
+                do {
+                    let result: Response = try await RustBridge.call("publicCatalogOffers", fields: fields)
+                    try Task.checkCancellation()
+                    response = result
+                } catch {
+                    if !Task.isCancelled { unavailable = true }
+                }
+            }
     }
 }
 
@@ -657,7 +918,7 @@ private struct SearchProgrammeDestination: View {
     @State private var problem: String?
     @State private var opening = false
     private var isAiring: Bool {
-        guard let start = programme.start, let end = programme.end else { return false }
+        guard let start = programme.airingStart, let end = programme.airingEnd else { return false }
         let now = Date()
         return start <= now && now < end
     }
@@ -668,7 +929,7 @@ private struct SearchProgrammeDestination: View {
             else {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(programme.title).font(.title.bold())
-                    if let start = programme.start {
+                    if let start = programme.airingStart {
                         Text(start.formatted(date: .abbreviated, time: .shortened)).foregroundStyle(.secondary)
                     }
                     if let overview = programme.Overview, !overview.isEmpty { Text(overview) }
