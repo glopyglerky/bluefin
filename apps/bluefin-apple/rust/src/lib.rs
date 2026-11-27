@@ -758,7 +758,11 @@ pub fn call(v: &Value) -> Result<Value> {
                 ),
                 ("Limit", count(v, "limit", 50, 200)?.to_string()),
                 ("Recursive", "true".into()),
-                ("Fields", "PrimaryImageAspectRatio,Overview".into()),
+                ("Fields", if v.get("searchScope").and_then(Value::as_str).is_some() {
+                    "PrimaryImageAspectRatio,Overview,ProviderIds"
+                } else {
+                    "PrimaryImageAspectRatio,Overview"
+                }.into()),
             ];
             for (key, out) in [
                 ("parentId", "ParentId"),
