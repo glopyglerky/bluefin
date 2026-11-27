@@ -840,23 +840,37 @@ async fn cancelled_request_retains_write_until_real_commit() {
     retire(wired).await;
 }
 
+async fn disable_live_tv(router: &axum::Router, uid: &str, admin: &str) {
+    let (status, _, user) = call(
+        router,
+        "GET",
+        &format!("/Users/{uid}"),
+        Some(admin),
+        &[],
+        vec![],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{user}");
+    let mut policy = user["Policy"].clone();
+    assert!(policy.is_object());
+    policy["EnableLiveTvAccess"] = json!(false);
+    let (status, _, response) = json_call(
+        router,
+        "POST",
+        &format!("/Users/{uid}/Policy"),
+        Some(admin),
+        &[],
+        policy,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{response}");
+}
+
 #[tokio::test]
 async fn public_provider_routes_use_normal_account_access_and_validate_before_fetching() {
     let (_temp, _config, _db, wired, router, token, uid, _other) = setup().await;
     let (admin, _) = login(&router, "admin").await;
-    assert_eq!(
-        json_call(
-            &router,
-            "POST",
-            &format!("/Users/{uid}/Policy"),
-            Some(&admin),
-            &[],
-            json!({"EnableLiveTvAccess":false}),
-        )
-        .await
-        .0,
-        StatusCode::NO_CONTENT,
-    );
+    disable_live_tv(&router, &uid, &admin).await;
     // Invalid input returns locally without a provider request. Live-TV playback
     // permission is unrelated to an authenticated public-data read.
     for path in [
@@ -892,19 +906,7 @@ async fn provider_feeds_and_logos_use_real_authenticated_http() {
     use std::time::Instant;
     let (_temp, _config, _db, wired, router, token, uid, _other) = setup().await;
     let (admin, _) = login(&router, "admin").await;
-    assert_eq!(
-        json_call(
-            &router,
-            "POST",
-            &format!("/Users/{uid}/Policy"),
-            Some(&admin),
-            &[],
-            json!({"EnableLiveTvAccess":false}),
-        )
-        .await
-        .0,
-        StatusCode::NO_CONTENT,
-    );
+    disable_live_tv(&router, &uid, &admin).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let (stop, stopped) = tokio::sync::oneshot::channel();
