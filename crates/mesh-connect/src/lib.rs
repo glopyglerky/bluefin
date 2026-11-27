@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod capsule;
+pub mod resource_grant;
 mod error;
 pub mod launch;
 pub mod protocol;
