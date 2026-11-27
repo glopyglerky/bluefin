@@ -256,8 +256,17 @@ async fn session_catalog_preserves_ranked_people_and_submits_through_current_fam
     let mut update = f.update(0, true, true, false);
     update.session_catalog = Some(true);
     f.service.save(update).await.unwrap();
+    let service = DiscoveryService::open(&f.root.path().join("discovery.json")).unwrap();
+    assert!(service.settings().await.session_catalog);
+    assert!(service.capabilities(viewer(), Audience::Client).await.is_none());
+    assert!(
+        service
+            .capabilities(viewer().with_session_token(SESSION), Audience::Client)
+            .await
+            .is_some()
+    );
     assert!(matches!(
-        f.service
+        service
             .search(viewer(), Audience::Client, "stevn spelberg", 1)
             .await,
         Err(Error::Forbidden)
@@ -265,8 +274,7 @@ async fn session_catalog_preserves_ranked_people_and_submits_through_current_fam
     assert_eq!(f.fake.auth_calls.load(Ordering::SeqCst), 0);
 
     let viewer = viewer().with_session_token(SESSION);
-    let page = f
-        .service
+    let page = service
         .search(viewer.clone(), Audience::Client, "stevn spelberg", 1)
         .await
         .unwrap();
@@ -274,11 +282,11 @@ async fn session_catalog_preserves_ranked_people_and_submits_through_current_fam
     assert_eq!(page.results[0].title, "Steven Spielberg");
     assert!(page.results[0].actions.is_empty());
     let action = page.results[1].actions[0].id;
-    f.service
+    service
         .action(viewer.clone(), Audience::Client, action)
         .await
         .unwrap();
-    f.service
+    service
         .submit(viewer, Audience::Client, input(action, &[]))
         .await
         .unwrap();
