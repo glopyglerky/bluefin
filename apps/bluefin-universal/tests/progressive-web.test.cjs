@@ -759,6 +759,32 @@ test('film search resolves an exact identity and displays movie offers for the s
   'https://itunes.apple.com/gb/movie/example/id1003');
 });
 
+test('public film availability offers in-app playback only for the exact authorized library title',async()=>{
+ const t=setup({apiResponse:u=>{
+  if(u.hostname==='itunes.apple.com')return jsonReply({results:[]});
+  if(u.hostname==='www.wikidata.org'){
+   if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[{title:'Q184843'}]}});
+   if(u.searchParams.get('action')==='wbgetentities')return jsonReply({entities:{
+    Q184843:{labels:{en:{value:'Blade Runner'}}}}});
+   const property=u.searchParams.get('property');
+   return jsonReply({claims:{[property]:[{rank:'normal',mainsnak:{datavalue:{value:property==='P345'?'tt0083658':'1003'}}}]}});
+  }
+  if(u.pathname.startsWith('/Users/')&&u.pathname.endsWith('/Items')&&u.searchParams.has('SearchTerm')){
+   return jsonReply({Items:[
+    {Id:'66666666666646668666666666666666',Name:'Blade Runner',Type:'Movie',ProviderIds:{Imdb:'tt0083658'}},
+    {Id:'77777777777747778777777777777777',Name:'Blade Runner',Type:'Movie',ProviderIds:{Imdb:'tt1856101'}}
+   ],TotalRecordCount:2});
+  }
+ }});
+ await t.ui.connect('https://bluefin.test');await t.ui.signIn('Listener','example-password',false);
+ await t.ui.startSearch('Blade Runner',{scope:'movies'});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Where to watch')).listeners.click();
+ assert(findElement(t.root,e=>e.dataset.focusKey==='film-play|66666666666646668666666666666666'));
+ assert(!findElement(t.root,e=>e.dataset.focusKey==='film-play|77777777777747778777777777777777'));
+ const search=t.requests.find(r=>new URL(r.url).searchParams.has('SearchTerm'));
+ assert(new URL(search.url).searchParams.get('Fields').includes('ProviderIds'));
+});
+
 test('moonlit explicit search history uses the current account revision and survives a stale write rejection',async()=>{
  let rejectOld;
  const t=setup({apiResponse:async(u,o)=>{
