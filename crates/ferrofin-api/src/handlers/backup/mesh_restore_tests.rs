@@ -1,7 +1,7 @@
 //! Runs the real archive staging/swap and account authorization paths.
 use std::{path::{Path, PathBuf}, sync::Arc};
 
-use axum::{Router, body::Body, http::{Request, StatusCode}};
+use axum::{body::Body, http::{Request, StatusCode}};
 use bluefin_mesh_connect::{ServerAddress, native::DeviceIdentity};
 use ferrofin_core::{authorization_context::FerrofinAuthorizationContext, user_manager::FerrofinUserManager};
 use ferrofin_db::{Database, store::guid_to_db};
@@ -34,8 +34,7 @@ fn state(db: &Database) -> AppState {
 }
 
 async fn http_status(state: &AppState, token: &str) -> StatusCode {
-    crate::handlers::users::register(Router::new())
-        .with_state(state.clone())
+    crate::create_router(state.clone())
         .oneshot(Request::builder().uri("/Users/Me")
             .header("authorization", format!("MediaBrowser Token=\"{token}\""))
             .body(Body::empty()).unwrap())
@@ -84,7 +83,8 @@ async fn archived(db: &Database, directory: &Path) -> (TreeRoots, PathBuf) {
 async fn restored_old_mesh_session_and_http_bearer_cannot_authorize() {
     let directory = tempfile::tempdir().unwrap();
     let (db, before, service, device, session, user) = seeded().await;
-    assert_eq!(http_status(&before, MESH_TOKEN).await, StatusCode::OK);
+    // Public HTTP rejects internal mesh bearer material even before restore.
+    assert_eq!(http_status(&before, MESH_TOKEN).await, StatusCode::UNAUTHORIZED);
     assert_eq!(http_status(&before, ORDINARY_TOKEN).await, StatusCode::OK);
     assert!(service.authorization(&before, &device.public_key(), &session, "test").await.is_ok());
     let (roots, archive) = archived(&db, directory.path()).await;
@@ -147,4 +147,53 @@ async fn database_without_mesh_tables_keeps_its_content() {
     let value: String = sqlx::query_scalar("SELECT Value FROM Retained").fetch_one(&mut connection).await.unwrap();
     assert_eq!(value, "legacy content");
     connection.close().await.unwrap();
+}
+
+
+#[tokio::test]
+async fn orphan_mesh_bearers_are_removed_without_session_tables() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("orphan.db");
+    let options = sqlx::sqlite::SqliteConnectOptions::new().filename(&path).create_if_missing(true);
+    let mut connection = sqlx::SqliteConnection::connect_with(&options).await.unwrap();
+    // SQLite identifiers are case-insensitive; classification must be too.
+    sqlx::query("CREATE TABLE devices(DeviceId TEXT NOT NULL, AccessToken TEXT NOT NULL)")
+        .execute(&mut connection).await.unwrap();
+    sqlx::query("INSERT INTO devices VALUES ('bluefin-mesh:orphan','old-mesh'),('ordinary-device','retained')")
+        .execute(&mut connection).await.unwrap();
+    connection.close().await.unwrap();
+    let staged = path.clone();
+    tokio::task::spawn_blocking(move || super::invalidate_staged(&staged)).await.unwrap().unwrap();
+    let mut connection = sqlx::SqliteConnection::connect_with(&options).await.unwrap();
+    let tokens: Vec<String> = sqlx::query_scalar("SELECT AccessToken FROM devices")
+        .fetch_all(&mut connection).await.unwrap();
+    assert_eq!(tokens, vec!["retained"]);
+    connection.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_devices_table_without_device_identity_cannot_be_restored() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("unclassifiable.db");
+    let options = sqlx::sqlite::SqliteConnectOptions::new().filename(&path).create_if_missing(true);
+    let mut connection = sqlx::SqliteConnection::connect_with(&options).await.unwrap();
+    sqlx::query("CREATE TABLE Devices(AccessToken TEXT NOT NULL)").execute(&mut connection).await.unwrap();
+    sqlx::query("INSERT INTO Devices VALUES ('unclassifiable-token')").execute(&mut connection).await.unwrap();
+    connection.close().await.unwrap();
+    let staged = path.clone();
+    assert!(tokio::task::spawn_blocking(move || super::invalidate_staged(&staged)).await.unwrap().is_err());
+}
+
+
+#[tokio::test]
+async fn revocation_table_without_core_mesh_schema_is_not_legacy() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("partial.db");
+    let options = sqlx::sqlite::SqliteConnectOptions::new().filename(&path).create_if_missing(true);
+    let mut connection = sqlx::SqliteConnection::connect_with(&options).await.unwrap();
+    sqlx::query("CREATE TABLE BluefinMeshSessionRevocations(SessionId TEXT NOT NULL)")
+        .execute(&mut connection).await.unwrap();
+    connection.close().await.unwrap();
+    let staged = path.clone();
+    assert!(tokio::task::spawn_blocking(move || super::invalidate_staged(&staged)).await.unwrap().is_err());
 }

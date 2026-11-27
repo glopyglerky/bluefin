@@ -72,41 +72,62 @@ async fn clear_mesh_grants(connection: &mut SqliteConnection) -> std::io::Result
         "BluefinMeshSessions",
         "BluefinMeshReceipts",
     ];
-    let tables: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name IN \
-         ('BluefinMeshAuthority','BluefinMeshInvites','BluefinMeshSignups',\
-          'BluefinMeshSessions','BluefinMeshReceipts')",
+    let objects: Vec<(String, String)> = sqlx::query_as(
+        "SELECT name,type FROM sqlite_master WHERE lower(name) IN \
+         ('bluefinmeshauthority','bluefinmeshinvites','bluefinmeshsignups',\
+          'bluefinmeshsessions','bluefinmeshreceipts','bluefinmeshsessionrevocations')",
     )
     .fetch_all(&mut *connection)
     .await
     .map_err(std::io::Error::other)?;
-    if tables.is_empty() {
-        return Ok(());
-    }
-    if TABLES.iter().any(|name| !tables.iter().any(|found| found.as_str() == *name)) {
+    let mesh_tables = !objects.is_empty();
+    if mesh_tables && (objects.iter().any(|(_, kind)| kind != "table")
+        || TABLES.iter().any(|name| !objects.iter().any(|(found, _)| found.eq_ignore_ascii_case(name))))
+    {
         return Err(std::io::Error::other(
             "restored mesh authority has an incomplete schema",
         ));
+    }
+    let devices: Option<String> = sqlx::query_scalar(
+        "SELECT type FROM sqlite_master WHERE lower(name)='devices'",
+    )
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(std::io::Error::other)?;
+    match devices.as_deref() {
+        Some("table") => {}
+        None if !mesh_tables => return Ok(()),
+        _ => return Err(std::io::Error::other(
+            "restored mesh bearers cannot be classified",
+        )),
     }
     let mut transaction = connection
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(std::io::Error::other)?;
-    // Remove portable HTTP bearers as well as mesh session IDs. Do this while
-    // the restored session linkage still exists. Unrelated device tokens and
-    // account/passkey rows retain the existing backup contract.
-    for statement in [
-        "DELETE FROM Devices WHERE substr(DeviceId,1,13)='bluefin-mesh:'",
-        "DELETE FROM BluefinMeshSignups",
-        "DELETE FROM BluefinMeshReceipts",
-        "DELETE FROM BluefinMeshSessions",
-        "DELETE FROM BluefinMeshInvites",
-        "DELETE FROM BluefinMeshAuthority",
-    ] {
-        sqlx::query(statement)
-            .execute(&mut *transaction)
-            .await
-            .map_err(std::io::Error::other)?;
+    // Remove internal HTTP bearer rows even if their session linkage is missing.
+    // Device IDs use this exact case-sensitive prefix in the session owner.
+    // A missing DeviceId column fails before publication rather than retaining
+    // an unclassifiable restored token.
+    sqlx::query("DELETE FROM Devices WHERE substr(DeviceId,1,13)='bluefin-mesh:'")
+        .execute(&mut *transaction)
+        .await
+        .map_err(std::io::Error::other)?;
+    // Unrelated device tokens and account/passkey rows retain the existing
+    // backup contract. Existing core mesh tables are cleared together.
+    if mesh_tables {
+        for statement in [
+            "DELETE FROM BluefinMeshSignups",
+            "DELETE FROM BluefinMeshReceipts",
+            "DELETE FROM BluefinMeshSessions",
+            "DELETE FROM BluefinMeshInvites",
+            "DELETE FROM BluefinMeshAuthority",
+        ] {
+            sqlx::query(statement)
+                .execute(&mut *transaction)
+                .await
+                .map_err(std::io::Error::other)?;
+        }
     }
     transaction.commit().await.map_err(std::io::Error::other)
 }

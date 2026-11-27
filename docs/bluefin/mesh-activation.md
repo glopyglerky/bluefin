@@ -46,16 +46,17 @@ do not silently replace a pinned PQ connection.
 
 ## Restoring account data
 
-A scheduled Bluefin backup restore invalidates mesh authority on its staged
-SQLite database before the backup owner replaces any live file. This removes
+A scheduled Bluefin backup restore that includes the database invalidates mesh
+authority on its staged SQLite file before the backup owner replaces any live file. This removes
 mesh device bearers, sessions, signup requests, invitation state and completion
 receipts. The next activation creates a fresh issuer, and devices must pair
 again through a new owner-approved invitation. Ordinary restarts retain their
 existing session behavior.
 
 Unrelated Jellyfin device rows, accounts, passkeys and media data retain the
-existing backup contract. If the staged database cannot be sanitized, the
-restore replaces no live file. This is a Bluefin extension to restore behavior;
+existing backup contract. An attempted SQLite invalidation that fails replaces
+no live file. Short or non-SQLite files retain the existing database-open
+validation behavior. This is a Bluefin extension to restore behavior;
 it does not change the Jellyfin HTTP contract or claim upstream parity for mesh.
 
 This hook covers the server's scheduled backup restore only. Direct database
