@@ -698,7 +698,7 @@ impl Service {
             let source_hash = digest(&encoded);
             let timing = storage::Timing::load(&config.timing_root, &source, &source_hash)
                 .map_err(|_| missing())?;
-            let key = source.cache_key(&source_hash, &timing.hash);
+            let key = source.cache_key(worker_session.user, &source_hash, &timing.hash);
             let entry = service
                 .0
                 .table
@@ -767,7 +767,7 @@ impl Shared {
         let encoded = decode::snapshot(evidence.input, cancel)?;
         let original_hash = digest(&encoded);
         let timing = storage::Timing::load(&self.config.timing_root, source, &original_hash)?;
-        let key = source.cache_key(&original_hash, &timing.hash);
+        let key = source.cache_key(session.user, &original_hash, &timing.hash);
         if let Some(entry) = self
             .table
             .lock()
@@ -781,10 +781,12 @@ impl Shared {
         let pcm = decode::canonical(encoded, duration, cancel)?;
         let format = bluefin_karaoke::pcm(&pcm).map_err(|_| Reason::UnsupportedSource)?;
         let actual_duration = format.2 as f64 / 44100.;
-        timing
-            .timeline
-            .validate(actual_duration)
-            .map_err(|_| Reason::TimingRequired)?;
+        bluefin_karaoke::validate_timing(
+            Some(timing.kind),
+            timing.timeline.as_ref(),
+            actual_duration,
+        )
+        .map_err(|_| Reason::TimingRequired)?;
         let reservation =
             u32::try_from(format.2 * 16 + 2 * 1024 * 1024).map_err(|_| Reason::Busy)?;
         let budget = Arc::clone(&self.budget)
@@ -840,7 +842,8 @@ impl Shared {
                 media_source_id: Some(source.selected.clone()),
                 source_sha256: original_hash.clone(),
                 duration_seconds: actual_duration,
-                rights_reference: timing.rights.clone(),
+                rights_reference: source.admission_reference(session.user, &original_hash),
+                timing_kind: Some(timing.kind),
                 timeline: timing.timeline.clone(),
                 accompaniment: Stem {
                     sha256: p.accompaniment.sha256.clone(),
@@ -880,7 +883,9 @@ impl Shared {
             let receipt = serde_json::to_vec(&serde_json::json!({
                 "itemId": source.item, "mediaSourceId": source.selected, "generation": source.generation,
                 "sourceSha256": original_hash, "inputPcmSha256": p.input_pcm_sha256,
-                "timingSha256": timing.hash, "rightsReference": timing.rights,
+                "timingKind": timing.kind, "timingSha256": timing.hash,
+                "rightsReference": source.admission_reference(session.user, &original_hash),
+                "suppliedTimingRightsReference": timing.rights,
                 "decoderRuntime": "symphonia-0.5.5-rubato-0.16.2",
                 "ownerScopeSha256": hex(&session.owner),
                 "engine": p,

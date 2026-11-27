@@ -78,11 +78,24 @@ async fn call(
     token: &str,
     body: Value,
 ) -> (StatusCode, Value) {
-    let response = app
-        .clone()
-        .oneshot(request(method, path, token, body, false))
-        .await
-        .unwrap();
+    call_device(app, method, path, token, body, "karaoke-fixture").await
+}
+async fn call_device(
+    app: &Router,
+    method: &str,
+    path: &str,
+    token: &str,
+    body: Value,
+    device: &str,
+) -> (StatusCode, Value) {
+    let mut request = request(method, path, token, body, false);
+    request.headers_mut().insert(
+        header::AUTHORIZATION,
+        format!(r#"MediaBrowser Client="karaoke-fixture",Device="fixture",DeviceId="{device}",Version="1",Token="{token}""#)
+            .parse()
+            .unwrap(),
+    );
+    let response = app.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     (
@@ -129,6 +142,11 @@ impl Fixture {
         )
         .unwrap();
         std::fs::write(temp.path().join("music/Original.wav"), original(48000, 2)).unwrap();
+        std::fs::write(
+            temp.path().join("music/Original.lrc"),
+            "[00:00.10]Original fixture line\n[00:01.10]Another fixture line\n",
+        )
+        .unwrap();
         let encoder = std::env::var_os("BLUEFIN_TEST_FFMPEG")
             .map(std::path::PathBuf::from)
             .or_else(|| {
@@ -448,7 +466,9 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
     .await;
     assert_eq!(status, StatusCode::OK, "{legacy}");
     assert_eq!(legacy["processing"], "suppliedStems");
-    assert!(legacy.get("mediaSourceId").is_none());
+    assert_eq!(legacy["mediaSourceId"], f.source);
+    assert!(legacy.get("timingKind").is_none());
+    assert!(legacy.get("timeline").is_some());
     let bad = f.temp.path().join("bad-model");
     std::fs::write(&bad, b"bad official hash").unwrap();
     assert!(Service::start(f.settings(&bad)).await.is_err());
@@ -459,11 +479,90 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
     let service = Service::start(settings.clone()).await.unwrap();
     f.wired.state = f.wired.state.clone().with_karaoke(Some(service.clone()));
     f.app = ferrofin_api::create_router(f.wired.state.clone());
-    let missing = Uuid::new_v4();
-    f.post(missing, &f.token).await;
-    let status = f.wait(missing, &f.token).await;
-    assert_eq!(status["state"], "unavailable", "{status}");
-    assert_eq!(status["reason"], "timingRequired");
+    let (_, capabilities) = call(
+        &f.app,
+        "GET",
+        "/Bluefin/Capabilities",
+        &f.token,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(capabilities["karaokePreparation"]["enabled"], true);
+    assert_eq!(
+        capabilities["karaokePreparation"]["requiresSuppliedTiming"],
+        false
+    );
+    assert_eq!(capabilities["karaokePreparation"]["supportsStemOnly"], true);
+
+    // Actual model separation is available with ordinary line-synced lyrics,
+    // without inventing words or asking for an operator timing/rights string.
+    let lyrics_path = format!("/Audio/{}/Lyrics", f.item);
+    let (status, lyrics_before) = call(&f.app, "GET", &lyrics_path, &f.token, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{lyrics_before}");
+    assert_eq!(lyrics_before["Metadata"]["IsSynced"], true);
+    assert_eq!(lyrics_before["Lyrics"][0]["Start"], 1_000_000);
+    assert_eq!(lyrics_before["Lyrics"][1]["Start"], 11_000_000);
+    assert!(
+        lyrics_before["Lyrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|line| line.get("Cues").is_none())
+    );
+    let stem_only = Uuid::new_v4();
+    f.post(stem_only, &f.token).await;
+    let status = f.wait(stem_only, &f.token).await;
+    assert_eq!(status["state"], "ready", "{status}");
+    let manifest_path = format!("/Bluefin/Karaoke/{}?MediaSourceId={}", f.item, f.source);
+    let (status, untimed) = call(&f.app, "GET", &manifest_path, &f.token, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{untimed}");
+    assert_eq!(untimed["processing"], "modelSeparatedStems");
+    assert_eq!(untimed["timingKind"], "none");
+    assert!(untimed.get("timeline").is_none());
+    assert_eq!(untimed["durationSeconds"], 2.0);
+    let (_, lyrics_after) = call(&f.app, "GET", &lyrics_path, &f.token, Value::Null).await;
+    assert_eq!(
+        lyrics_after, lyrics_before,
+        "stem preparation never rewrites ordinary lyrics"
+    );
+
+    // A second approved device of the same account can reuse the account cache;
+    // it cannot observe or cancel the first device session's job.
+    let (status, second_login) = call_device(
+        &f.app,
+        "POST",
+        "/Users/AuthenticateByName",
+        "",
+        json!({"Username":"singer","Pw":"fixture-password"}),
+        "second-singer-device",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second_login}");
+    let second_token = second_login["AccessToken"].as_str().unwrap();
+    let (status, same_account) = call_device(
+        &f.app,
+        "GET",
+        &manifest_path,
+        second_token,
+        Value::Null,
+        "second-singer-device",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{same_account}");
+    assert_eq!(same_account, untimed);
+    assert_eq!(
+        call_device(
+            &f.app,
+            "GET",
+            &format!("{}/{stem_only}", f.preparation()),
+            second_token,
+            Value::Null,
+            "second-singer-device",
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND,
+    );
     f.timing();
     let timing_path = settings
         .timing_root
@@ -536,6 +635,11 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
     );
     assert_eq!(manifest["mediaSourceId"], f.source);
     assert_eq!(manifest["durationSeconds"], 2.0);
+    assert_eq!(manifest["timingKind"], "word");
+    assert_eq!(
+        manifest["timeline"]["lines"][0]["tokens"][0]["text"],
+        "Test"
+    );
     for forbidden in [
         "sourceSha256",
         "inputPcmSha256",
@@ -600,16 +704,31 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
             .unwrap();
             let cache = std::fs::read_dir(settings.cache_root.join("cache"))
                 .unwrap()
-                .next()
-                .unwrap()
-                .unwrap()
-                .path();
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .find(|path| {
+                    std::fs::read(path.join("manifest.json"))
+                        .is_ok_and(|raw| bluefin_hash(&raw) == manifest["revision"])
+                })
+                .unwrap();
             let receipt = std::fs::read(cache.join("receipt.json")).unwrap();
             let custody: Value = serde_json::from_slice(&receipt).unwrap();
             assert_eq!(custody["sourceSha256"], source_hash);
             assert_ne!(custody["sourceSha256"], custody["inputPcmSha256"]);
             assert_eq!(custody["engine"]["frames"], 2 * 44100);
             assert_eq!(custody["engine"]["cpuThreads"], 3);
+            assert!(
+                custody["rightsReference"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("account-policy-v1:")
+            );
+            assert!(
+                custody["suppliedTimingRightsReference"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Original synthetic fixture")
+            );
             std::fs::write(
                 std::path::PathBuf::from(&root).join("private-preparation-receipt.json"),
                 receipt,
@@ -617,10 +736,20 @@ async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
             .unwrap();
         }
     }
-    // Another real account may prepare the same admitted cache, but never owns
-    // the first account/session's job identifier.
+    // A different authorized account does not discover the first account's
+    // prepared cache. Its own preparation gets an account-bound revision.
+    // The separately supplied legacy package remains available by its own rules.
+    let (status, other_before) = call(&f.app, "GET", &manifest_path, &f.other, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{other_before}");
+    assert_eq!(other_before["processing"], "suppliedStems");
+    assert_ne!(other_before["revision"], manifest["revision"]);
     f.post(ready, &f.other).await;
     assert_eq!(f.wait(ready, &f.other).await["state"], "ready");
+    let (status, other_after) = call(&f.app, "GET", &manifest_path, &f.other, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{other_after}");
+    assert_eq!(other_after["processing"], "modelSeparatedStems");
+    assert_eq!(other_after["timingKind"], "word");
+    assert_ne!(other_after["revision"], manifest["revision"]);
     let (status, _) = call(
         &f.app,
         "POST",

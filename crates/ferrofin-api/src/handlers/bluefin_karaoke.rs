@@ -192,7 +192,7 @@ async fn admitted(
         ) {
             return Err(unavailable());
         }
-        let value = bluefin_karaoke::admit_bytes(
+        let mut value = bluefin_karaoke::admit_bytes(
             &raw,
             item,
             Some(&source.selected),
@@ -206,6 +206,10 @@ async fn admitted(
         if crate::karaoke::original_digest(current.input)? != original_hash {
             return Err(unavailable());
         }
+        // Legacy private imports may omit the source ID. The public response
+        // carries the exact source just admitted and rechecked, never an
+        // item-derived guess or a different edition selected by the client.
+        value.package.media_source_id = Some(source.selected.clone());
         Ok(value)
     })
     .await

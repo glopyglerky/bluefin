@@ -39,7 +39,7 @@ On a supported Apple TV, the route is:
 
 Connection alone does not start capture. Mute, voice level, and Disconnect remain available. Capture ends on pause, song or account changes, interruptions, dismissal, and background transitions. The phone follows the system pairing experience. This is the public Continuity microphone route initiated inside Bluefin.
 
-Ordinary synchronized lyrics and microphone controls do not depend on prepared karaoke stems. Vocal adjustment remains a separate server capability. It requires configured model assets and trusted timing for the exact song source. A disabled or unprepared server cannot honestly offer complete vocal separation.
+Ordinary synchronized lyrics and microphone controls do not depend on prepared karaoke stems. Vocal adjustment remains a separate server capability. It requires configured model assets and current account/source authorization. Songs without a supplied word or syllable package use explicit stem-only preparation and keep their ordinary authenticated lyrics. A disabled or unprepared server cannot honestly offer complete vocal separation.
 
 ## Verification boundaries
 

@@ -23,6 +23,9 @@ use ferrofin_traits::{
 use std::collections::HashMap;
 use uuid::Uuid;
 
+#[path = "sports_feed.rs"]
+mod feed;
+
 pub(crate) const CLIENT: &str = "bluefin-sports-v1";
 const ITEM: Uuid = Uuid::from_u128(0x626c_7565_6669_6e73_706f_7274_7300_0001);
 #[derive(serde::Deserialize)]
@@ -271,7 +274,9 @@ async fn home(
 }
 /// Mount Sports alongside the normal authenticated API.
 pub fn register(router: Router<AppState>) -> Router<AppState> {
-    router
-        .route("/sports/api/v1/preferences", get(preferences).put(save))
-        .route("/sports/api/v1/home", get(home))
+    feed::register(
+        router
+            .route("/sports/api/v1/preferences", get(preferences).put(save))
+            .route("/sports/api/v1/home", get(home)),
+    )
 }

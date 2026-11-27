@@ -42,18 +42,21 @@ async fn sports_route_exists() {
     db.run_migrations().await.unwrap();
     let wired = wire(&db, &config).await;
     let router = ferrofin_api::create_router(wired.state.clone());
-    let response = router
-        .oneshot(
-            Request::builder()
-                .uri("/sports/api/v1/preferences")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
+    for path in [
+        "/sports/api/v1/preferences",
+        "/sports/api/v1/scoreboard?league=nhl&date=2026-11-27",
+        "/sports/api/v1/events/nhl/401892781",
+        "/sports/api/v1/standings/nhl",
+        "/sports/api/v1/logos/0000000000000000000000000000000000000000000000000000000000000000",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+    }
     retire(wired).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[path = "../src/base_url.rs"]
@@ -357,7 +360,21 @@ async fn preferences_auth_limits_and_mounts() {
         .await
         .2;
     let key = keys["Items"][0]["AccessToken"].as_str().unwrap();
-    for (method, path) in [("GET", PREFS), ("PUT", PREFS), ("GET", HOME)] {
+    for (method, path) in [
+        ("GET", PREFS),
+        ("PUT", PREFS),
+        ("GET", HOME),
+        (
+            "GET",
+            "/sports/api/v1/scoreboard?league=nhl&date=2026-11-27",
+        ),
+        ("GET", "/sports/api/v1/events/nhl/401892781"),
+        ("GET", "/sports/api/v1/standings/nhl"),
+        (
+            "GET",
+            "/sports/api/v1/logos/0000000000000000000000000000000000000000000000000000000000000000",
+        ),
+    ] {
         assert_eq!(
             call(
                 &router,
@@ -820,5 +837,199 @@ async fn cancelled_request_retains_write_until_real_commit() {
             .2["version"],
         1
     );
+    retire(wired).await;
+}
+
+#[tokio::test]
+async fn public_provider_routes_use_normal_account_access_and_validate_before_fetching() {
+    let (_temp, _config, _db, wired, router, token, uid, _other) = setup().await;
+    let (admin, _) = login(&router, "admin").await;
+    assert_eq!(
+        json_call(
+            &router,
+            "POST",
+            &format!("/Users/{uid}/Policy"),
+            Some(&admin),
+            &[],
+            json!({"EnableLiveTvAccess":false}),
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT,
+    );
+    // Invalid input returns locally without a provider request. Live-TV playback
+    // permission is unrelated to an authenticated public-data read.
+    for path in [
+        "/sports/api/v1/scoreboard?league=internal&date=2026-11-27",
+        "/sports/api/v1/scoreboard?league=nhl&date=2026-02-30",
+        "/sports/api/v1/scoreboard?league=nhl&date=2026-11-27&url=https://internal",
+        "/sports/api/v1/events/nhl/not-an-event",
+        "/sports/api/v1/standings/internal",
+        "/sports/api/v1/logos/not-a-registered-asset",
+    ] {
+        assert_eq!(
+            call(&router, "GET", path, Some(&token), &[], vec![])
+                .await
+                .0,
+            StatusCode::BAD_REQUEST,
+            "{path}",
+        );
+    }
+    assert_eq!(
+        call(&router, "GET", HOME, Some(&token), &[], vec![])
+            .await
+            .0,
+        StatusCode::FORBIDDEN,
+        "local broadcast access retains the existing Live-TV permission",
+    );
+    retire(wired).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the fixed primary ESPN endpoints; no user media or production server"]
+#[allow(clippy::too_many_lines)] // Keep the full HTTP qualification with its disposable fixture.
+async fn provider_feeds_and_logos_use_real_authenticated_http() {
+    use std::time::Instant;
+    let (_temp, _config, _db, wired, router, token, uid, _other) = setup().await;
+    let (admin, _) = login(&router, "admin").await;
+    assert_eq!(
+        json_call(
+            &router,
+            "POST",
+            &format!("/Users/{uid}/Policy"),
+            Some(&admin),
+            &[],
+            json!({"EnableLiveTvAccess":false}),
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT,
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async {
+            let _ = stopped.await;
+        })
+        .await
+        .unwrap();
+    });
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .unwrap();
+    let authorization = format!(
+        r#"MediaBrowser Client="Synthetic",Device="Synthetic",Version="1",DeviceId="sports-test",Token="{token}""#
+    );
+    assert_eq!(
+        client
+            .get(format!("{base}/sports/api/v1/standings/nhl"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+    );
+    let mut receipts = Vec::new();
+    let mut logo = None;
+    for league in ["nhl", "nfl", "nba", "mlb", "wnba", "epl", "mls"] {
+        let date = if league == "nhl" {
+            "2026-11-25"
+        } else {
+            "2026-11-26"
+        };
+        for path in [
+            format!("/sports/api/v1/scoreboard?league={league}&date={date}"),
+            format!("/sports/api/v1/standings/{league}"),
+        ] {
+            let start = Instant::now();
+            let response = client
+                .get(format!("{base}{path}"))
+                .header(header::AUTHORIZATION, &authorization)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), reqwest::StatusCode::OK, "{path}");
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let bytes = response.bytes().await.unwrap();
+            let value: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value["schema"], 1);
+            assert_eq!(value["provider"], "ESPN");
+            assert_eq!(value["league"], league);
+            assert_eq!(value["stale"], false);
+            if path.contains("/standings/") {
+                assert!(!value["groups"].as_array().unwrap().is_empty());
+                if logo.is_none() {
+                    logo = value["groups"][0]["entries"][0]["team"]["logo"]
+                        .as_str()
+                        .map(str::to_owned);
+                }
+            } else {
+                assert!(value["events"].is_array());
+            }
+            receipts.push(json!({"path":path,"status":200,"bytes":bytes.len(),
+                "elapsedMilliseconds":start.elapsed().as_millis(),"fetchedAt":value["fetchedAt"]}));
+        }
+    }
+    for (league, id) in [("nhl", "401892781"), ("nfl", "401873081")] {
+        let path = format!("/sports/api/v1/events/{league}/{id}");
+        let start = Instant::now();
+        let response = client
+            .get(format!("{base}{path}"))
+            .header(header::AUTHORIZATION, &authorization)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK, "{path}");
+        let value: Value = response.json().await.unwrap();
+        assert_eq!(value["event"]["id"], id);
+        let plays = value["event"]["plays"].as_array().unwrap();
+        let stats = value["event"]["stats"].as_array().unwrap();
+        assert!(plays.len() > 100, "{path}");
+        assert!(!stats.is_empty(), "{path}");
+        receipts.push(
+            json!({"path":path,"status":200,"plays":plays.len(),"stats":stats.len(),
+            "elapsedMilliseconds":start.elapsed().as_millis()}),
+        );
+    }
+    let logo = logo.expect("at least one primary team logo");
+    assert!(logo.starts_with("/sports/api/v1/logos/"));
+    let image = client
+        .get(format!("{base}{logo}"))
+        .header(header::AUTHORIZATION, &authorization)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(image.status(), reqwest::StatusCode::OK);
+    assert_eq!(image.headers()[header::CONTENT_TYPE], "image/png");
+    let bytes = image.bytes().await.unwrap();
+    assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(bytes.len() <= 1024 * 1024);
+    assert_eq!(
+        client
+            .get(format!("{base}{logo}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "a cached public logo still needs an authenticated app account",
+    );
+    receipts.push(json!({"path":logo,"status":200,"bytes":bytes.len()}));
+    if let Some(root) = std::env::var_os("BLUEFIN_SPORTS_RECEIPT_DIR") {
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            std::path::PathBuf::from(root).join("sports-provider-http-qualification.json"),
+            serde_json::to_vec_pretty(&receipts).unwrap(),
+        )
+        .unwrap();
+    }
+    stop.send(()).unwrap();
+    server.await.unwrap();
     retire(wired).await;
 }

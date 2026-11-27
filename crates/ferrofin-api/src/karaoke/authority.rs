@@ -171,9 +171,53 @@ impl Source {
         }
         Ok(evidence)
     }
-    pub fn cache_key(&self, original: &str, timing: &str) -> String {
-        super::digest(format!("{}|{}|{}|{}|{}|{}|{}|{}", self.item, self.selected, self.generation,
-            original, super::MODEL_HASH, env!("CARGO_PKG_VERSION"),
-            "bluefin-karaoke-engine-0.1.0/candle-core-0.11.1/rustfft-6.4.1/symphonia-0.5.5/rubato-0.16.2", timing).as_bytes())
+    // This is a private receipt of the actual authenticated policy/source
+    // admission, not a copyright assertion and never a substitute for current().
+    pub fn admission_reference(&self, account: Uuid, original: &str) -> String {
+        format!(
+            "account-policy-v1:{}",
+            scoped_digest(
+                b"bluefin-karaoke-account-admission-v1",
+                account,
+                self.item,
+                &[
+                    &self.selected,
+                    &self.generation,
+                    original,
+                    "audio-stem-preparation"
+                ],
+            )
+        )
     }
+
+    pub fn cache_key(&self, account: Uuid, original: &str, timing: &str) -> String {
+        scoped_digest(
+            b"bluefin-karaoke-account-cache-v2",
+            account,
+            self.item,
+            &[
+                &self.selected,
+                &self.generation,
+                original,
+                super::MODEL_HASH,
+                env!("CARGO_PKG_VERSION"),
+                "bluefin-karaoke-engine-0.1.0/candle-core-0.11.1/rustfft-6.4.1/symphonia-0.5.5/rubato-0.16.2",
+                timing,
+            ],
+        )
+    }
+}
+
+// Account identity survives approved device/session changes, while separating
+// cache entries and public revisions between different account owners.
+fn scoped_digest(domain: &[u8], account: Uuid, item: Uuid, fields: &[&str]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(domain);
+    hash.update(account.as_bytes());
+    hash.update(item.as_bytes());
+    for field in fields {
+        hash.update((field.len() as u64).to_le_bytes());
+        hash.update(field.as_bytes());
+    }
+    super::hex(&hash.finalize())
 }

@@ -402,6 +402,9 @@ impl PlaybackView {
 #[async_trait]
 impl PlaybackBackend for Backend {
     type Session = PlaybackContext;
+    fn media_source_id(&self, session: &PlaybackContext) -> Option<String> {
+        Some(session.source.clone())
+    }
     async fn admit(
         &self,
         transport: &Request<()>,
@@ -610,18 +613,36 @@ impl PlaybackBackend for Backend {
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     }
     async fn authorize_owner(
-        &self, session: &PlaybackContext, transport: &Request<()>,
+        &self,
+        session: &PlaybackContext,
+        transport: &Request<()>,
     ) -> Result<(), Failure> {
-        if transport.headers().get_all(header::AUTHORIZATION).iter().count() != 1 {
+        if transport
+            .headers()
+            .get_all(header::AUTHORIZATION)
+            .iter()
+            .count()
+            != 1
+        {
             return Err(StatusCode::UNAUTHORIZED);
         }
-        let header = transport.headers().get(header::AUTHORIZATION).ok_or(StatusCode::UNAUTHORIZED)?;
+        let header = transport
+            .headers()
+            .get(header::AUTHORIZATION)
+            .ok_or(StatusCode::UNAUTHORIZED)?;
         let caller = self.identity(header, transport).await?;
         let owner = self.identity(&session.authorization, transport).await?;
         if caller.user_id() != session.viewer
             || caller.device_id.as_deref() != Some(&session.device)
-            || caller.token.as_ref().map(ferrofin_model::secret::Secret::expose)
-                != owner.token.as_ref().map(ferrofin_model::secret::Secret::expose) {
+            || caller
+                .token
+                .as_ref()
+                .map(ferrofin_model::secret::Secret::expose)
+                != owner
+                    .token
+                    .as_ref()
+                    .map(ferrofin_model::secret::Secret::expose)
+        {
             return Err(StatusCode::UNAUTHORIZED);
         }
         self.reauthorize(session, transport).await
@@ -702,9 +723,13 @@ pub fn register(
     state: AppState,
     pins: Arc<dyn LocalSourcePins>,
 ) -> Router<AppState> {
-    let origin = state.passkeys.as_ref().map(|service| service.origin().to_owned());
+    let origin = state
+        .passkeys
+        .as_ref()
+        .map(|service| service.origin().to_owned());
     let router = router.merge(bluefin_tv_playback::server::routes(Backend {
-        state: state.clone(), pins: pins.clone(),
+        state: state.clone(),
+        pins: pins.clone(),
     }));
     if let Some(origin) = origin {
         if let Ok(web) = bluefin_tv_playback::server::web_routes(Backend { state, pins }, &origin) {
@@ -882,9 +907,13 @@ mod permission_router_tests {
             &self,
             context: &RequestContext,
         ) -> Result<AuthorizationInfo, ServiceError> {
-            let token = ["fixture", "second-live-fixture"].into_iter().find(|token|
-                context.header("Authorization").is_some_and(|h| h.contains(&format!("Token=\"{token}\"")))
-            );
+            let token = ["fixture", "second-live-fixture"]
+                .into_iter()
+                .find(|token| {
+                    context
+                        .header("Authorization")
+                        .is_some_and(|h| h.contains(&format!("Token=\"{token}\"")))
+                });
             let allowed = self.0.load(Ordering::SeqCst) && token.is_some();
             Ok(AuthorizationInfo {
                 is_authenticated: allowed,
@@ -1074,19 +1103,23 @@ mod permission_router_tests {
             Ok(QueryResult::new(
                 Some(0),
                 Some(2),
-                ["fixture", "second-live-fixture"].into_iter().enumerate().map(|(n, token)| DeviceEntity {
-                    id: (n + 1) as i64,
-                    access_token: token.into(),
-                    app_name: "fixture".into(),
-                    app_version: "1".into(),
-                    date_created: now,
-                    date_last_activity: now,
-                    date_modified: now,
-                    device_id: "fixture-device".into(),
-                    device_name: "fixture".into(),
-                    is_active: true,
-                    user_id: ID.to_string(),
-                }).collect(),
+                ["fixture", "second-live-fixture"]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(n, token)| DeviceEntity {
+                        id: (n + 1) as i64,
+                        access_token: token.into(),
+                        app_name: "fixture".into(),
+                        app_version: "1".into(),
+                        date_created: now,
+                        date_last_activity: now,
+                        date_modified: now,
+                        device_id: "fixture-device".into(),
+                        device_name: "fixture".into(),
+                        is_active: true,
+                        user_id: ID.to_string(),
+                    })
+                    .collect(),
             ))
         }
         async fn get_device_infos(
@@ -1213,7 +1246,11 @@ mod permission_router_tests {
         ) -> Result<Response, Failure> {
             Ok(StatusCode::OK.into_response())
         }
-        async fn authorize_owner(&self, session: &PlaybackContext, request: &Request<()>) -> Result<(), Failure> {
+        async fn authorize_owner(
+            &self,
+            session: &PlaybackContext,
+            request: &Request<()>,
+        ) -> Result<(), Failure> {
             self.0.authorize_owner(session, request).await
         }
         async fn release(&self, _: &PlaybackContext) {}
@@ -1328,37 +1365,76 @@ mod permission_router_tests {
     #[tokio::test]
     async fn cookie_controls_require_the_original_live_token_even_for_same_viewer_and_device() {
         const ORIGIN: &str = "https://bluefin.example";
-        let policy=Arc::new(Mutex::new(UserPolicy {
-            enable_remote_access:true, enable_media_playback:true, ..Default::default()
+        let policy = Arc::new(Mutex::new(UserPolicy {
+            enable_remote_access: true,
+            enable_media_playback: true,
+            ..Default::default()
         }));
-        let active=Arc::new(AtomicBool::new(true));
-        let backend=PolicyBackend(Backend { state:state(policy,active.clone()), pins:Arc::new(NoPins) });
-        let other=HeaderValue::from_static("MediaBrowser Token=\"second-live-fixture\", DeviceId=\"fixture-device\"");
-        let request=req(Method::POST,"/Bluefin/Web/v1/leases",Body::empty()).map(|_|());
-        let parent=backend.0.identity(request.headers().get(header::AUTHORIZATION).unwrap(),&request).await.unwrap();
-        let sibling=backend.0.identity(&other,&request).await.unwrap();
-        assert_eq!(parent.user_id(),sibling.user_id());
-        assert_eq!(parent.device_id,sibling.device_id);
-        assert_ne!(parent.token.as_ref().unwrap().expose(),sibling.token.as_ref().unwrap().expose());
+        let active = Arc::new(AtomicBool::new(true));
+        let backend = PolicyBackend(Backend {
+            state: state(policy, active.clone()),
+            pins: Arc::new(NoPins),
+        });
+        let other = HeaderValue::from_static(
+            "MediaBrowser Token=\"second-live-fixture\", DeviceId=\"fixture-device\"",
+        );
+        let request = req(Method::POST, "/Bluefin/Web/v1/leases", Body::empty()).map(|_| ());
+        let parent = backend
+            .0
+            .identity(
+                request.headers().get(header::AUTHORIZATION).unwrap(),
+                &request,
+            )
+            .await
+            .unwrap();
+        let sibling = backend.0.identity(&other, &request).await.unwrap();
+        assert_eq!(parent.user_id(), sibling.user_id());
+        assert_eq!(parent.device_id, sibling.device_id);
+        assert_ne!(
+            parent.token.as_ref().unwrap().expose(),
+            sibling.token.as_ref().unwrap().expose()
+        );
 
-        let app:Router=bluefin_tv_playback::server::web_routes(backend,ORIGIN).unwrap();
+        let app: Router = bluefin_tv_playback::server::web_routes(backend, ORIGIN).unwrap();
         let mut create=req(Method::POST,"/Bluefin/Web/v1/leases",Body::from(json!({
             "version":1,"itemId":ID.simple().to_string(),"playback":{"kind":"video","maxBitrate":8_000_000}
         }).to_string()));
-        create.headers_mut().insert(header::ORIGIN,HeaderValue::from_static(ORIGIN));
-        create.headers_mut().insert(header::CONTENT_TYPE,HeaderValue::from_static("application/json"));
-        let response=app.clone().oneshot(create).await.unwrap();
-        assert_eq!(response.status(),StatusCode::CREATED);
-        let lease:Value=serde_json::from_slice(&to_bytes(response.into_body(),4096).await.unwrap()).unwrap();
-        for method in [Method::POST,Method::DELETE] {
-            let mut request=req(method,lease["releaseUrl"].as_str().unwrap(),Body::empty());
-            request.headers_mut().insert(header::ORIGIN,HeaderValue::from_static(ORIGIN));
-            request.headers_mut().insert(header::AUTHORIZATION,other.clone());
-            assert_eq!(app.clone().oneshot(request).await.unwrap().status(),StatusCode::UNAUTHORIZED);
+        create
+            .headers_mut()
+            .insert(header::ORIGIN, HeaderValue::from_static(ORIGIN));
+        create.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        let response = app.clone().oneshot(create).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let lease: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        for method in [Method::POST, Method::DELETE] {
+            let mut request = req(method, lease["releaseUrl"].as_str().unwrap(), Body::empty());
+            request
+                .headers_mut()
+                .insert(header::ORIGIN, HeaderValue::from_static(ORIGIN));
+            request
+                .headers_mut()
+                .insert(header::AUTHORIZATION, other.clone());
+            assert_eq!(
+                app.clone().oneshot(request).await.unwrap().status(),
+                StatusCode::UNAUTHORIZED
+            );
         }
-        active.store(false,Ordering::SeqCst);
-        let mut revoked=req(Method::POST,lease["renewUrl"].as_str().unwrap(),Body::empty());
-        revoked.headers_mut().insert(header::ORIGIN,HeaderValue::from_static(ORIGIN));
-        assert_eq!(app.oneshot(revoked).await.unwrap().status(),StatusCode::UNAUTHORIZED);
+        active.store(false, Ordering::SeqCst);
+        let mut revoked = req(
+            Method::POST,
+            lease["renewUrl"].as_str().unwrap(),
+            Body::empty(),
+        );
+        revoked
+            .headers_mut()
+            .insert(header::ORIGIN, HeaderValue::from_static(ORIGIN));
+        assert_eq!(
+            app.oneshot(revoked).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
     }
 }

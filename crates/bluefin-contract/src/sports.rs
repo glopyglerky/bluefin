@@ -102,3 +102,120 @@ pub struct Provider {
     pub access: String,
     pub action: String,
 }
+
+/// Common metadata for an authenticated view of public provider data.
+/// Favorites and local playback authorization remain separate account state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Feed<T> {
+    pub schema: u32,
+    pub provider: String,
+    pub fetched_at: String,
+    pub stale: bool,
+    pub league: String,
+    #[serde(flatten)]
+    pub data: T,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Scoreboard {
+    pub events: Vec<Event>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventDetail {
+    pub event: Event,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Standings {
+    pub groups: Vec<StandingsGroup>,
+}
+
+/// Provider team identity. Logo is an authenticated same-origin proxy path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Team {
+    pub id: String,
+    pub name: String,
+    pub short_name: Option<String>,
+    pub abbreviation: Option<String>,
+    pub logo: Option<String>,
+    /// Six hexadecimal RGB digits without a leading hash, if supplied.
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Competitor {
+    #[serde(flatten)]
+    pub team: Team,
+    pub score: Option<String>,
+    pub record: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventStatus {
+    pub state: Option<String>,
+    pub detail: Option<String>,
+    pub period: Option<i32>,
+    pub clock: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Event {
+    pub id: String,
+    pub league: String,
+    pub name: String,
+    pub short_name: Option<String>,
+    pub date: Option<String>,
+    pub status: EventStatus,
+    pub home: Competitor,
+    pub away: Competitor,
+    pub venue: Option<String>,
+    pub broadcasts: Vec<String>,
+    pub stats: Vec<EventStat>,
+    pub plays: Vec<Play>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventStat {
+    pub name: String,
+    pub label: String,
+    pub home: Option<String>,
+    pub away: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Play {
+    pub id: String,
+    pub text: String,
+    pub period: Option<i32>,
+    pub clock: Option<String>,
+    pub home_score: Option<String>,
+    pub away_score: Option<String>,
+    pub scoring: bool,
+    pub team_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StandingsGroup {
+    pub id: String,
+    pub name: String,
+    pub entries: Vec<Standing>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Standing {
+    pub team: Team,
+    /// Only an explicit provider rank/seed; never inferred from array position.
+    pub rank: Option<i32>,
+    /// Original provider stat names and displayed values, including missing keys.
+    pub stats: std::collections::BTreeMap<String, String>,
+}

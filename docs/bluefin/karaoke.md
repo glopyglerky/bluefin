@@ -24,7 +24,7 @@ return 404, changed revisions 409, policy failures 403, overload 503. There is n
 inference job endpoint and no fabricated server processing progress.
 
 The manifest contains itemId, revision, durationSeconds, processing=suppliedStems,
-accompaniment and leadVocal descriptors containing bytes/sha256, and timeline.
+accompaniment and leadVocal descriptors containing bytes/sha256, and the legacy required timeline. The optional `timingKind` marker supports explicit `none` with no timeline, or `word`/`syllable` with a validated timeline. Absent marker plus absent timeline remains invalid; see the [preparation contract](karaoke-preparation-contract.md#lyric-precision).
 It contains no paths, credentials, supplier rights declaration or model settings.
 The revision is the SHA-256 of the exact admitted private manifest. A stem request
 must name that revision. Download responses do not redirect. Server admission

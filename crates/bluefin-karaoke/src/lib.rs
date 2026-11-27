@@ -1,4 +1,5 @@
-//! Server-private supplied-stem admission. No caller paths or inference claims.
+//! Server-private supplied and model-separated stem admission.
+//! Lyric precision is explicit; audio separation never invents lyric timing.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -152,6 +153,37 @@ impl Timeline {
         Ok(())
     }
 }
+/// Precision of the admitted lyric timeline, independent of stem availability.
+/// An absent field is the legacy contract and still requires a valid timeline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TimingKind {
+    /// Prepared audio only. Ordinary lyrics remain on the authenticated lyrics API.
+    None,
+    /// Independently supplied word boundaries.
+    Word,
+    /// Independently supplied syllable boundaries.
+    Syllable,
+}
+
+/// Validate explicit stem-only admission without weakening legacy timed packages.
+pub fn validate_timing(
+    kind: Option<TimingKind>,
+    timeline: Option<&Timeline>,
+    duration: f64,
+) -> io::Result<()> {
+    if !duration.is_finite() || duration <= 0. {
+        return Err(invalid());
+    }
+    match (kind, timeline) {
+        (Some(TimingKind::None), None) => Ok(()),
+        (None | Some(TimingKind::Word | TimingKind::Syllable), Some(timeline)) => {
+            timeline.validate(duration)
+        }
+        _ => Err(invalid()),
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Stem {
@@ -227,7 +259,11 @@ pub struct Import {
     pub rights_reference: String,
     pub accompaniment: Stem,
     pub lead_vocal: Stem,
-    pub timeline: Timeline,
+    /// Missing means the legacy timed contract; stem-only must explicitly use none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing_kind: Option<TimingKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<Timeline>,
     #[serde(default, skip_serializing_if = "Processing::is_supplied")]
     pub processing: Processing,
 }
@@ -244,7 +280,11 @@ pub struct Package {
     pub processing_reference: Option<String>,
     pub accompaniment: Stem,
     pub lead_vocal: Stem,
-    pub timeline: Timeline,
+    /// Missing means the legacy timed contract; stem-only must explicitly use none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing_kind: Option<TimingKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<Timeline>,
 }
 pub struct Admitted {
     pub package: Package,
@@ -360,7 +400,11 @@ pub fn admit_bytes(
     if a != b || decoded_duration > 14400. || (decoded_duration - duration).abs() > 0.05 {
         return Err(invalid());
     }
-    import.timeline.validate(decoded_duration)?;
+    validate_timing(
+        import.timing_kind,
+        import.timeline.as_ref(),
+        decoded_duration,
+    )?;
     let (processing, processing_reference) = import.processing.presentation(a, decoded_duration)?;
     Ok(Admitted {
         package: Package {
@@ -372,6 +416,7 @@ pub fn admit_bytes(
             processing_reference,
             accompaniment: import.accompaniment,
             lead_vocal: import.lead_vocal,
+            timing_kind: import.timing_kind,
             timeline: import.timeline,
         },
         accompaniment,
@@ -435,7 +480,8 @@ mod tests {
             processing: Processing::SuppliedStems,
             accompaniment: stem(&a),
             lead_vocal: stem(&v),
-            timeline: Timeline {
+            timing_kind: None,
+            timeline: Some(Timeline {
                 offset_seconds: 0.,
                 lines: vec![Line {
                     id: "a".into(),
@@ -446,7 +492,7 @@ mod tests {
                         end: 1.,
                     }],
                 }],
-            },
+            }),
         };
         std::fs::write(
             dir.join("manifest.json"),
@@ -467,6 +513,53 @@ mod tests {
         }
     }
     #[test]
+    fn stem_only_requires_an_explicit_marker_and_no_timeline() {
+        let (root, id, source) = fixture();
+        let path = root.path().join(id.to_string()).join("manifest.json");
+        let legacy: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for precision in [None, Some("none"), Some("word"), Some("syllable")] {
+            for has_timeline in [false, true] {
+                let mut raw = legacy.clone();
+                if let Some(precision) = precision {
+                    raw["timingKind"] = serde_json::json!(precision);
+                }
+                if !has_timeline {
+                    raw.as_object_mut().unwrap().remove("timeline");
+                }
+                std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+                let result = admit(root.path(), id, &source, 1.);
+                let expected = if precision == Some("none") {
+                    !has_timeline
+                } else {
+                    has_timeline
+                };
+                assert_eq!(
+                    result.is_ok(),
+                    expected,
+                    "precision={precision:?}, has_timeline={has_timeline}"
+                );
+                if let Ok(value) = result {
+                    let public = serde_json::to_value(value.package).unwrap();
+                    assert_eq!(public.get("timeline").is_some(), has_timeline);
+                    assert_eq!(public.get("timingKind"), raw.get("timingKind"));
+                }
+            }
+        }
+        // Null and omitted timelines have identical meaning only with explicit none.
+        let mut raw = legacy.clone();
+        raw["timeline"] = serde_json::Value::Null;
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        assert!(admit(root.path(), id, &source, 1.).is_err());
+        raw["timingKind"] = serde_json::json!("none");
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        assert!(admit(root.path(), id, &source, 1.).is_ok());
+        raw["timingKind"] = serde_json::json!("line");
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        assert!(admit(root.path(), id, &source, 1.).is_err());
+    }
+
+    #[test]
     fn public_duration_uses_pcm_frames_with_rounded_catalog_metadata() {
         let (root, id, source) = fixture();
         let value = admit(root.path(), id, &source, 1.01).unwrap();
@@ -477,7 +570,7 @@ mod tests {
         let (root, id, source) = fixture();
         let path = root.path().join(id.to_string()).join("manifest.json");
         let mut import: Import = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        import.timeline.lines[0].tokens[0].end = 1.08;
+        import.timeline.as_mut().unwrap().lines[0].tokens[0].end = 1.08;
         std::fs::write(&path, serde_json::to_vec(&import).unwrap()).unwrap();
         assert!(admit(root.path(), id, &source, 1.04).is_err());
     }

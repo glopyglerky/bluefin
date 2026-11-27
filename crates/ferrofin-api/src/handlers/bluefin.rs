@@ -71,7 +71,8 @@ async fn capabilities(
     .map_err(|_| ApiError::ServiceUnavailable("capabilities unavailable".into()))?;
     capabilities["karaokePreparation"] = serde_json::json!({
         "enabled": state.karaoke().is_some(), "maxDurationSeconds": 300,
-        "requiresSuppliedTiming": true,
+        "requiresSuppliedTiming": false,
+        "supportsStemOnly": state.karaoke().is_some(),
     });
     let (parts, _) = request.into_parts();
     if let Some(transport) = crate::iroh_media::advertised(&state, &parts).await {

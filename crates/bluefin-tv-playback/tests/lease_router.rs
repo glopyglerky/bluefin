@@ -17,6 +17,7 @@ use std::sync::{
 use tower::ServiceExt;
 const ITEM: &str = "00000000000000000000000000000001";
 const SESSION: &str = "00000000000000000000000000000002";
+const SOURCE: &str = "00000000000000000000000000000003";
 #[derive(Clone)]
 struct Backend {
     denied: Arc<AtomicUsize>,
@@ -37,6 +38,9 @@ impl Backend {
 #[async_trait]
 impl PlaybackBackend for Backend {
     type Session = ();
+    fn media_source_id(&self, _: &()) -> Option<String> {
+        Some(SOURCE.into())
+    }
     async fn admit(&self, t: &Request<()>, r: LeaseRequest) -> Result<Admission<()>, Failure> {
         if t.headers()
             .get(header::AUTHORIZATION)
@@ -157,7 +161,9 @@ async fn create(app: &axum::Router) -> Value {
     );
     let response = app.clone().oneshot(r).await.unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
-    serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap()
+    let value: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert!(value.get("mediaSourceId").is_none(), "legacy TV v1 response remains unchanged");
+    value
 }
 #[tokio::test]
 async fn range_head_and_idempotent_stop_preserve_no_store() {
@@ -631,6 +637,8 @@ async fn create_web(app: &axum::Router) -> (Value, String) {
     assert!(!text.contains("fixture"));
     let lease: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(lease["releaseUrl"], lease["renewUrl"]);
+    assert_eq!(lease["mediaSourceId"], SOURCE);
+    assert_ne!(lease["mediaSourceId"], ITEM);
     assert_eq!(lease["expiresInSeconds"], 300);
     let media = lease["mediaUrl"].as_str().unwrap();
     assert!(media.starts_with("/Bluefin/Web/v1/media/") && media.ends_with("/0"));
@@ -692,6 +700,8 @@ async fn web_cookie_release_and_renew_require_exact_parent_and_logout_is_current
     let renewed = app.clone().oneshot(web_req("POST", control, Body::empty(), true, None)).await.unwrap();
     assert_eq!(renewed.status(), StatusCode::OK);
     assert!(renewed.headers()[header::SET_COOKIE].to_str().unwrap().contains("Max-Age=300"));
+    let renewed: Value = serde_json::from_slice(&to_bytes(renewed.into_body(), 8192).await.unwrap()).unwrap();
+    assert_eq!(renewed["mediaSourceId"], SOURCE);
     for _ in 0..2 {
         let response = app.clone().oneshot(web_req("DELETE", control, Body::empty(), true, None)).await.unwrap();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);

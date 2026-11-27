@@ -41,6 +41,11 @@ const MAX_MANIFEST: usize = 1024 * 1024;
 #[async_trait]
 pub trait PlaybackBackend: Send + Sync + 'static {
     type Session: Send + Sync + 'static;
+    /// Exact source selected by this backend's admitted playback plan, when known.
+    /// This is metadata for browser controls, not an additional authorization grant.
+    fn media_source_id(&self, _session: &Self::Session) -> Option<String> {
+        None
+    }
     async fn admit(
         &self,
         transport: &HttpRequest<()>,
@@ -84,6 +89,7 @@ struct Lease<S> {
     viewer: String,
     device: String,
     item: String,
+    media_source_id: Option<String>,
     play_session_id: String,
     born: Instant,
     root: &'static str,
@@ -322,7 +328,8 @@ fn lease_response<S>(grant: &str, lease: &Lease<S>, status: StatusCode, seconds:
     let mut response = if lease.browser_secret.is_some() {
         (status, Json(serde_json::json!({
             "version":VERSION, "mediaUrl":media_url, "releaseUrl":release_url, "renewUrl":release_url,
-            "playSessionId":lease.play_session_id, "expiresInSeconds":seconds, "idleSeconds":IDLE_SECONDS,
+            "playSessionId":lease.play_session_id, "mediaSourceId":lease.media_source_id,
+            "expiresInSeconds":seconds, "idleSeconds":IDLE_SECONDS,
         }))).into_response()
     } else {
         (status, Json(LeaseResponse {
@@ -432,8 +439,10 @@ async fn create<B: PlaybackBackend>(
     }
     let browser = engine.browser_origin.is_some();
     let root = if browser { WEB_ROOT } else { TV_ROOT };
+    let media_source_id = engine.backend.media_source_id(&admitted.session);
     let lease = Arc::new(Lease {
         session: admitted.session,
+        media_source_id,
         viewer: admitted.viewer,
         device: admitted.device,
         item: admitted.item_id,

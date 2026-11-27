@@ -1,5 +1,5 @@
 use super::{Reason, WorkResult, authority::Source};
-use bluefin_karaoke::{Admitted, Timeline};
+use bluefin_karaoke::{Admitted, Timeline, TimingKind};
 use bluefin_karaoke_engine::Cancellation;
 use rustix::fs::{self, AtFlags, Mode, OFlags, RenameFlags};
 use serde::Deserialize;
@@ -362,26 +362,42 @@ struct TimingFile {
     media_source_id: String,
     source_sha256: String,
     rights_reference: String,
-    timing_kind: String,
+    timing_kind: TimingKind,
     timeline: Timeline,
 }
 pub(super) struct Timing {
     pub hash: String,
-    pub rights: String,
-    pub timeline: Timeline,
+    pub rights: Option<String>,
+    pub kind: TimingKind,
+    pub timeline: Option<Timeline>,
 }
 impl Timing {
     pub fn load(root: &Path, source: &Source, original: &str) -> WorkResult<Self> {
         let path = root
             .join(source.item.to_string())
             .join(format!("{}.json", source.selected));
-        let raw = trusted_bytes(&path, 1024 * 1024).map_err(|_| Reason::TimingRequired)?;
+        // A missing optional timing file is a real stem-only mode. Corrupt,
+        // inaccessible, unsafe or mismatched metadata must never become a
+        // silent downgrade. Revalidate the trusted root on every access.
+        private_directory(root, false).map_err(|_| Reason::TimingRequired)?;
+        let raw = match trusted_bytes(&path, 1024 * 1024) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self {
+                    hash: super::digest(b"bluefin-karaoke-no-timeline-v1"),
+                    rights: None,
+                    kind: TimingKind::None,
+                    timeline: None,
+                });
+            }
+            Err(_) => return Err(Reason::TimingRequired),
+        };
         let timing: TimingFile =
             serde_json::from_slice(&raw).map_err(|_| Reason::TimingRequired)?;
         if timing.item_id != source.item
             || timing.media_source_id != source.selected
             || timing.source_sha256 != original
-            || !matches!(timing.timing_kind.as_str(), "word" | "syllable")
+            || !matches!(timing.timing_kind, TimingKind::Word | TimingKind::Syllable)
             || timing.rights_reference.trim().is_empty()
             || timing.rights_reference.len() > 4096
             || timing.timeline.validate(source.duration).is_err()
@@ -390,8 +406,9 @@ impl Timing {
         }
         Ok(Self {
             hash: super::digest(&raw),
-            rights: timing.rights_reference,
-            timeline: timing.timeline,
+            rights: Some(timing.rights_reference),
+            kind: timing.timing_kind,
+            timeline: Some(timing.timeline),
         })
     }
 }
