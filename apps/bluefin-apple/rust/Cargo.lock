@@ -277,6 +277,7 @@ dependencies = [
  "bluefin-contract",
  "bluefin-iroh-modern",
  "bluefin-local-assist",
+ "bluefin-sync-play",
  "getrandom 0.3.4",
  "httparse",
  "iroh",
@@ -322,6 +323,10 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "bluefin-sync-play"
+version = "0.1.0"
 
 [[package]]
 name = "bumpalo"
