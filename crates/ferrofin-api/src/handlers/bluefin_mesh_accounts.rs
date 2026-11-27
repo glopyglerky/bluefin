@@ -51,6 +51,9 @@ pub struct Service {
     db:Database, address:ServerAddress, authority:[u8;32], epoch:[u8;32], generation:u64,
     webauthn:Webauthn, rp_id:String, origin:String, browser_page:Url, web_launch:WebLaunchBase,
     pending:Mutex<HashMap<String,Pending>>, gate:Mutex<()>, operations:Semaphore,
+    // Test-only observation of the completed pre-store checks; no release hook.
+    #[cfg(test)]
+    relay_precheck: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 impl Service {
     /// Activates the issuer; an older process fails its next epoch comparison.
@@ -89,7 +92,10 @@ impl Service {
         let generation=u64::try_from(row.get::<i64,_>("Generation")).map_err(storage)?;
         tx.commit().await.map_err(storage)?;
         Ok(Arc::new(Self {db,address,authority,epoch,generation,webauthn,rp_id,origin,browser_page,web_launch,
-            pending:Mutex::new(HashMap::new()),gate:Mutex::new(()),operations:Semaphore::new(16)}))
+            pending:Mutex::new(HashMap::new()),gate:Mutex::new(()),operations:Semaphore::new(16),
+            #[cfg(test)]
+            relay_precheck: std::sync::Mutex::new(None),
+        }))
     }
     pub fn address(&self)->&ServerAddress {&self.address}
     async fn live(&self)->Result<(),ApiError> {
@@ -213,6 +219,10 @@ impl Service {
         // Lock order: service, account policy, admission store, SQL writer.
         // Acquire every awaitable lock before the final time/state check. A
         // competing claim or issuer activation cannot cross this transaction.
+        #[cfg(test)]
+        if let Some(reached) = self.relay_precheck.lock().expect("test precheck observer").take() {
+            let _ = reached.send(());
+        }
         let mut admissions=relay.lock().await;
         let mut tx=self.db.writer().begin_with("BEGIN IMMEDIATE").await.map_err(storage)?;
         self.live_tx(&mut tx).await?;

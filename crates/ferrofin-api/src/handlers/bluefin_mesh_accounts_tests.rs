@@ -78,33 +78,63 @@ async fn mesh_relay_bootstrap_claim_and_expiry_cannot_be_bypassed(){
 
 #[tokio::test]
 async fn mesh_relay_bootstrap_rechecks_ledger_after_waiting_for_store(){
-    use std::{future::{Future,poll_fn},task::Poll};
-    for expire in [false,true] {
-        let f=relay_fixture().await;let store=relay_store();
-        let invite=f.invite(InviteIntent::Signup,None).await;
-        let lock=store.lock().await;
-        let mut attempt=Box::pin(f.service.admit_relay_bootstrap(&f.state,&store,&invite,[9;32]));
-        // Drive past the initial ledger read to the store lock, without timers
-        // or depending on scheduler ordering. Once the SQL reader completes,
-        // the pending future holds both service and account-policy gates.
-        poll_fn(|cx|{
-            assert!(attempt.as_mut().poll(cx).is_pending());
-            if f.service.gate.try_lock().is_err() && f.state.account_gate.try_lock().is_err() {
-                // The final check is after the store lock regardless of how
-                // far the asynchronous initial SQL read has progressed.
-                Poll::Ready(())
-            } else {cx.waker().wake_by_ref();Poll::Pending}
-        }).await;
-        if expire {
-            sqlx::query("UPDATE BluefinMeshInvites SET Expires=? WHERE Id=?")
-                .bind(now()-1).bind(invite.invitation_id.to_vec()).execute(f.db.writer()).await.unwrap();
-        } else {
-            sqlx::query("UPDATE BluefinMeshInvites SET State='revoked' WHERE Id=?")
-                .bind(invite.invitation_id.to_vec()).execute(f.db.writer()).await.unwrap();
-        }
+    use std::future::{Future, poll_fn};
+
+    for expire in [false, true] {
+        let f = relay_fixture().await;
+        let store = relay_store();
+        let invite = f.invite(InviteIntent::Signup, None).await;
+        let lock = store.lock().await;
+        let (reached, prechecked) = tokio::sync::oneshot::channel();
+        *f.service.relay_precheck.lock().unwrap() = Some(reached);
+        let mut prechecked = Box::pin(prechecked);
+        let mut attempt = Box::pin(
+            f.service.admit_relay_bootstrap(&f.state, &store, &invite, [9; 32]),
+        );
+
+        // The observer fires only after every initial SQL/policy check. Polling
+        // admission first drives that same poll into the store lock we hold,
+        // so the mutation cannot be rejected by an earlier validation instead.
+        poll_fn(|cx| {
+            assert!(
+                attempt.as_mut().poll(cx).is_pending(),
+                "admission must wait for the held store",
+            );
+            prechecked.as_mut().poll(cx)
+        })
+        .await
+        .expect("initial relay checks completed");
+
+        let mut mutation = Box::pin(async {
+            if expire {
+                sqlx::query("UPDATE BluefinMeshInvites SET Expires=? WHERE Id=?")
+                    .bind(now() - 1)
+                    .bind(invite.invitation_id.to_vec())
+                    .execute(f.db.writer())
+                    .await
+            } else {
+                sqlx::query("UPDATE BluefinMeshInvites SET State='revoked' WHERE Id=?")
+                    .bind(invite.invitation_id.to_vec())
+                    .execute(f.db.writer())
+                    .await
+            }
+        });
+        // Keep both futures driven. The in-memory fixture shares one SQL
+        // connection between reads and writes, so suspending an unfinished
+        // reader while awaiting this write would deadlock the fixture itself.
+        poll_fn(|cx| {
+            assert!(
+                attempt.as_mut().poll(cx).is_pending(),
+                "admission must remain blocked during the ledger mutation",
+            );
+            mutation.as_mut().poll(cx)
+        })
+        .await
+        .expect("change the durable invitation while admission waits");
+
         drop(lock);
         assert!(attempt.await.is_err());
-        assert!(!store.lock().await.allows(&[9;32],std::time::Instant::now()));
+        assert!(!store.lock().await.allows(&[9; 32], std::time::Instant::now()));
     }
 }
 
