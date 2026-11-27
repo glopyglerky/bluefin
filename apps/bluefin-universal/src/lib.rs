@@ -14,6 +14,7 @@ pub mod player;
 pub mod protocol;
 pub mod service;
 pub mod state;
+pub mod sync_play;
 #[cfg(feature = "ui")]
 pub mod ui;
 #[cfg(target_arch = "wasm32")]
