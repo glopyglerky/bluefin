@@ -905,8 +905,8 @@ private struct TVFeaturedItem: View {
                            startPoint: .bottomLeading, endPoint: .topTrailing)
             VStack(alignment: .leading, spacing: 14) {
                 Text("FEATURED").font(.caption.weight(.semibold)).tracking(1.5)
-                Text(item.title).font(.system(size: 50, weight: .bold)).lineLimit(2)
-                if !item.subtitle.isEmpty { Text(item.subtitle).font(.callout).foregroundStyle(.white.opacity(0.8)) }
+                Text(item.displayTitle).font(.system(size: 50, weight: .bold)).lineLimit(2)
+                if !item.displaySubtitle.isEmpty { Text(item.displaySubtitle).font(.callout).foregroundStyle(.white.opacity(0.8)) }
                 if let overview = item.Overview, !overview.isEmpty {
                     Text(overview).font(.system(size: 22)).foregroundStyle(.white.opacity(0.85)).lineLimit(2).frame(maxWidth: 780, alignment: .leading)
                 }

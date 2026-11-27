@@ -613,12 +613,12 @@ struct FeaturedItem: View {
                            startPoint: .top, endPoint: .bottom)
             VStack(alignment: .leading, spacing: 10) {
                 Text("FEATURED").font(.caption2.weight(.semibold)).tracking(1.5)
-                Text(item.title)
+                Text(item.displayTitle)
                     .font(sizeClass == .compact ? .title.bold() : .largeTitle.bold())
                     .lineLimit(dynamicType.isAccessibilitySize ? nil : 2)
                     .fixedSize(horizontal: false, vertical: true)
-                if !item.subtitle.isEmpty {
-                    Text(item.subtitle).font(.subheadline).foregroundStyle(.white.opacity(0.85))
+                if !item.displaySubtitle.isEmpty {
+                    Text(item.displaySubtitle).font(.subheadline).foregroundStyle(.white.opacity(0.85))
                         .lineLimit(dynamicType.isAccessibilitySize ? nil : 2)
                 }
                 HStack(spacing: 12) {
@@ -706,14 +706,14 @@ struct Poster: View {
                     if focused { RoundedRectangle(cornerRadius: 14).strokeBorder(BluefinStyle.accent, lineWidth: 3) }
                 }
                 #endif
-            Text(item.title).font(.subheadline.weight(.semibold))
+            Text(item.displayTitle).font(.subheadline.weight(.semibold))
                 .lineLimit(dynamicType.isAccessibilitySize ? 3 : 2)
-            if !item.subtitle.isEmpty {
-                Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            if !item.displaySubtitle.isEmpty {
+                Text(item.displaySubtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(item.title + (item.subtitle.isEmpty ? "" : ", " + item.subtitle))
+        .accessibilityLabel(item.displayTitle + (item.displaySubtitle.isEmpty ? "" : ", " + item.displaySubtitle))
         .accessibilityValue(item.progress > 0 ? "\(Int(item.progress * 100)) percent watched" : "")
     }
 }
@@ -739,8 +739,8 @@ struct LandscapeMediaTile: View {
                     if focused { RoundedRectangle(cornerRadius: 16).strokeBorder(BluefinStyle.accent, lineWidth: 3) }
                 }
                 #endif
-            Text(item.title).font(.headline).lineLimit(1)
-            if !item.subtitle.isEmpty { Text(item.subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
+            Text(item.displayTitle).font(.headline).lineLimit(1)
+            if !item.displaySubtitle.isEmpty { Text(item.displaySubtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
         }.accessibilityElement(children: .combine)
     }
 }
