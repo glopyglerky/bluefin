@@ -12,8 +12,8 @@ import XCTest
 
     private func waitUntil(_ condition: @MainActor () -> Bool,
                            file: StaticString = #filePath, line: UInt = #line) async throws {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-        while !condition() && ContinuousClock.now < deadline { await Task.yield() }
+        let deadline = Date().addingTimeInterval(2)
+        while !condition() && Date() < deadline { await Task.yield() }
         if !condition() {
             XCTFail("Expected asynchronous page state", file: file, line: line)
             throw CancellationError()

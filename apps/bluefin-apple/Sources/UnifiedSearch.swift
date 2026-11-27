@@ -192,6 +192,16 @@ struct UnifiedSearchFacets: Decodable {
     private var facetsContext: UUID?
     private var generation = UUID()
     private var loadedIdentity: UnifiedSearchIdentity?
+    private var loadedRequest: UnifiedSearchRequest?
+    private var completedInitialLanes = Set<UnifiedSearchLane>()
+    typealias FetchPage = @MainActor (UnifiedSearchRequest, UnifiedSearchLane, Int, Int, LibraryStore, UUID) async throws -> ItemPage
+    private let fetchPage: FetchPage
+    init(fetchPage: FetchPage? = nil) { self.fetchPage = fetchPage ?? Self.fetch }
+    private var unfinishedInitialLanes: [UnifiedSearchLane: PagedMediaModel] {
+        laneModels.filter {
+            !completedInitialLanes.contains($0.key) && $0.value.window.nextIndex == 0 && $0.value.failures[0] == nil
+        }
+    }
     var pages: [UnifiedSearchLane: UnifiedSearchPage] { laneModels.mapValues(\.window) }
     var items: [MediaItem] { laneModels[.library]?.items ?? [] }
     var artists: [MediaItem] { laneModels[.artists]?.items ?? [] }
@@ -201,32 +211,63 @@ struct UnifiedSearchFacets: Decodable {
 
     func load(query: String, store: LibraryStore, filters: UnifiedSearchFilters = .init()) async {
         let identity = UnifiedSearchIdentity(query: query, filters: filters, account: store.accountContext)
-        if loadedIdentity == identity, !laneModels.isEmpty { return }
+        let resuming = loadedIdentity == identity && !laneModels.isEmpty
+        if resuming && unfinishedInitialLanes.isEmpty { return }
+        // A view can disappear before the first page returns. Retain completed
+        // lanes, but fence the canceled batch and restart its unfinished lanes.
         cancel()
-        loadedIdentity = identity
+        if !resuming {
+            loadedIdentity = identity
+            loadedRequest = UnifiedSearchRequest(query: query, filters: filters)
+            self.filters = filters; loadedQuery = loadedRequest?.query ?? ""
+            loadedContext = nil; laneModels = [:]; completedInitialLanes = []
+        }
+        guard let request = loadedRequest, request.isActive else { return }
         let current = generation, context = store.accountContext
-        let request = UnifiedSearchRequest(query: query, filters: filters)
-        self.filters = filters; loadedQuery = request.query
-        loadedContext = nil; laneModels = [:]; loading = request.isActive
-        guard request.isActive else { return }
+        loading = true
+        defer { if generation == current { loading = false } }
         await store.loadSearchCapabilities()
         guard generation == current, store.accountContext == context, !Task.isCancelled else { return }
-        laneModels = Dictionary(uniqueKeysWithValues: request.lanes.map { ($0, PagedMediaModel()) })
+        if !resuming {
+            laneModels = Dictionary(uniqueKeysWithValues: request.lanes.map { ($0, PagedMediaModel()) })
+        }
         loadedContext = context
-        defer { if generation == current { loading = false } }
+        let pending = unfinishedInitialLanes
         await withTaskGroup(of: Void.self) { group in
-            for (lane, model) in laneModels {
+            for (lane, model) in pending {
                 group.addTask {
-                    await model.start { start, limit in
-                        try Task.checkCancellation()
-                        guard store.accountContext == context else { throw CancellationError() }
-                        return try await Self.fetch(request, lane: lane, start: start, limit: limit, store: store, context: context)
-                    }
+                    await self.startLane(lane, model: model, request: request, store: store,
+                                         context: context, generation: current)
                 }
             }
             await group.waitForAll()
         }
-        guard generation == current, store.accountContext == context, !Task.isCancelled else { return }
+    }
+
+    private func startLane(_ lane: UnifiedSearchLane, model: PagedMediaModel, request: UnifiedSearchRequest,
+                           store: LibraryStore, context: UUID, generation current: UUID) async {
+        var finished = false
+        let fetchPage = self.fetchPage
+        await model.start { start, limit in
+            try Task.checkCancellation()
+            guard store.accountContext == context else { throw CancellationError() }
+            do {
+                let page = try await fetchPage(request, lane, start, limit, store, context)
+                try Task.checkCancellation()
+                guard store.accountContext == context else { throw CancellationError() }
+                finished = true
+                return page
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                finished = true
+                throw error
+            }
+        }
+        guard finished, generation == current, store.accountContext == context, !Task.isCancelled else { return }
+        // Successful empty pages and visible error/retry states are completed
+        // attempts too; only interrupted first loads should start again on return.
+        completedInitialLanes.insert(lane)
     }
 
     func loadMore(_ lane: UnifiedSearchLane, store: LibraryStore) {

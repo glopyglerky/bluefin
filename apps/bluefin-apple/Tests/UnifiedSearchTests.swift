@@ -68,4 +68,58 @@ import XCTest
         XCTAssertNotEqual(initial, .init(query: "ocean", filters: .init(), account: UUID()))
     }
 
+    private func waitUntil(_ condition: @MainActor () -> Bool,
+                           file: StaticString = #filePath, line: UInt = #line) async throws {
+        let deadline = Date().addingTimeInterval(2)
+        while !condition() && Date() < deadline { await Task.yield() }
+        if !condition() {
+            XCTFail("Expected asynchronous search state", file: file, line: line)
+            throw CancellationError()
+        }
+    }
+
+    func testReturningAfterCanceledFirstPageResumesWithoutAcceptingItsLateResult() async throws {
+        let store = LibraryStore(); store.explore()
+        let filters = UnifiedSearchFilters(source: .library)
+        var calls = 0
+        var held: CheckedContinuation<ItemPage, Error>?
+        let model = UnifiedSearchModel(fetchPage: { _, _, _, _, _, _ in
+            calls += 1
+            if calls == 1 {
+                return try await withCheckedThrowingContinuation { held = $0 }
+            }
+            return .init(Items: [MediaItem(Id: "current")], TotalRecordCount: 1)
+        })
+        let first = Task { await model.load(query: "ocean", store: store, filters: filters) }
+        try await waitUntil { held != nil }
+        model.cancel()
+        await model.load(query: "ocean", store: store, filters: filters)
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(model.items.map(\.Id), ["current"])
+        held?.resume(returning: .init(Items: [MediaItem(Id: "late-canceled")], TotalRecordCount: 1))
+        await first.value
+        XCTAssertEqual(model.items.map(\.Id), ["current"])
+        XCTAssertFalse(model.loading)
+    }
+
+    func testReturningPreservesCompletedResultsAndCompletedEmptyLanes() async {
+        let store = LibraryStore(); store.explore()
+        var calls: [UnifiedSearchLane: Int] = [:]
+        let model = UnifiedSearchModel(fetchPage: { _, lane, _, _, _, _ in
+            calls[lane, default: 0] += 1
+            return lane == .library
+                ? .init(Items: [MediaItem(Id: "kept")], TotalRecordCount: 1)
+                : .init(Items: [], TotalRecordCount: 0)
+        })
+        await model.load(query: "ocean", store: store)
+        let library = model.laneModels[.library]
+        model.cancel()
+        await model.load(query: "ocean", store: store)
+        XCTAssertTrue(model.laneModels[.library] === library)
+        XCTAssertEqual(model.items.map(\.Id), ["kept"])
+        XCTAssertEqual(Set(calls.keys), Set(UnifiedSearchLane.allCases))
+        XCTAssertTrue(calls.values.allSatisfy { $0 == 1 })
+        XCTAssertFalse(model.loading)
+    }
+
 }
