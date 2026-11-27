@@ -100,6 +100,10 @@ impl PqcEndpoint {
         Ok(Self { endpoint, identity: identity.clone(), relay_policy })
     }
 
+    /// Outer routing identity for a private relay bootstrap request. This is
+    /// not the inner PQ device identity and grants no account authority.
+    pub fn endpoint_id(&self) -> [u8;32] { *self.endpoint.id().as_bytes() }
+
     pub async fn connect(&self, invite: &ConnectInvite) -> Result<PqcConnection> {
         invite.validate_at(now_ms()?)?;
         self.connect_server(&invite.server_address()).await
