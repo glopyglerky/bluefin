@@ -25,6 +25,31 @@ server supports at most two, and the browser separately requires an enabled,
 matching relay policy. An empty relay policy does not provide browser transport
 reachability.
 
+The packaged Apple apps and web client admit these two Iroh North American
+relays from application configuration:
+
+- `https://use1-1.relay.n0.iroh.link./`
+- `https://usw1-1.relay.n0.iroh.link./`
+
+A server owner can select one or both in `relay_urls`. This does not enable a
+server listener by itself. A relay is a transport route, never an account grant:
+the imported endpoint identity, pinned certificate, strict inner PQ handshake
+and live account authorization still have to match. Invitation-provided relay
+URLs outside the application policy remain refused. A custom deployment must
+configure its own matching policies when using another relay.
+
+
+For an already saved Apple app session with an empty relay list, request
+composition can try the two approved application relays as temporary hints.
+The endpoint ID, certificate pin, service, device key and account session remain
+unchanged. This does not write the saved connection or alter a new invitation.
+Nonempty unapproved hints remain subject to the ordinary refusal path.
+
+The public relays have capacity limits. Operators who need predictable media
+throughput should qualify a relay they operate or provision for that load.
+A completed relay handshake establishes reachability, not a throughput or
+availability guarantee.
+
 `web_launch_url` optionally names a separately hosted HTTPS application page.
 It accepts no credentials, query or fragment. If omitted, invitations use
 `/web/bluefin/` at the configured published account origin. All rendered forms

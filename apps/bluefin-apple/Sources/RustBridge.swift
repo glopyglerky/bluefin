@@ -35,6 +35,9 @@ enum RustBridge {
                 request["iroh"] = ["peerId": pin, "peerAddress": address]
             }
         }
+        request = MeshRelayRoutes.applyingApprovedFallback(
+            to: request,
+            approvedRelays: Bundle.main.object(forInfoDictionaryKey: "BluefinMeshRelayAllowlist") as? [String] ?? [])
         if let allowHttp = request.removeValue(forKey: "allowHttp") { request["allowLocalHttp"] = allowHttp }
         let data = try JSONSerialization.data(withJSONObject: request)
         let (response, decoded) = try await Task.detached(priority: .userInitiated) { () -> (Data, Result<T, Error>) in

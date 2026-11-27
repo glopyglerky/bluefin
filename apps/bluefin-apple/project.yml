@@ -78,6 +78,9 @@ targets:
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSLocalNetworkUsageDescription: Connect to the media server you choose on your home network.
         NSBonjourServices: ["_bluefin-mesh._udp."]
+        BluefinMeshRelayAllowlist:
+          - "https://use1-1.relay.n0.iroh.link./"
+          - "https://usw1-1.relay.n0.iroh.link./"
         NSCameraUsageDescription: Scan Bluefin invitation QR codes. Camera images stay on this device.
         NSMicrophoneUsageDescription: Monitor your voice through wired headphones while singing with authorized music. Bluefin does not record or transmit your microphone audio.
         NSAppTransportSecurity:
@@ -150,6 +153,9 @@ targets:
             CFBundleURLSchemes: [bluefin-shelf]
         NSLocalNetworkUsageDescription: Connect to the media server you choose on your home network.
         NSBonjourServices: ["_bluefin-mesh._udp."]
+        BluefinMeshRelayAllowlist:
+          - "https://use1-1.relay.n0.iroh.link./"
+          - "https://usw1-1.relay.n0.iroh.link./"
         NSMicrophoneUsageDescription: Use your selected iPhone microphone for local karaoke voice monitoring.
         NSCameraUsageDescription: Connect your iPhone using Apple's Continuity device picker. Bluefin does not capture camera video.
         NSAppTransportSecurity:
@@ -231,6 +237,9 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSLocalNetworkUsageDescription: Connect to your chosen media server.
         NSBonjourServices: ["_bluefin-mesh._udp."]
+        BluefinMeshRelayAllowlist:
+          - "https://use1-1.relay.n0.iroh.link./"
+          - "https://usw1-1.relay.n0.iroh.link./"
         NSMicrophoneUsageDescription: Monitor your voice locally while singing.
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
@@ -278,6 +287,9 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSLocalNetworkUsageDescription: Connect to your chosen media server.
         NSBonjourServices: ["_bluefin-mesh._udp."]
+        BluefinMeshRelayAllowlist:
+          - "https://use1-1.relay.n0.iroh.link./"
+          - "https://usw1-1.relay.n0.iroh.link./"
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
           UIApplicationPreferredDefaultSceneSessionRole: UIWindowSceneSessionRoleApplication
