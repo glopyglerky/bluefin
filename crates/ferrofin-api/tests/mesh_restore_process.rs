@@ -51,7 +51,9 @@ fn candidate() -> PathBuf {
         .expect("the admitted job must supply the retained BLUEFIN_TEST_SERVER_SHA256");
     assert!(
         expected.len() == 64
-            && expected.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            && expected
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
         "candidate SHA-256 must be lowercase hexadecimal"
     );
     let mut file = std::fs::File::open(&path).unwrap();
@@ -66,7 +68,10 @@ fn candidate() -> PathBuf {
         hash.update(&buffer[..count]);
     }
     let actual = format!("{:x}", hash.finalize());
-    assert_eq!(actual, expected, "the selected executable must match the qualified artifact");
+    assert_eq!(
+        actual, expected,
+        "the selected executable must match the qualified artifact"
+    );
     eprintln!(
         "actual-binary mesh restore: executable={} sha256={actual}; loopback peers; software authenticator",
         path.display()
@@ -131,8 +136,11 @@ impl Process {
         for directory in ["data", "config", "cache", "web", "identity"] {
             std::fs::create_dir_all(root.join(directory)).unwrap();
         }
-        std::fs::set_permissions(root.join("identity"), std::fs::Permissions::from_mode(0o700))
-            .unwrap();
+        std::fs::set_permissions(
+            root.join("identity"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
         std::fs::write(
             root.join("config/network.json"),
             br#"{"AutoDiscovery":false,"EnableRemoteAccess":true}"#,
@@ -189,7 +197,9 @@ impl Process {
             }
         }
         drop((tcp, udp));
-        let mut child = command.spawn().expect("start the exact candidate executable");
+        let mut child = command
+            .spawn()
+            .expect("start the exact candidate executable");
         let mut lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
         let (ready, receive) = mpsc::unbounded_channel();
         let output = tokio::spawn(async move {
@@ -228,7 +238,13 @@ impl Process {
 
     async fn stop(mut self, client: &Client, admin: &str) {
         expect_http(
-            client, &self.base, "POST", "/System/Shutdown", admin, Value::Null, 204,
+            client,
+            &self.base,
+            "POST",
+            "/System/Shutdown",
+            admin,
+            Value::Null,
+            204,
         )
         .await;
         let status = tokio::time::timeout(DEADLINE, self.child.wait())
@@ -237,8 +253,14 @@ impl Process {
             .unwrap();
         let log = self.output.await.unwrap();
         assert!(status.success(), "candidate process failed: {log}");
-        assert_eq!(self.lifetimes, 3, "initial, restored, and ordinary-restart lifetimes");
-        assert!(log.contains("PQ mesh transport stopped"), "mesh shutdown receipt: {log}");
+        assert_eq!(
+            self.lifetimes, 3,
+            "initial, restored, and ordinary-restart lifetimes"
+        );
+        assert!(
+            log.contains("PQ mesh transport stopped"),
+            "mesh shutdown receipt: {log}"
+        );
     }
 }
 
@@ -298,7 +320,9 @@ async fn pair(
     let begin: Value = connection.receive().await.unwrap();
     assert_eq!(begin["body"]["type"], "begin_result");
     let browser = reqwest::Url::parse(
-        begin["body"]["passkey_options"]["browserUrl"].as_str().unwrap(),
+        begin["body"]["passkey_options"]["browserUrl"]
+            .as_str()
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(browser.origin().ascii_serialization(), ORIGIN);
@@ -319,11 +343,15 @@ async fn pair(
     let origin = reqwest::Url::parse(ORIGIN).unwrap();
     let credential = match options["kind"].as_str().unwrap() {
         "registration" => serde_json::to_value(
-            authenticator.do_registration(origin, serde_json::from_value(public).unwrap()).unwrap(),
+            authenticator
+                .do_registration(origin, serde_json::from_value(public).unwrap())
+                .unwrap(),
         )
         .unwrap(),
         "assertion" => serde_json::to_value(
-            authenticator.do_authentication(origin, serde_json::from_value(public).unwrap()).unwrap(),
+            authenticator
+                .do_authentication(origin, serde_json::from_value(public).unwrap())
+                .unwrap(),
         )
         .unwrap(),
         _ => panic!("unknown passkey ceremony"),
@@ -343,7 +371,12 @@ async fn pair(
         challenge_id: begin["body"]["challenge_id"].as_str().unwrap().into(),
         passkey_response: json!({"browser":true}),
         device_signature: device
-            .sign(begin["body"]["device_proof_message"].as_str().unwrap().as_bytes())
+            .sign(
+                begin["body"]["device_proof_message"]
+                    .as_str()
+                    .unwrap()
+                    .as_bytes(),
+            )
             .unwrap(),
     });
     connection.send(&finish).await.unwrap();
@@ -396,9 +429,14 @@ async fn denied(endpoint: &PqcEndpoint, address: &ServerAddress, session: &str) 
         "request_id":request_id,"binding":proof.binding()
     }});
     proof.send(&request).await.unwrap();
-    let rejected: Value = proof.receive().await
+    let rejected: Value = proof
+        .receive()
+        .await
         .expect("authorization evidence requires an explicit application reply");
-    assert_eq!(rejected["body"]["type"], "error", "a revived grant must fail this probe");
+    assert_eq!(
+        rejected["body"]["type"], "error",
+        "a revived grant must fail this probe"
+    );
     assert_eq!(rejected["body"]["code"], "denied");
     proof.close().await;
 
@@ -408,7 +446,10 @@ async fn denied(endpoint: &PqcEndpoint, address: &ServerAddress, session: &str) 
     let request = control(&connection, session);
     connection.send(&request).await.unwrap();
     assert!(
-        matches!(connection.receive::<Value>().await, Err(MeshError::Closed | MeshError::Network)),
+        matches!(
+            connection.receive::<Value>().await,
+            Err(MeshError::Closed | MeshError::Network)
+        ),
         "old session returned control data or failed to complete its closure check"
     );
     connection.close().await;
@@ -443,7 +484,10 @@ async fn read_database(root: &Path) -> SqliteConnection {
 
 fn assert_rejected(response: &Value) {
     assert_eq!(response["body"]["type"], "error");
-    assert!(matches!(response["body"]["code"].as_str(), Some("denied" | "used")));
+    assert!(matches!(
+        response["body"]["code"].as_str(),
+        Some("denied" | "used")
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -459,7 +503,13 @@ async fn actual_binary_restore_retires_old_mesh_authority() {
     let mut process = Process::start(root).await;
     let base = process.base.clone();
     let public = expect_http(
-        &client, &base, "GET", "/System/Info/Public", "", Value::Null, 200,
+        &client,
+        &base,
+        "GET",
+        "/System/Info/Public",
+        "",
+        Value::Null,
+        200,
     )
     .await;
     assert_eq!(public["ServerName"], process.name);
@@ -490,19 +540,32 @@ async fn actual_binary_restore_retires_old_mesh_authority() {
     let endpoint = PqcEndpoint::client(&device).await.unwrap();
     let mut authenticator = WebauthnAuthenticator::new(SoftPasskey::new(true));
     let paired = pair(
-        &client, &base, &endpoint, &device, &mut authenticator, &invitation, 21,
+        &client,
+        &base,
+        &endpoint,
+        &device,
+        &mut authenticator,
+        &invitation,
+        21,
     )
     .await;
     assert_eq!(paired.receipt["body"]["session"]["state"], "pending");
-    let handle = paired.receipt["body"]["session"]["handle"].as_str().unwrap();
+    let handle = paired.receipt["body"]["session"]["handle"]
+        .as_str()
+        .unwrap();
     expect_http(
-        &client, &base, "POST",
+        &client,
+        &base,
+        "POST",
         &format!("/Bluefin/Accounts/Mesh/Requests/{handle}/Approve"),
-        admin, Value::Null, 200,
+        admin,
+        Value::Null,
+        200,
     )
     .await;
     let approved = rpc(
-        &endpoint, &address,
+        &endpoint,
+        &address,
         &json!({"version":1,"body":{"type":"status","handle":handle}}),
     )
     .await;
@@ -518,27 +581,49 @@ async fn actual_binary_restore_retires_old_mesh_authority() {
     );
 
     let mut database = read_database(root).await;
-    let bearer: String = sqlx::query_scalar(
-        "SELECT AccessToken FROM Devices WHERE DeviceId=?",
-    )
-    .bind(format!("bluefin-mesh:{session}"))
-    .fetch_one(&mut database)
-    .await
-    .unwrap();
+    let bearer: String = sqlx::query_scalar("SELECT AccessToken FROM Devices WHERE DeviceId=?")
+        .bind(format!("bluefin-mesh:{session}"))
+        .fetch_one(&mut database)
+        .await
+        .unwrap();
     database.close().await.unwrap();
-    expect_http(&client, &base, "GET", "/Users/Me", &bearer, Value::Null, 401).await;
+    expect_http(
+        &client,
+        &base,
+        "GET",
+        "/Users/Me",
+        &bearer,
+        Value::Null,
+        401,
+    )
+    .await;
     let unused = issue(&client, &base, admin, "login", Some(user)).await;
     let manifest = expect_http(
-        &client, &base, "POST", "/Backup/Create", admin, json!({"Database":true}), 200,
+        &client,
+        &base,
+        "POST",
+        "/Backup/Create",
+        admin,
+        json!({"Database":true}),
+        200,
     )
     .await;
     let archive = Path::new(manifest["Path"].as_str().unwrap())
-        .file_name().unwrap().to_str().unwrap().to_owned();
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
     // A real post-snapshot database mutation proves the archive was applied;
     // an ordinary restart cannot satisfy the later missing-user assertion.
     let created = expect_http(
-        &client, &base, "POST", "/Users/New", admin,
-        json!({"Name":"post-backup-sentinel","Password":"Synthetic sentinel password"}), 200,
+        &client,
+        &base,
+        "POST",
+        "/Users/New",
+        admin,
+        json!({"Name":"post-backup-sentinel","Password":"Synthetic sentinel password"}),
+        200,
     )
     .await;
     let sentinel = created["Id"].as_str().unwrap();
@@ -547,25 +632,39 @@ async fn actual_binary_restore_retires_old_mesh_authority() {
     denied(&endpoint, &address, session).await;
 
     expect_http(
-        &client, &base, "POST", "/Backup/Restore", admin,
-        json!({"ArchiveFileName":archive}), 204,
+        &client,
+        &base,
+        "POST",
+        "/Backup/Restore",
+        admin,
+        json!({"ArchiveFileName":archive}),
+        204,
     )
     .await;
     process.next_lifetime().await;
     let info = expect_http(
-        &client, &base, "GET", "/System/Info", admin, Value::Null, 200,
+        &client,
+        &base,
+        "GET",
+        "/System/Info",
+        admin,
+        Value::Null,
+        200,
     )
     .await;
     assert_eq!(info["ServerName"], process.name);
     assert_eq!(info["HasPendingRestart"], false);
     expect_http(
-        &client, &base, "GET", &format!("/Users/{sentinel}"), admin, Value::Null, 404,
+        &client,
+        &base,
+        "GET",
+        &format!("/Users/{sentinel}"),
+        admin,
+        Value::Null,
+        404,
     )
     .await;
-    let ordinary = expect_http(
-        &client, &base, "GET", "/Users/Me", admin, Value::Null, 200,
-    )
-    .await;
+    let ordinary = expect_http(&client, &base, "GET", "/Users/Me", admin, Value::Null, 200).await;
     assert_eq!(ordinary["Name"], ADMIN, "unrelated HTTP session survives");
 
     // Authenticate to the restarted owner before testing denial: a dead
@@ -573,7 +672,10 @@ async fn actual_binary_restore_retires_old_mesh_authority() {
     let login = issue(&client, &base, admin, "login", Some(user)).await;
     let current_address = login.server_address();
     assert_eq!(current_address.endpoint_id, address.endpoint_id);
-    assert_eq!(current_address.server_certificate_sha256, address.server_certificate_sha256);
+    assert_eq!(
+        current_address.server_certificate_sha256,
+        address.server_certificate_sha256
+    );
     denied(&endpoint, &current_address, session).await;
     assert_rejected(&rpc(&endpoint, &current_address, &paired.finish).await);
     assert_rejected(
@@ -581,7 +683,7 @@ async fn actual_binary_restore_retires_old_mesh_authority() {
             &endpoint,
             &current_address,
             &envelope(Request::Begin {
-                request_id: [81;32],
+                request_id: [81; 32],
                 invitation: unused,
                 device_public_key: device.public_key(),
                 device_label: "Restored stale invitation".into(),
@@ -592,28 +694,59 @@ async fn actual_binary_restore_retires_old_mesh_authority() {
     );
     let mut database = read_database(root).await;
     let retained: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM Devices WHERE AccessToken=?")
-        .bind(&bearer).fetch_one(&mut database).await.unwrap();
+        .bind(&bearer)
+        .fetch_one(&mut database)
+        .await
+        .unwrap();
     assert_eq!(retained, 0, "restored internal bearer must be removed");
     let retained: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM BluefinMeshSessions WHERE Id=?")
-        .bind(session).fetch_one(&mut database).await.unwrap();
+        .bind(session)
+        .fetch_one(&mut database)
+        .await
+        .unwrap();
     assert_eq!(retained, 0);
     database.close().await.unwrap();
-    expect_http(&client, &base, "GET", "/Users/Me", &bearer, Value::Null, 401).await;
+    expect_http(
+        &client,
+        &base,
+        "GET",
+        "/Users/Me",
+        &bearer,
+        Value::Null,
+        401,
+    )
+    .await;
 
     let fresh = pair(
-        &client, &base, &endpoint, &device, &mut authenticator, &login, 41,
+        &client,
+        &base,
+        &endpoint,
+        &device,
+        &mut authenticator,
+        &login,
+        41,
     )
     .await;
     let fresh_session = fresh.receipt["body"]["session"]["id"].as_str().unwrap();
     assert_ne!(fresh_session, session);
-    assert_eq!(me(&endpoint, &current_address, fresh_session).await["Id"], user);
+    assert_eq!(
+        me(&endpoint, &current_address, fresh_session).await["Id"],
+        user
+    );
     expect_http(
-        &client, &base, "POST", "/System/Restart", admin, Value::Null, 204,
+        &client,
+        &base,
+        "POST",
+        "/System/Restart",
+        admin,
+        Value::Null,
+        204,
     )
     .await;
     process.next_lifetime().await;
     assert_eq!(
-        me(&endpoint, &current_address, fresh_session).await["Id"], user,
+        me(&endpoint, &current_address, fresh_session).await["Id"],
+        user,
         "ordinary restart preserves the new device session and restored account"
     );
     denied(&endpoint, &current_address, session).await;
