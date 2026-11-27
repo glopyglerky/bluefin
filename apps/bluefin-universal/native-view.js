@@ -767,6 +767,9 @@ async function startSearch(query,filters={},record=false){
  finally{if(route===state.route)render();}
 }
 async function openSearch(){
+ if(state.local&&['local_music','local_search'].includes(state.route.kind)){
+  state.route={kind:'local_search',title:'Search on this device'};state.rows=localOwner().search(state.localQuery).map(localItem);state.shelves=[];render();return;
+ }
  if(!state.session&&state.local)return navigate('Search');
  if(state.route.kind==='search'){
   document.getElementById('bluefin-search')?.focus?.();
