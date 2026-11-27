@@ -105,7 +105,7 @@ impl CatalogClient {
         };
         let client = Client::builder().no_proxy().redirect(Policy::none())
             .connect_timeout(Duration::from_secs(3)).timeout(Duration::from_secs(8))
-            .user_agent(concat!("Bluefin-Catalog/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("Bluefin-Catalog/", env!("CARGO_PKG_VERSION"), " (+https://github.com/glopyglerky/bluefin)"))
             .build().map_err(|_| ClientError::Initialization)?;
         Ok(Self { client, tmdb, motn })
     }
