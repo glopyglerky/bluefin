@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
+<meta name="application-name" content="Bluefin">
+<meta name="apple-mobile-web-app-title" content="Bluefin">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#a3acb1" media="(prefers-color-scheme:light)">
+<meta name="theme-color" content="#061727" media="(prefers-color-scheme:dark)">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" sizes="512x512" href="./assets/bluefin-app-512.png">
 <title>Bluefin</title>
 <script>(()=>{let code='';if(location.hash.startsWith('#bluefin-connect=')){code=location.hash.slice('#bluefin-connect='.length);try{history.replaceState(null,'',location.pathname+location.search);}catch(_){code='';}}globalThis.takeBluefinLaunch=()=>{const value=code;code='';return value;};})();</script>
 <link rel="stylesheet" href="./bluefin.css">

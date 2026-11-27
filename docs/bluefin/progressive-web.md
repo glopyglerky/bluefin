@@ -144,6 +144,23 @@ comparison](https://developer.apple.com/help/account/basics/about-your-developer
 [Google TV distribution](https://developer.android.com/training/tv/publishing/distribute),
 [Roku beta distribution](https://developer.roku.com/dev/docs/channel-publishing-guide)
 
+The web app has a standalone web manifest with its start URL at the application
+root. Its default application ID is that resolved start URL. The package pins
+that manifest and the existing Bluefin 512-pixel app icon by content hash. Both the application and
+installation page link to the same manifest. Installation carries no invitation,
+account, device identity or session into the manifest or its launch URL.
+
+Safari's Add to Home Screen and each browser's install menu remain user actions.
+Open the installed app and scan the original invitation before starting pairing.
+Installation cannot transfer an in-progress temporary device key to a new
+browser context. A previously remembered device remains tied to the browser
+storage that created it. No offline cache or authenticated-response caching is
+added, and real installation remains a device qualification step. The
+[manifest ID processing rule](https://www.w3.org/TR/appmanifest/#id-member)
+keeps identity stable when the hashed manifest filename changes. The
+[web manifest guidance](https://web.dev/learn/pwa/web-app-manifest)
+recommends a 512-pixel icon when shipping one size.
+
 ## Temporary devices
 
 Mesh pairing uses an in-memory revisioned journal by default. Opening the page

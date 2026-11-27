@@ -71,6 +71,14 @@ function packageWeb(engineInput,output,sourceRoot){
  if(wasm.length<8||!wasm.subarray(0,4).equals(Buffer.from([0,97,115,109])))throw Error('The admitted Wasm artifact is invalid.');
  const css=read(app,'bluefin.css'),cssName=hashed('bluefin.css',css);
  const install=installPage(app,cssName);
+ const icon=read(app,'assets/bluefin-app-512.png'),iconName=hashed('bluefin-app-512.png',icon);
+ const webManifest=replace(read(app,'manifest.webmanifest').toString('utf8'),
+  './assets/bluefin-app-512.png','./'+iconName,'web app icon');
+ const webManifestName=hashed('manifest.webmanifest',Buffer.from(webManifest));
+ function installationMetadata(html){
+  return replace(replace(html,'./manifest.webmanifest','./'+webManifestName,'web app manifest'),
+   './assets/bluefin-app-512.png','./'+iconName,'Apple touch icon');
+ }
  fs.mkdirSync(output,{recursive:false,mode:0o755});
  const worker=read(app,'media-worker.js'),workerHash=sha(worker);
  const workerReference='./media-worker.js?release='+workerHash;
@@ -111,8 +119,10 @@ function packageWeb(engineInput,output,sourceRoot){
   write(output,versioned,bytes);
   index=replace(index,'./'+name,'./'+versioned,name);
  }
- write(output,'index.html',index);
- write(output,'install.html',install);
+ write(output,iconName,icon);
+ write(output,webManifestName,webManifest);
+ write(output,'index.html',installationMetadata(index));
+ write(output,'install.html',installationMetadata(install));
  write(output,'mesh-policy.json',read(app,'mesh-policy.json'));
  write(output,'LICENSE',read(sourceRoot,'LICENSE'));
  // Deployment provenance and the exact corresponding-source archive are
