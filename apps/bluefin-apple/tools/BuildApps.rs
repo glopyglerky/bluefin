@@ -50,8 +50,14 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), Box<dyn Error>> {
 }
 fn main() -> Result<(), Box<dyn Error>> {
     let app = env::current_dir()?.canonicalize()?;
-    if !app.join("Bluefin.xcodeproj/project.pbxproj").is_file() {
-        return Err("Run from apps/bluefin-apple after project generation".into());
+    let project = match env::var("BLUEFIN_APP_PROFILE") {
+        Err(env::VarError::NotPresent) => "Bluefin.xcodeproj",
+        Ok(profile) if profile == "provisioned" => "Bluefin.xcodeproj",
+        Ok(profile) if profile == "personal" => "BluefinPersonal.xcodeproj",
+        _ => return Err("BLUEFIN_APP_PROFILE must be personal or provisioned".into()),
+    };
+    if !app.join(project).join("project.pbxproj").is_file() {
+        return Err(format!("Generate {project} in apps/bluefin-apple first").into());
     }
     let repo = app.ancestors().nth(2).ok_or("Missing repository")?;
     let derived = outside("BLUEFIN_XCODE_DERIVED", repo)?;
@@ -109,7 +115,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let status = Command::new("xcodebuild")
             .args([
                 "-project",
-                "Bluefin.xcodeproj",
+                project,
                 "-scheme",
                 scheme,
                 "-configuration",
