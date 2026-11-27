@@ -11,6 +11,7 @@ use axum::{
     routing::{get, post},
 };
 use bluefin_contract::discovery::{ActionForm, ActionReceipt, DiscoveryPage, SubmitAction};
+use bluefin_contract::search::SearchScope;
 use bluefin_discovery::{
     Audience, DiscoveryService, Error, Viewer,
     config::{SaveSettings, SettingsSnapshot},
@@ -24,12 +25,14 @@ use uuid::Uuid;
 struct Search {
     query: String,
     page: Option<u32>,
+    #[serde(default)]
+    scope: SearchScope,
 }
 impl crate::extract::QueryParameters for Search {
     const COLLECTIONS: &'static [(&'static str, char)] = &[];
 }
 
-fn viewer(auth: &AuthorizationInfo) -> Result<Viewer, ApiError> {
+pub(super) fn viewer(auth: &AuthorizationInfo) -> Result<Viewer, ApiError> {
     if auth.is_api_key || !auth.is_authenticated || auth.user_id().is_nil() {
         return Err(ApiError::Forbidden(
             "a current user session is required".into(),
@@ -39,9 +42,17 @@ fn viewer(auth: &AuthorizationInfo) -> Result<Viewer, ApiError> {
         .user_policy
         .as_ref()
         .ok_or_else(|| ApiError::Forbidden("user policy required".into()))?;
-    Ok(Viewer {
-        user_id: auth.user_id(),
-        administrator: policy.is_administrator,
+    let viewer = Viewer::new(auth.user_id(), policy.is_administrator);
+    if auth
+        .device_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with("bluefin-mesh:"))
+    {
+        return Ok(viewer);
+    }
+    Ok(match &auth.token {
+        Some(token) => viewer.with_session_token(token.expose()),
+        None => viewer,
     })
 }
 fn service(state: &AppState) -> Result<Arc<DiscoveryService>, ApiError> {
@@ -71,7 +82,13 @@ macro_rules! search_handler {
             let viewer = viewer(&auth)?;
             Ok(Json(
                 service(&state)?
-                    .search(viewer, $audience, &query.query, query.page.unwrap_or(1))
+                    .search_scope(
+                        viewer,
+                        $audience,
+                        &query.query,
+                        query.page.unwrap_or(1),
+                        query.scope,
+                    )
                     .await
                     .map_err(error)?,
             ))

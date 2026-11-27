@@ -25,6 +25,8 @@ pub struct SaveSettings {
     pub base_url: Option<String>,
     pub allow_local_http: bool,
     pub api_key: Option<String>,
+    /// Use the viewer's current session with a locally hosted catalog adapter.
+    pub session_catalog: Option<bool>,
     #[serde(default)]
     pub clear_credential: bool,
     pub viewers: Vec<ViewerGrant>,
@@ -39,6 +41,7 @@ pub struct SettingsSnapshot {
     pub base_url: Option<String>,
     pub allow_local_http: bool,
     pub credential_configured: bool,
+    pub session_catalog: bool,
     pub viewers: Vec<ViewerGrant>,
 }
 
@@ -51,6 +54,8 @@ pub(crate) struct StoredSettings {
     pub base_url: Option<String>,
     pub allow_local_http: bool,
     pub api_key: Option<String>,
+    #[serde(default)]
+    pub session_catalog: bool,
     pub viewers: Vec<ViewerGrant>,
 }
 
@@ -63,6 +68,7 @@ impl StoredSettings {
             base_url: self.base_url.clone(),
             allow_local_http: self.allow_local_http,
             credential_configured: self.api_key.is_some(),
+            session_catalog: self.session_catalog,
             viewers: self.viewers.clone(),
         }
     }
@@ -86,6 +92,7 @@ impl StoredSettings {
             base_url: input.base_url,
             allow_local_http: input.allow_local_http,
             api_key: key,
+            session_catalog: input.session_catalog.unwrap_or(self.session_catalog),
             viewers: input.viewers,
         };
         next.validate()?;
@@ -113,9 +120,22 @@ impl StoredSettings {
             return Err(Error::Invalid);
         }
         if let Some(base) = &self.base_url {
-            validate_url(base, self.allow_local_http)?;
+            let url = validate_url(base, self.allow_local_http)?;
+            if self.session_catalog
+                && !matches!(url.host(),
+                    Some(url::Host::Ipv4(ip)) if ip.is_loopback())
+                && !matches!(url.host(),
+                    Some(url::Host::Ipv6(ip)) if ip.is_loopback())
+            {
+                return Err(Error::Invalid);
+            }
         }
-        if self.enabled && (self.base_url.is_none() || self.api_key.is_none()) {
+        if self.session_catalog && self.api_key.is_some() {
+            return Err(Error::Invalid);
+        }
+        if self.enabled
+            && (self.base_url.is_none() || (!self.session_catalog && self.api_key.is_none()))
+        {
             return Err(Error::Invalid);
         }
         Ok(())

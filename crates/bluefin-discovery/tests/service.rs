@@ -1,11 +1,12 @@
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use bluefin_contract::discovery::SubmitAction;
+use bluefin_contract::search::SearchScope;
 use bluefin_discovery::{Audience, DiscoveryService, Error, Viewer, config::SaveSettings};
 use serde_json::{Value, json};
 use std::sync::{
@@ -17,6 +18,7 @@ use uuid::Uuid;
 
 const USER: Uuid = Uuid::from_u128(42);
 const KEY: &str = "test-service-credential";
+const SESSION: &str = "test-viewer-session";
 
 #[derive(Default)]
 struct Fake {
@@ -30,6 +32,15 @@ struct Fake {
 fn scoped(headers: &HeaderMap) -> bool {
     headers.get("x-api-key").is_some_and(|v| v == KEY)
         && headers.get("x-api-user").is_some_and(|v| v == "7")
+        && headers.get("authorization").is_none()
+}
+
+fn session_scoped(headers: &HeaderMap) -> bool {
+    headers
+        .get("authorization")
+        .is_some_and(|v| v == "MediaBrowser Token=\"test-viewer-session\"")
+        && !headers.contains_key("x-api-key")
+        && !headers.contains_key("x-api-user")
 }
 async fn me(State(fake): State<Arc<Fake>>, headers: HeaderMap) -> Response {
     fake.auth_calls.fetch_add(1, Ordering::SeqCst);
@@ -93,6 +104,52 @@ impl Fixture {
             .route("/api/v1/tv/{id}", get(seasons))
             .route("/api/v1/request", post(submit))
             .route(
+                "/Moonfin/Seerr/Api/auth/me",
+                get(|State(fake): State<Arc<Fake>>, headers: HeaderMap| async move {
+                    assert!(session_scoped(&headers));
+                    fake.auth_calls.fetch_add(1, Ordering::SeqCst);
+                    Json(json!({
+                        "id": 7, "permissions": fake.permissions.load(Ordering::SeqCst)
+                    }))
+                }),
+            )
+            .route(
+                "/Moonfin/Seerr/Api/search",
+                get(|headers: HeaderMap, Query(query): Query<std::collections::HashMap<String, String>>| async move {
+                    assert!(session_scoped(&headers));
+                    assert_eq!(query["query"], "stevn spelberg");
+                    let mut results = vec![
+                        json!({"id": 11, "mediaType": "person", "name": "Steven Spielberg", "knownForDepartment": "Directing"}),
+                        json!({"id": 123, "mediaType": "movie", "title": "A related film", "mediaInfo": null}),
+                        json!({"id": 456, "mediaType": "tv", "name": "A related series"})
+                    ];
+                    if let Some(kind) = query.get("type") {
+                        results.retain(|row| row["mediaType"] == kind.as_str());
+                    }
+                    Json(json!({"results": results}))
+                }),
+            )
+            .route(
+                "/JellyfinEnhanced/jellyseerr/music/search",
+                get(|headers: HeaderMap, Query(query): Query<std::collections::HashMap<String, String>>| async move {
+                    assert!(session_scoped(&headers));
+                    assert_eq!(query["query"], "Test musician");
+                    Json(json!({
+                        "artists": [{"name": "Test musician"}],
+                        "albums": [{"albumName":"Test album","artistName":"Test musician","catalogManaged":true}],
+                        "tracks": [{"title":"Test track","artistName":"Test musician"}]
+                    }))
+                }),
+            )
+            .route(
+                "/Moonfin/Seerr/Api/request",
+                post(|State(fake): State<Arc<Fake>>, headers: HeaderMap, Json(body): Json<Value>| async move {
+                    assert!(session_scoped(&headers));
+                    fake.bodies.lock().await.push(body);
+                    Json(json!({"familyLibrary": {"state": "ready"}}))
+                }),
+            )
+            .route(
                 "/redirect-target",
                 get(move || {
                     let target = Arc::clone(&target);
@@ -136,11 +193,104 @@ impl Fixture {
             .unwrap();
     }
 }
-fn viewer() -> Viewer {
-    Viewer {
-        user_id: USER,
-        administrator: false,
+
+#[tokio::test]
+async fn session_catalog_scopes_are_sent_upstream_and_music_uses_the_current_viewer() {
+    let f = Fixture::new().await;
+    let mut update = f.update(0, true, true, false);
+    update.session_catalog = Some(true);
+    f.service.save(update).await.unwrap();
+    let current = viewer().with_session_token(SESSION);
+    for (scope, kind) in [
+        (SearchScope::Movies, "movie"),
+        (SearchScope::TvShows, "series"),
+    ] {
+        let page = f
+            .service
+            .search_scope(
+                current.clone(),
+                Audience::Client,
+                "stevn spelberg",
+                1,
+                scope,
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.results.len(), 1);
+        assert_eq!(page.results[0].kind, kind);
+        assert_eq!(page.results[0].actions.len(), 1);
     }
+    let page = f
+        .service
+        .search_scope(
+            current,
+            Audience::Client,
+            "Test musician",
+            1,
+            SearchScope::Music,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        page.results
+            .iter()
+            .map(|row| row.kind.as_str())
+            .collect::<Vec<_>>(),
+        ["artist", "album", "track"]
+    );
+    assert!(
+        page.results
+            .iter()
+            .all(|row| row.availability == "unknown" && row.actions.is_empty())
+    );
+}
+
+#[tokio::test]
+async fn session_catalog_preserves_ranked_people_and_submits_through_current_family_session() {
+    let f = Fixture::new().await;
+    let mut update = f.update(0, true, true, false);
+    update.session_catalog = Some(true);
+    update.base_url = Some("https://catalog.example.invalid".into());
+    assert!(matches!(f.service.save(update).await, Err(Error::Invalid)));
+
+    let mut update = f.update(0, true, true, false);
+    update.session_catalog = Some(true);
+    f.service.save(update).await.unwrap();
+    assert!(matches!(
+        f.service
+            .search(viewer(), Audience::Client, "stevn spelberg", 1)
+            .await,
+        Err(Error::Forbidden)
+    ));
+    assert_eq!(f.fake.auth_calls.load(Ordering::SeqCst), 0);
+
+    let viewer = viewer().with_session_token(SESSION);
+    let page = f
+        .service
+        .search(viewer.clone(), Audience::Client, "stevn spelberg", 1)
+        .await
+        .unwrap();
+    assert_eq!(page.results[0].kind, "person");
+    assert_eq!(page.results[0].title, "Steven Spielberg");
+    assert!(page.results[0].actions.is_empty());
+    let action = page.results[1].actions[0].id;
+    f.service
+        .action(viewer.clone(), Audience::Client, action)
+        .await
+        .unwrap();
+    f.service
+        .submit(viewer, Audience::Client, input(action, &[]))
+        .await
+        .unwrap();
+    assert_eq!(
+        *f.fake.bodies.lock().await,
+        vec![json!({
+            "mediaId": 123, "mediaType": "movie", "is4k": false
+        })]
+    );
+}
+fn viewer() -> Viewer {
+    Viewer::new(USER, false)
 }
 fn input(id: Uuid, selections: &[&str]) -> SubmitAction {
     SubmitAction {
@@ -264,13 +414,10 @@ async fn mapped_identity_generic_results_explicit_request_and_duplicate_submissi
 async fn caller_identity_and_service_key_never_grant_another_users_authority() {
     let f = Fixture::new().await;
     f.enable().await;
-    let stranger = Viewer {
-        user_id: Uuid::from_u128(43),
-        administrator: false,
-    };
+    let stranger = Viewer::new(Uuid::from_u128(43), false);
     assert!(matches!(
         f.service
-            .search(stranger, Audience::Client, "original", 1)
+            .search(stranger.clone(), Audience::Client, "original", 1)
             .await,
         Err(Error::Forbidden)
     ));

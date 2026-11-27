@@ -53,10 +53,7 @@ async fn capabilities(
             Some(discovery) => {
                 discovery
                     .capabilities(
-                        bluefin_discovery::Viewer {
-                            user_id,
-                            administrator: policy.is_administrator,
-                        },
+                        bluefin_discovery::Viewer::new(user_id, policy.is_administrator),
                         bluefin_discovery::Audience::Client,
                     )
                     .await
