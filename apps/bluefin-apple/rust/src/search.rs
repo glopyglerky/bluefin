@@ -12,7 +12,37 @@ pub(super) fn query(v: &Value, q: &mut Vec<(&'static str, String)>) -> Result<()
             q.push(("IncludeItemTypes", types.into()));
         }
     }
-    metadata(v, q)
+    metadata(v, q)?;
+    ordering(v, q)
+}
+
+/// Forward only supported ordering controls. SearchOrder is an explicit Bluefin
+/// extension; ordinary Jellyfin clients keep relevance-first search behavior.
+pub(super) fn ordering(v: &Value, q: &mut Vec<(&'static str, String)>) -> Result<()> {
+    if let Some(sort) = v.get("sortBy").filter(|value| !value.is_null()) {
+        let sort = sort.as_str().ok_or_else(|| err("Invalid search sort"))?;
+        if sort.is_empty() || !sort.split(',').all(|key| {
+            ["SortName", "Name", "DateCreated", "PremiereDate", "ProductionYear"]
+                .iter().any(|allowed| key.eq_ignore_ascii_case(allowed))
+        }) {
+            return Err(err("Unsupported search sort"));
+        }
+        q.push(("SortBy", sort.into()));
+    }
+    if let Some(order) = v.get("sortOrder").filter(|value| !value.is_null()) {
+        let order = order.as_str().ok_or_else(|| err("Invalid sort direction"))?;
+        if !order.eq_ignore_ascii_case("Ascending") && !order.eq_ignore_ascii_case("Descending") {
+            return Err(err("Invalid sort direction"));
+        }
+        q.push(("SortOrder", order.into()));
+    }
+    if let Some(mode) = v.get("searchOrder").filter(|value| !value.is_null()) {
+        if mode.as_str() != Some("SortBy") || !q.iter().any(|(key, _)| *key == "SortBy") {
+            return Err(err("SearchOrder=SortBy requires a supported sort"));
+        }
+        q.push(("SearchOrder", "SortBy".into()));
+    }
+    Ok(())
 }
 
 /// Validate delimiter-safe studio and tag selections before forwarding them.
@@ -34,6 +64,34 @@ pub(super) fn metadata(v: &Value, q: &mut Vec<(&'static str, String)>) -> Result
         }).collect::<Result<Vec<_>>>()?;
         if !tags.is_empty() { q.push(("Tags", tags.join("|"))); }
     }
+    for (input, output) in [("isPlayed", "IsPlayed"), ("isFavorite", "IsFavorite")] {
+        if let Some(value) = v.get(input).filter(|value| !value.is_null()) {
+            q.push((output, value.as_bool().ok_or_else(|| err("Invalid library filter"))?.to_string()));
+        }
+    }
+    if let Some(values) = v.get("genres").filter(|value| !value.is_null()) {
+        let values = values.as_array().ok_or_else(|| err("Invalid genres"))?;
+        if values.len() > 16 { return Err(err("Too many genre filters")); }
+        let genres = values.iter().map(|value| {
+            let name = value.as_str().ok_or_else(|| err("Invalid genre"))?;
+            if name.is_empty() || name.len() > 256 || name.contains('|') || name.chars().any(char::is_control) {
+                return Err(err("Invalid genre"));
+            }
+            Ok(name)
+        }).collect::<Result<Vec<_>>>()?;
+        if !genres.is_empty() { q.push(("Genres", genres.join("|"))); }
+    }
+    if let Some(values) = v.get("years").filter(|value| !value.is_null()) {
+        let values = values.as_array().ok_or_else(|| err("Invalid years"))?;
+        if values.len() > 32 { return Err(err("Too many release years")); }
+        let years = values.iter().map(|value| {
+            let year = value.as_i64().filter(|year| (1..=9999).contains(year))
+                .ok_or_else(|| err("Invalid release year"))?;
+            Ok(year.to_string())
+        }).collect::<Result<Vec<_>>>()?;
+        if !years.is_empty() { q.push(("Years", years.join(","))); }
+    }
+
     Ok(())
 }
 
@@ -49,6 +107,10 @@ pub(super) fn facets(api: &Api<'_>) -> Result<Value> {
         ("IncludeItemTypes", "BoxSet".into()), ("Recursive", "true".into()),
         ("Limit", "200".into()), ("SortBy", "SortName".into())
     ])?;
+    project_facets(&studios, &filters, &collections)
+}
+
+fn project_facets(studios: &Value, filters: &Value, collections: &Value) -> Result<Value> {
     let named = |value: &Value| -> Result<Vec<Value>> {
         let rows = value["Items"].as_array().ok_or_else(|| err("Invalid search filters"))?;
         if rows.len() > 200 { return Err(err("Search filter page exceeds limit")); }
@@ -64,13 +126,79 @@ pub(super) fn facets(api: &Api<'_>) -> Result<Value> {
     let tags: Vec<_> = all_tags.iter().filter_map(Value::as_str)
         .filter(|tag| !tag.trim().is_empty() && tag.len() <= 256 && !tag.contains('|') && !tag.chars().any(char::is_control))
         .take(512).collect();
+    let mut genres: Vec<_> = filters["Genres"].as_array().into_iter().flatten()
+        .filter_map(|value| value.as_str().or_else(|| value["Name"].as_str()))
+        .filter(|name| !name.trim().is_empty() && name.len() <= 256 && !name.contains('|') && !name.chars().any(char::is_control))
+        .take(512).collect();
+    genres.sort_unstable(); genres.dedup();
+    let mut years: Vec<_> = filters["Years"].as_array().into_iter().flatten()
+        .filter_map(Value::as_i64).filter(|year| (1..=9999).contains(year)).take(512).collect();
+    years.sort_unstable_by(|a, b| b.cmp(a)); years.dedup();
     let truncated = studios["TotalRecordCount"].as_u64().unwrap_or(0) > 200
-        || collections["TotalRecordCount"].as_u64().unwrap_or(0) > 200 || all_tags.len() > 512;
-    Ok(json!({"studios":named(&studios)?, "tags":tags, "collections":named(&collections)?, "truncated":truncated}))
+        || collections["TotalRecordCount"].as_u64().unwrap_or(0) > 200 || all_tags.len() > 512
+        || filters["Genres"].as_array().is_some_and(|values| values.len() > 512)
+        || filters["Years"].as_array().is_some_and(|values| values.len() > 512);
+    Ok(json!({"studios":named(studios)?, "tags":tags, "collections":named(collections)?, "genres":genres, "years":years, "truncated":truncated}))
 }
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn capped_genre_and_year_facets_disclose_incomplete_choices() {
+        let empty = json!({"Items": [], "TotalRecordCount": 0});
+        for field in ["Genres", "Years"] {
+            for count in [512, 513] {
+                let values: Vec<Value> = (1..=count).map(|index| {
+                    if field == "Genres" { json!(format!("Genre {index}")) }
+                    else { json!(index) }
+                }).collect();
+                let mut filters = json!({"Tags": [], "Genres": [], "Years": []});
+                filters[field] = json!(values);
+                let projected = project_facets(&empty, &filters, &empty).unwrap();
+                let key = if field == "Genres" { "genres" } else { "years" };
+                assert_eq!(projected[key].as_array().unwrap().len(), 512);
+                assert_eq!(projected["truncated"], count > 512);
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_search_sort_and_refinements_are_retained_for_every_page() {
+        let mut query_fields = vec![("StartIndex", "120".into()), ("Limit", "60".into())];
+        query(&json!({
+            "searchScope":"movies", "sortBy":"PremiereDate", "sortOrder":"Descending",
+            "searchOrder":"SortBy", "isPlayed":false, "isFavorite":true,
+            "genres":["Drama"], "years":[1997]
+        }), &mut query_fields).unwrap();
+        for pair in [
+            ("StartIndex", "120"), ("SortBy", "PremiereDate"), ("SortOrder", "Descending"),
+            ("SearchOrder", "SortBy"), ("IsPlayed", "false"), ("IsFavorite", "true"),
+            ("Genres", "Drama"), ("Years", "1997")
+        ] {
+            assert!(query_fields.iter().any(|(key, value)| *key == pair.0 && value == pair.1));
+        }
+        let mut relevance = Vec::new();
+        query(&json!({"searchScope":"all"}), &mut relevance).unwrap();
+        assert!(!relevance.iter().any(|(key, _)| matches!(*key, "SortBy" | "SortOrder" | "SearchOrder")));
+    }
+
+    #[test]
+    fn malformed_sort_and_refinement_values_fail_before_a_request() {
+        for value in [
+            json!({"searchOrder":"SortBy"}),
+            json!({"sortBy":"Random"}),
+            json!({"sortBy":"SortName","sortOrder":"Unknown"}),
+            json!({"sortBy":"SortName","searchOrder":"Unknown"}),
+            json!({"genres":["Drama|Comedy"]}),
+            json!({"years":[-1]}),
+            json!({"years":["2026"]}),
+            json!({"isPlayed":"false"})
+        ] {
+            assert!(query(&value, &mut Vec::new()).is_err(), "{value}");
+        }
+    }
+
     use super::*;
     #[test]
     fn broad_search_removes_stale_type_and_facets_remain_server_queries() {

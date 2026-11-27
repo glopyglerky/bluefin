@@ -151,27 +151,10 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            model.section == "Search" && model.selected == null -> SearchResultsScreen(model, television) {
+                offline = false; queueIndex = null; playing = it
+            }
             else -> {
-                if (model.section == "Search") {
-                    var term by rememberSaveable { mutableStateOf(model.query) }
-                    val search = remember { FocusRequester() }
-                    TextEntry(term, { term = it }, "Search titles, artists, and channels", television,
-                        modifier = Modifier.fillMaxWidth(), next = if (!model.busy) search else null)
-                    Action("Search", !model.busy, Modifier.focusRequester(search)) { model.submitSearch(term) }
-                    SearchRefinements(model)
-                    val filters = model.searchFilters
-                    if (filters.studio == null && filters.tag == null && filters.collection == null &&
-                        model.query.length >= 2 && model.selected == null) {
-                        if (filters.scope in listOf(MediaSearchScope.ALL, MediaSearchScope.SHOWS)) {
-                            PublicTvResults(model.core, model.query)
-                        }
-                        if (filters.scope in listOf(MediaSearchScope.ALL, MediaSearchScope.MOVIES)) {
-                            PublicFilmResults(model.core, model.query, if (model.demo) emptyList() else model.rows) {
-                                offline = false; queueIndex = null; playing = it
-                            }
-                        }
-                    }
-                }
                 Text(model.section, style = MaterialTheme.typography.headlineMedium)
                 val detail = model.selected
                 if (detail != null) {
@@ -208,6 +191,41 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+}
+@Composable private fun SearchResultsScreen(model: LibraryModel, television: Boolean, play: (LibraryItem) -> Unit) {
+    var term by rememberSaveable { mutableStateOf(model.query) }
+    val search = remember { FocusRequester() }
+    val filters = model.searchFilters
+    val publicSearch = filters.studio == null && filters.tag == null && filters.collection == null && model.query.length >= 2
+    LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item(key = "search-controls") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextEntry(term, { term = it }, "Search titles, artists, and channels", television,
+                    modifier = Modifier.fillMaxWidth(), next = if (!model.busy) search else null)
+                Action("Search", !model.busy, Modifier.focusRequester(search)) { model.submitSearch(term) }
+                SearchRefinements(model)
+            }
+        }
+        if (publicSearch && filters.scope in listOf(MediaSearchScope.ALL, MediaSearchScope.SHOWS)) {
+            item(key = "public-tv") { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                PublicTvResults(model.core, model.query)
+            } }
+        }
+        if (publicSearch && filters.scope in listOf(MediaSearchScope.ALL, MediaSearchScope.MOVIES)) {
+            item(key = "public-films") { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                PublicFilmResults(model.core, model.query, if (model.demo) emptyList() else model.rows, play)
+            } }
+        }
+        if (publicSearch && filters.scope in listOf(MediaSearchScope.ALL, MediaSearchScope.MUSIC)) {
+            item(key = "public-music") { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                PublicMusicResults(model.core, model.query)
+            } }
+        }
+        item(key = "library-label") { Text("Your library", style = MaterialTheme.typography.titleLarge) }
+        items(model.rows, key = { "library-" + it.id }) { item -> LibraryTile(item, model) { model.select(item) } }
+        if (model.rows.isEmpty() && !model.busy) item { Text("No matching items in your library.") }
+        if (model.hasMore) item { Action("Load more", !model.busy) { model.more() } }
     }
 }
 @Composable private fun PublicTvResults(core: CoreClient, query: String) {
@@ -314,10 +332,9 @@ class MainActivity : ComponentActivity() {
                 local.forEach { item ->
                     Action(if (item.ticks > 0) "Resume in Bluefin" else "Play in Bluefin") { dismiss(); play(item) }
                 }
-                val offer = CatalogOfferReference.video(kind, sources?.tmdbId ?: initial?.tmdbId,
-                    exactIds.singleOrNull() ?: imdbId)
-                if (offer != null) CatalogOfferPanel(core, offer)
-                else Text("Regional availability is unknown for this title.")
+                val catalogIdentity = sources?.catalogIdentity ?: initial?.catalogIdentity
+                if (catalogIdentity != null) CatalogOffersSection(core, catalogIdentity)
+                else if (sources != null) Text("Regional availability needs a verified catalog match for this title.")
                 Text("Catalog links", style = MaterialTheme.typography.titleLarge)
                 destinations.forEach { link ->
                     Action((if (link.player) "Watch on " else "Open on ") + link.provider) { open(link.url) }
@@ -392,7 +409,7 @@ class MainActivity : ComponentActivity() {
             Action("Add to queue") { model.add(item) }
         } else Action("Browse contents") { model.children(item) }
         if (item.audio) Action("Download audio", !model.busy) { model.download(item) }
-        CatalogOfferReference.library(item)?.let { CatalogOfferPanel(model.core, it) }
+        item.catalogIdentity?.let { CatalogOffersSection(model.core, it) }
         item.providerLinks.forEach { (name, url) ->
             Action("Open $name") {
                 if (safeProviderUrl(url)) runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }

@@ -17,7 +17,8 @@ iroh-probe = ["dep:iroh"]
 portable-apple-check = ["bluefin-iroh-modern/portable-apple-check"]
 
 [dependencies]
-bluefin-sync-play = { path = "../../../crates/bluefin-sync-play" }
+bluefin-catalog = { path = "../../../crates/bluefin-catalog", features = ["http"] }
+bluefin-sync-play = { path = "../../../crates/bluefin-sync-play", features = ["requests"] }
 bluefin-local-assist = { path = "../../../crates/local-assist" }
 bluefin-mesh-connect = { package = "mesh-connect", path = "../../../crates/mesh-connect", features = ["images", "native"] }
 base64 = "0.22"

@@ -4,6 +4,11 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -87,17 +92,33 @@ object Artwork {
     }
 
     suspend fun publicPortrait(url: String?): Bitmap? {
-        if (url == null || !PublicTvTitle.isPortrait(url) && !isCommonsArtwork(url)) return null
+        if (url == null || !PublicTvTitle.isPortrait(url) && !isCatalogMusicArtwork(url)) return null
+        val cacheKey = "public/" + url
+        synchronized(monitor) { memory.get(cacheKey) }?.let { return it }
         return slots.withPermit {
             withContext(Dispatchers.IO) {
                 runCatching {
-                    val connection = URL(url).openConnection() as HttpURLConnection
-                    try {
-                        connection.instanceFollowRedirects = false
-                        connection.connectTimeout = 6000
-                        connection.readTimeout = 6000
-                        decode(connection)
-                    } finally { connection.disconnect() }
+                    var target = url
+                    var result: Bitmap? = null
+                    for (hop in 0..3) {
+                        val connection = URL(target).openConnection() as HttpURLConnection
+                        try {
+                            connection.instanceFollowRedirects = false
+                            connection.connectTimeout = 6000
+                            connection.readTimeout = 6000
+                            if (connection.responseCode in listOf(301, 302, 303, 307, 308)) {
+                                val location = connection.getHeaderField("Location") ?: break
+                                val next = URL(URL(target), location).toString()
+                                if (hop == 3 || !safeCatalogArtworkRedirect(url, next)) break
+                                target = next
+                            } else {
+                                result = decode(connection)
+                                break
+                            }
+                        } finally { connection.disconnect() }
+                    }
+                    result?.let { synchronized(monitor) { memory.put(cacheKey, it) } }
+                    result
                 }.getOrNull()
             }
         }
@@ -143,5 +164,8 @@ fun ItemArtwork(item: LibraryItem, model: LibraryModel, modifier: Modifier) {
 @Composable fun PublicCatalogArtwork(artwork: String?, modifier: Modifier) {
     var bitmap by remember(artwork) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(artwork) { bitmap = Artwork.publicPortrait(artwork) }
-    bitmap?.let { Image(it.asImageBitmap(), contentDescription = null, modifier = modifier, contentScale = ContentScale.Crop) }
+    if (bitmap != null) Image(bitmap!!.asImageBitmap(), contentDescription = null, modifier = modifier, contentScale = ContentScale.Crop)
+    else Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+        Text("Artwork", style = MaterialTheme.typography.labelSmall)
+    }
 }

@@ -21,6 +21,7 @@ mod mesh_connection;
 mod mesh_proxy;
 mod mesh_discovery;
 mod karaoke;
+mod room_requests;
 mod native_server;
 mod native_video;
 mod offline;
@@ -28,6 +29,8 @@ mod owned_music;
 mod playback_resources;
 mod premium;
 mod public_catalog;
+mod public_access;
+mod public_music;
 #[cfg(feature = "iroh-probe")]
 mod probe;
 mod sports;
@@ -542,17 +545,23 @@ fn plan_playback(api: &Api<'_>, info: &Value) -> Result<Value> {
 /// JSON interface, also useful for non-FFI hosts. Synchronous and bounded.
 pub fn call(v: &Value) -> Result<Value> {
     let op = text(v, "operation")?;
+    if op == "syncPlay" { return room_requests::call(v); }
     if op == "publicTvSearch" {
         return public_catalog::public_tv_search(v);
     }
     if op == "publicFilmSearch" {
         return public_catalog::public_film_search(v);
     }
+    if op == "publicCatalogOffers" {
+        return if v.get("identity").is_some() { public_access::offers(v) }
+            else { public_catalog::regional_access(v, true) };
+    }
+    if op == "publicCatalogProviders" { return public_catalog::regional_access(v, false); }
+    if op == "publicCatalogCountries" { return public_access::countries(v); }
+    if op == "publicMusicSearch" { return public_music::search(v); }
+    if op == "publicMusicDetail" { return public_music::detail(v); }
     if op == "publicTitleSources" {
         return public_catalog::public_title_sources(v);
-    }
-    if matches!(op, "publicCatalogOffers" | "publicCatalogProviders") {
-        return public_catalog::regional_access(v, op == "publicCatalogOffers");
     }
     if matches!(op, "ownedLibraryList" | "ownedLibraryImport" | "ownedLibraryRemove" | "ownedLibraryQueue"
         | "ownedLibrarySelect" | "ownedLibraryAdvance" | "ownedLibraryPlay" | "ownedLibrarySearch") {
@@ -774,9 +783,9 @@ pub fn call(v: &Value) -> Result<Value> {
                 ("Limit", count(v, "limit", 50, 200)?.to_string()),
                 ("Recursive", "true".into()),
                 ("Fields", if v.get("searchScope").and_then(Value::as_str).is_some() {
-                    "PrimaryImageAspectRatio,Overview,ProviderIds"
+                    "PrimaryImageAspectRatio,Overview,Genres,DateCreated,ProviderIds"
                 } else {
-                    "PrimaryImageAspectRatio,Overview"
+                    "PrimaryImageAspectRatio,Overview,Genres,DateCreated"
                 }.into()),
             ];
             for (key, out) in [

@@ -88,6 +88,7 @@ struct Artwork: View {
     @EnvironmentObject private var store: LibraryStore
     @State private var image: UIImage?
     @State private var imageKey: String?
+    @State private var requestGeneration = UUID()
     @MainActor private static var inFlight: [String: Task<UIImage?, Never>] = [:]
 
     private typealias Source = ArtworkSource
@@ -114,7 +115,16 @@ struct Artwork: View {
             }.frame(width: geometry.size.width, height: geometry.size.height).clipped()
         }
         .accessibilityHidden(true)
-        .task(id: key) { await load() }
+        .task(id: key) {
+            let request = UUID()
+            requestGeneration = request
+            await load(request: request)
+        }
+        .onDisappear {
+            requestGeneration = UUID()
+            image = nil
+            imageKey = nil
+        }
     }
     private var symbol: String {
         switch item.Type { case "Audio", "MusicAlbum", "MusicArtist": return "waveform"; case "TvChannel": return "dot.radiowaves.left.and.right"; case "Series", "Episode": return "tv"; default: return "film" }
@@ -122,11 +132,11 @@ struct Artwork: View {
     private var colors: [Color] {
         [BluefinStyle.secondaryBackground, BluefinStyle.background]
     }
-    private func load() async {
+    private func load(request: UUID) async {
         let requested = key
         guard let session = store.session, !store.preview else { return }
         let loaded = await Self.nativeImage(for: item, session: session, backdrop: backdrop, thumbnailWidth: thumbnailWidth)
-        guard !Task.isCancelled, requested == key else { return }
+        guard !Task.isCancelled, requested == key, request == requestGeneration else { return }
         image = loaded
         imageKey = requested
     }

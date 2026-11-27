@@ -613,12 +613,12 @@ struct FeaturedItem: View {
                            startPoint: .top, endPoint: .bottom)
             VStack(alignment: .leading, spacing: 10) {
                 Text("FEATURED").font(.caption2.weight(.semibold)).tracking(1.5)
-                Text(item.title)
+                Text(item.displayTitle)
                     .font(sizeClass == .compact ? .title.bold() : .largeTitle.bold())
                     .lineLimit(dynamicType.isAccessibilitySize ? nil : 2)
                     .fixedSize(horizontal: false, vertical: true)
-                if !item.subtitle.isEmpty {
-                    Text(item.subtitle).font(.subheadline).foregroundStyle(.white.opacity(0.85))
+                if !item.displaySubtitle.isEmpty {
+                    Text(item.displaySubtitle).font(.subheadline).foregroundStyle(.white.opacity(0.85))
                         .lineLimit(dynamicType.isAccessibilitySize ? nil : 2)
                 }
                 HStack(spacing: 12) {
@@ -706,14 +706,14 @@ struct Poster: View {
                     if focused { RoundedRectangle(cornerRadius: 14).strokeBorder(BluefinStyle.accent, lineWidth: 3) }
                 }
                 #endif
-            Text(item.title).font(.subheadline.weight(.semibold))
+            Text(item.displayTitle).font(.subheadline.weight(.semibold))
                 .lineLimit(dynamicType.isAccessibilitySize ? 3 : 2)
-            if !item.subtitle.isEmpty {
-                Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            if !item.displaySubtitle.isEmpty {
+                Text(item.displaySubtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(item.title + (item.subtitle.isEmpty ? "" : ", " + item.subtitle))
+        .accessibilityLabel(item.displayTitle + (item.displaySubtitle.isEmpty ? "" : ", " + item.displaySubtitle))
         .accessibilityValue(item.progress > 0 ? "\(Int(item.progress * 100)) percent watched" : "")
     }
 }
@@ -739,8 +739,8 @@ struct LandscapeMediaTile: View {
                     if focused { RoundedRectangle(cornerRadius: 16).strokeBorder(BluefinStyle.accent, lineWidth: 3) }
                 }
                 #endif
-            Text(item.title).font(.headline).lineLimit(1)
-            if !item.subtitle.isEmpty { Text(item.subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
+            Text(item.displayTitle).font(.headline).lineLimit(1)
+            if !item.displaySubtitle.isEmpty { Text(item.displaySubtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
         }.accessibilityElement(children: .combine)
     }
 }
@@ -789,57 +789,97 @@ struct ItemGrid: View {
     var query: String = ""
     var includeItemTypes: String? = nil
     @EnvironmentObject private var store: LibraryStore
-    @State private var items: [MediaItem] = []
-    @State private var offset = 0
-    @State private var requestID: UUID?
-    @State private var total = 0
-    @State private var loading = false
-    @State private var problem: String?
-    private var columns: [GridItem] {
+    @StateObject private var model = PagedMediaModel()
+    @State private var sort = LibrarySearchSort.titleAscending
+    @ScaledMetric(relativeTo: .subheadline) private var textHeight: CGFloat = 76
+    private var identity: String {
+        "\(parent?.Id ?? "")|\(query)|\(includeItemTypes ?? "")|\(sort.rawValue)|\(store.accountContext)"
+    }
+    private var minimumWidth: CGFloat {
         #if os(tvOS)
-        [GridItem(.adaptive(minimum: 230, maximum: 300), spacing: 30, alignment: .top)]
+        230
         #else
-        [GridItem(.adaptive(minimum: 140, maximum: 220), spacing: 18, alignment: .top)]
+        140
+        #endif
+    }
+    private var spacing: CGFloat {
+        #if os(tvOS)
+        30
+        #else
+        18
         #endif
     }
     var body: some View {
-        ScrollView {
-            #if os(tvOS)
-            Text(title).font(.largeTitle.bold()).frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 24).accessibilityAddTraits(.isHeader)
-            #endif
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 26) {
-                ForEach(items) { item in MediaNavigationLink(destination: .detail(item)) { Poster(item: item) }.buttonStyle(.plain) }
-            }.padding(24)
-            if loading { ProgressView().padding(30) }
-            if let problem { EmptyLibrary(title: "Couldn't load this library", message: problem, symbol: "wifi.exclamationmark"); Button("Try again") { Task { await load(reset: items.isEmpty) } } }
-            if !loading && problem == nil && items.isEmpty { EmptyLibrary(title: "Nothing here yet", message: query.isEmpty ? "This collection has no items available to your account." : "Try another title, artist, or show.", symbol: "magnifyingglass") }
-            if offset < total && !loading && problem == nil { Button("Load more") { Task { await load(reset: false) } }.padding(30) }
+        GeometryReader { geometry in
+            let width = max(1, geometry.size.width - 48)
+            let count = max(1, Int((width + spacing) / (minimumWidth + spacing)))
+            let cardWidth = max(1, (width - CGFloat(count - 1) * spacing) / CGFloat(count))
+            let height = cardWidth * 1.5 + textHeight
+            ScrollView {
+                VStack(alignment: .leading) {
+                    #if os(tvOS)
+                    Text(title).font(.largeTitle.bold()).accessibilityAddTraits(.isHeader)
+                    #endif
+                    Picker("Sort", selection: $sort) {
+                        ForEach(LibrarySearchSort.allCases.filter { (query.isEmpty && $0 != .relevance) || (!query.isEmpty && (store.supportsExplicitSearchSort || $0 == .relevance)) }) {
+                            Text($0.title).tag($0)
+                        }
+                    }.accessibilityIdentifier("librarySort")
+                }.padding(.horizontal, 24)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: spacing, alignment: .top), count: count), alignment: .leading, spacing: 26) {
+                    ForEach(model.window.pages) { page in
+                        ForEach(page.range, id: \.self) { index in
+                            Group {
+                                if model.window.isDuplicate(at: index) {
+                                    Color.clear.accessibilityHidden(true)
+                                } else if let item = model.window.item(at: index) {
+                                    MediaNavigationLink(destination: .detail(item)) { Poster(item: item) }.buttonStyle(.plain)
+                                } else {
+                                    VStack(alignment: .leading, spacing: 12) {
+                                        RoundedRectangle(cornerRadius: 14).fill(.quaternary).aspectRatio(2 / 3, contentMode: .fit)
+                                        if let problem = model.failures[page.start] {
+                                            MediaLoadingRow(message: problem, retry: { model.retry(page.start) })
+                                        } else if page.items != nil {
+                                            Text("No longer available").font(.caption).foregroundStyle(.secondary)
+                                        } else { MediaLoadingRow() }
+                                    }
+                                }
+                            }
+                            .frame(height: height, alignment: .top)
+                            .onAppear { model.appear(index) }
+                            .onDisappear { model.disappear(index) }
+                        }
+                    }
+                }.padding(24)
+                if model.loading { ProgressView("Loading titles").padding(24) }
+                if let problem = model.failures[model.window.nextIndex] {
+                    MediaLoadingRow(message: problem, retry: { model.retry(model.window.nextIndex) }).padding(24)
+                } else if !model.loading && model.window.nextIndex == 0 {
+                    EmptyLibrary(title: "Nothing here yet", message: query.isEmpty ? "This collection has no items available to your account." : "Try another title, artist, or show.", symbol: "magnifyingglass")
+                } else if !model.window.hasMore {
+                    Text("All titles loaded").font(.caption).foregroundStyle(.secondary).padding(24)
+                }
+            }.id(identity)
         }
         #if !os(tvOS)
         .navigationTitle(title)
         #endif
-        .task(id: store.accountContext) { await load(reset: true) }
-            .onChange(of: query) { _ in Task { await load(reset: true) } }
-    }
-    private func load(reset: Bool) async {
-        guard reset || !loading else { return }
-        let id = UUID()
-        requestID = id
-        loading = true; problem = nil
-        if reset { items = []; offset = 0; total = 0 }
-        defer { if requestID == id { loading = false } }
-        do {
-            let page = try await store.items(parent: parent, query: query, start: offset, includeItemTypes: includeItemTypes)
-            try Task.checkCancellation()
-            guard requestID == id else { return }
-            var existing = Set(items.map(\.Id))
-            items.append(contentsOf: page.Items.filter { existing.insert($0.Id).inserted })
-            offset += page.Items.count
-            total = page.Items.isEmpty ? offset : page.TotalRecordCount ?? offset
-        } catch is CancellationError {} catch {
-            if requestID == id { problem = error.localizedDescription }
+        .task(id: identity) {
+            await store.loadSearchCapabilities()
+            guard !Task.isCancelled else { return }
+            if !query.isEmpty && !store.supportsExplicitSearchSort && sort != .relevance {
+                sort = .relevance
+                return
+            }
+            let filters = UnifiedSearchFilters(sort: sort)
+            let context = store.accountContext
+            await model.start(identity: identity) { start, limit in
+                guard store.accountContext == context else { throw CancellationError() }
+                return try await store.items(parent: parent, query: query, start: start,
+                    includeItemTypes: includeItemTypes, limit: limit, filters: filters)
+            }
         }
+        .onDisappear { model.cancel() }
     }
 }
 
@@ -921,11 +961,8 @@ struct DetailView: View {
                 }
                 #endif
                 NativeIntegrationActions(item: current)
-                if let offer = CatalogOfferReference(item: current) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Availability").font(.headline)
-                        CatalogOfferPanel(reference: offer)
-                    }
+                if !store.preview, let identity = PublicCatalogIdentity.library(current) {
+                    PublicCatalogAccessSection(identity: identity)
                 }
                 if !store.preview && ["Movie", "Series"].contains(current.Type ?? "") {
                     #if os(tvOS)

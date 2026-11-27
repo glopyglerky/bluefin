@@ -97,6 +97,26 @@ struct MediaItem: Codable, Identifiable, Hashable {
     var title: String { Name ?? "Untitled" }
     var airingStart: Date? { StartDate.flatMap(LiveProgram.date) }
     var airingEnd: Date? { EndDate.flatMap(LiveProgram.date) }
+    /// Card identity is the show. Playback still uses this exact item's Id.
+    var displayTitle: String {
+        if Type == "Episode" || Type == "Season", let series = Self.nonempty(SeriesName) { return series }
+        return title
+    }
+    var displaySubtitle: String {
+        if Type == "Episode" {
+            let position = [ParentIndexNumber.flatMap { $0 >= 0 ? "S\($0)" : nil },
+                            IndexNumber.flatMap { $0 >= 0 ? "E\($0)" : nil }]
+                .compactMap { $0 }.joined(separator: " ")
+            let episode = Self.nonempty(Name).flatMap { $0 == displayTitle ? nil : $0 }
+            return [Self.nonempty(position), episode].compactMap { $0 }.joined(separator: " · ")
+        }
+        if Type == "Season", displayTitle != title { return title }
+        return subtitle
+    }
+    private static func nonempty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return value
+    }
     var isContainer: Bool { IsFolder == true || ["Series", "Season", "MusicAlbum", "MusicArtist", "CollectionFolder", "Folder", "BoxSet", "Playlist"].contains(Type ?? "") }
     var subtitle: String {
         if let series = SeriesName { return "\(series) · S\(ParentIndexNumber ?? 1) E\(IndexNumber ?? 1)" }

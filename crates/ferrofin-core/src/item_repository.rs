@@ -590,6 +590,11 @@ impl FerrofinItemRepository {
         if rows.is_empty() || filter.order_by.is_empty() {
             return Ok(rows);
         }
+        if filter.search_order_by_requested {
+            // Bluefin's explicit ordering includes the same identity tie-break
+            // for materialized folder children as for a direct Items query.
+            return self.sql_ordered_folder_children(rows, filter).await;
+        }
         if filter.order_by.iter().all(|(by, _)| {
             matches!(
                 by,
@@ -2731,6 +2736,7 @@ fn folder_sql_order_query(
             .filter_map(|row| Uuid::parse_str(&row.id).ok())
             .collect(),
         order_by: filter.order_by.clone(),
+        search_order_by_requested: filter.search_order_by_requested,
         group_by_presentation_unique_key: false,
         include_owned_items: true,
         ..Default::default()
@@ -9226,6 +9232,69 @@ mod tests {
             names,
             ["Blade", "Blade Charlie", "Blade Bravo", "Blade Alpha"]
         );
+    }
+
+
+    #[tokio::test]
+    async fn bluefin_explicit_search_order_precedes_paging_without_changing_relevance_default() {
+        use ferrofin_model::dto::SortOrder;
+        use ferrofin_model::live_tv::ItemSortBy;
+        let db = test_db().await;
+        let names = ["Blade Alpha", "Blade Bravo", "Blade", "Blade Charlie"];
+        for (n, name) in (0xA301_u128..).zip(names) {
+            seed_named_item(&db, Uuid::from_u128(n), BaseItemKind::Movie, name).await;
+        }
+        date_rows_by_name(&db, &names).await;
+        let base = InternalItemsQuery {
+            include_item_types: vec![BaseItemKind::Movie],
+            search_term: Some("blade".into()),
+            order_by: vec![(ItemSortBy::DateCreated, SortOrder::Descending)],
+            limit: Some(2),
+            ..Default::default()
+        };
+        let repository = repo(&db);
+        let legacy = repository.get_item_list(&base).await.expect("default search");
+        assert_eq!(legacy.iter().filter_map(|row| row.name.as_deref()).collect::<Vec<_>>(),
+                   ["Blade", "Blade Charlie"]);
+        let first = repository.get_item_list(&InternalItemsQuery {
+            search_order_by_requested: true, ..base.clone()
+        }).await.expect("first sorted page");
+        let second = repository.get_item_list(&InternalItemsQuery {
+            search_order_by_requested: true, start_index: Some(2), ..base
+        }).await.expect("second sorted page");
+        assert_eq!(first.iter().filter_map(|row| row.name.as_deref()).collect::<Vec<_>>(),
+                   ["Blade Charlie", "Blade"]);
+        assert_eq!(second.iter().filter_map(|row| row.name.as_deref()).collect::<Vec<_>>(),
+                   ["Blade Bravo", "Blade Alpha"]);
+        assert!(first.iter().all(|left| second.iter().all(|right| left.id != right.id)));
+    }
+
+    #[tokio::test]
+    async fn bluefin_explicit_search_sort_breaks_page_boundary_ties_by_identity() {
+        use ferrofin_model::dto::SortOrder;
+        use ferrofin_model::live_tv::ItemSortBy;
+        let db = test_db().await;
+        for (id, name) in [(0xA40F, "Blade Alpha"), (0xA401, "Blade Zebra")] {
+            seed_named_item(&db, Uuid::from_u128(id), BaseItemKind::Movie, name).await;
+        }
+        sqlx::query(r#"UPDATE "BaseItems" SET "SortName" = lower("Name"),
+            "CleanName" = lower("Name"), "DateCreated" = '2020-01-01 00:00:00'"#)
+            .execute(db.writer()).await.expect("equal dates");
+        let mut query = InternalItemsQuery {
+            include_item_types: vec![BaseItemKind::Movie],
+            search_term: Some("blade".into()),
+            search_order_by_requested: true,
+            order_by: vec![(ItemSortBy::DateCreated, SortOrder::Descending)],
+            limit: Some(1),
+            ..Default::default()
+        };
+        let repository = repo(&db);
+        let first = repository.get_item_list(&query).await.expect("first tied page");
+        query.start_index = Some(1);
+        let second = repository.get_item_list(&query).await.expect("second tied page");
+        assert_eq!(first[0].name.as_deref(), Some("Blade Zebra"));
+        assert_eq!(second[0].name.as_deref(), Some("Blade Alpha"));
+        assert_ne!(first[0].id, second[0].id);
     }
 
     #[tokio::test]

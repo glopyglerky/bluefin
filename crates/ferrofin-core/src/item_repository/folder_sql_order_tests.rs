@@ -104,3 +104,56 @@ async fn reading_only_the_ids_keeps_the_full_row_plan() {
         assert!(ids.contains("USE TEMP B-TREE FOR ORDER BY"), "{ids}");
     }
 }
+
+
+#[tokio::test]
+async fn bluefin_explicit_folder_order_retains_identity_ties_before_paging() {
+    let db = test_db().await;
+    let repo = FerrofinItemRepository::new(
+        db.clone(),
+        Arc::new(crate::item_type_lookup::ItemTypeLookup::new()),
+    );
+    let low = Uuid::from_u128(0xB501);
+    let high = Uuid::from_u128(0xB50F);
+    let mut rows = Vec::new();
+    for (id, name) in [(high, "Blade Alpha"), (low, "Blade Zebra")] {
+        seed_named_item(&db, id, BaseItemKind::Movie, name).await;
+        let mut row = fetch_item(&db, id).await;
+        row.sort_name = Some(name.to_lowercase());
+        save_item(&db, &row).await;
+        rows.push(fetch_item(&db, id).await);
+    }
+    sqlx::query(r#"UPDATE "BaseItems" SET "DateCreated" = '2020-01-01 00:00:00'"#)
+        .execute(db.writer()).await.unwrap();
+    let filter = InternalItemsQuery {
+        search_order_by_requested: true,
+        search_term: Some("blade".into()),
+        order_by: vec![(ItemSortBy::DateCreated, SortOrder::Descending)],
+        limit: Some(1),
+        ..Default::default()
+    };
+    let sorted = repo.sort_folder_children(rows, &filter).await.unwrap();
+    let first = page(sorted.clone(), &filter);
+    let second = page(sorted, &InternalItemsQuery { start_index: Some(1), ..filter });
+    assert_eq!(Uuid::parse_str(&first[0].id).unwrap(), low);
+    assert_eq!(Uuid::parse_str(&second[0].id).unwrap(), high);
+
+    // Equal title keys formerly stayed in the incoming materialized order.
+    for id in [low, high] {
+        let mut row = fetch_item(&db, id).await;
+        row.name = Some("Blade Same".into());
+        row.clean_name = Some("blade same".into());
+        row.sort_name = Some("blade same".into());
+        save_item(&db, &row).await;
+    }
+    for key in [ItemSortBy::Name, ItemSortBy::SortName] {
+        let rows = vec![fetch_item(&db, high).await, fetch_item(&db, low).await];
+        let sorted = repo.sort_folder_children(rows, &InternalItemsQuery {
+            search_order_by_requested: true,
+            order_by: vec![(key, SortOrder::Ascending)],
+            ..Default::default()
+        }).await.unwrap();
+        assert_eq!(sorted.iter().map(|row| Uuid::parse_str(&row.id).unwrap()).collect::<Vec<_>>(),
+                   [low, high]);
+    }
+}
