@@ -20,7 +20,7 @@ class Element{
  get textContent(){return this.text+this.children.map(c=>c.textContent||'').join(' ');}
 }
 function browserFailure(message){return Object.assign(Error(message),{bluefinBrowserCapability:true});}
-function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false,cookieStatus=200,cookieMalformed=false,cookieCreateStatus=200,tvAdvertisement=true,nativeHls=true,audioPlayable=true,launchCode='',engine,apiResponse}={}){
+function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false,cookieStatus=200,cookieMalformed=false,cookieCreateStatus=200,tvAdvertisement=true,nativeHls=true,audioPlayable=true,launchCode='',engine,apiResponse,language="en-US"}={}){
  const root=new Element('div'),video=new Element('video'),labels=new Map(),events={},requests=[],pending={};
  Object.assign(video,{paused:true,duration:60,currentTime:0,src:'',
   pause(){this.paused=true;},load(){},play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},canPlayType(type){return (type==='audio/mpeg'?audioPlayable:nativeHls)?'probably':'';}});
@@ -60,7 +60,7 @@ function setup({meshFailure=false,leaseOrigin='',holdLogin=false,holdLease=false
   return new Response(JSON.stringify(body),{headers:{'Content-Type':'application/json'}});
  };
  const register=(name,fn)=>{const previous=events[name];events[name]=(...args)=>{previous?.(...args);fn(...args);};};
- const context=vm.createContext({document,location:new URL(document.baseURI),navigator:{},
+ const context=vm.createContext({document,location:new URL(document.baseURI),navigator:{language},
   crypto:webcrypto,URL,Uint8Array,Uint32Array,Blob,File,TextEncoder,TextDecoder,AbortController,Response,fetch,
   setTimeout,clearTimeout,setInterval:()=>1,clearInterval(){},addEventListener:register,
   isSecureContext:true,WebAssembly:undefined});
@@ -896,7 +896,7 @@ test('MusicBrainz artists, release groups and recordings show linked access befo
   ['recording','musicBrainzRecording','recording']];
  for(const [detailKind,recordKind,offerKind]of cases){
   const id='a74b1b7f-71a5-4011-9441-d0b5e4122711',record={id:{kind:recordKind,value:id},title:'Music Fixture'};
-  const destination='https://new-music.example/'+detailKind+'/'+id;
+  const destination=detailKind==='artist'?'https://artist-fixture.bandcamp.com/':detailKind==='recording'?'https://www.youtube.com/watch?v=exact-fixture':'https://new-music.example/'+detailKind+'/'+id;
   const t=setup({apiResponse:url=>{
    if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:url.searchParams.get('kind')===detailKind?[record]:[]});
    if(url.pathname==='/Bluefin/Catalog/Details/'+detailKind+'/'+id)return jsonReply(record);
@@ -1388,4 +1388,111 @@ test('lyrics use the authenticated mesh request and its owned audio clock withou
  assert.equal(lyricLine(t.root,1).getAttribute('aria-current'),'true');assert.equal(lyricLine(t.root,2).getAttribute('aria-current'),null);
  missing=true;await t.ui.loadLyrics(player,true);assert.equal(player.lyrics.status,'missing');assert.equal(t.requests.length,0);
  await t.ui.signOut();
+});
+
+test('an unspecified device region does not invent US or start an all-region crawl',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'No-region Fixture'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]};
+ const t=setup({language:'en',apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,
+   countries:[{code:'GB',name:'United Kingdom',services:[]}],sources:[]});
+  if(url.pathname==='/Bluefin/Catalog/Offers')return jsonReply({schemaVersion:1,identity,
+   country:url.searchParams.get('country'),offers:[],sources:[{source:'tmdb',status:'noOffers',coverage:'partial',scope:'regionalAvailability',attributions:[]}]});
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('No-region Fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ assert(!t.requests.some(row=>new URL(row.url).pathname==='/Bluefin/Catalog/Offers'));
+ assert(t.root.textContent.includes('Choose a region to check availability.'));
+ const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ assert.equal(country.value,'choose');
+ country.value='GB';await country.onchange();
+ const lookups=t.requests.filter(row=>new URL(row.url).pathname==='/Bluefin/Catalog/Offers');
+ assert.deepEqual(lookups.map(row=>new URL(row.url).searchParams.get('country')),['GB']);
+});
+
+test('album offers preserve a verified edition identity and reject unrelated release offers',async()=>{
+ const group='b168aa16-81a2-43cb-99de-54d940ab4541',release='f26f9a18-5422-4ed5-9af3-d5880b85a0eb';
+ const record={id:{kind:'musicBrainzReleaseGroup',value:group},title:'Edition Fixture'};
+ const identity={kind:'releaseGroup',ids:[{source:'musicbrainz',id:group}]};
+ const edition=parent=>({kind:'release',ids:[{source:'musicbrainz',id:release},
+  {source:'musicbrainz-release-group',id:parent}]});
+ const row=(id,parent)=>({id,identity:edition(parent),country:null,service:{source:'musicbrainz-url',id:'bandcamp',name:'Bandcamp'},
+  accessType:'buy',destinations:[{kind:'title',url:'https://artist-fixture.bandcamp.com/album/'+id}],
+  evidence:{source:'musicbrainz',observedAt:1700000000,regionVerified:false}});
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:url.searchParams.get('kind')==='album'?[record]:[]});
+  if(url.pathname==='/Bluefin/Catalog/Details/album/'+group)return jsonReply(record);
+  if(url.pathname==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,countries:[],sources:[]});
+  if(url.pathname==='/Bluefin/Catalog/Offers')return jsonReply({schemaVersion:1,identity,country:url.searchParams.get('country'),
+   offers:[row('correct-edition',group),row('wrong-edition','11111111-1111-1111-1111-111111111111')],
+   sources:[{source:'musicbrainz',status:'partial',scope:'linkedAccess',coverage:'partial',attributions:[]}]});
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('Edition Fixture',{scope:'music'});
+ await findElement(t.root,e=>String(e.dataset.focusKey).includes('musicBrainzReleaseGroup:'+group)).listeners.click();
+ assert(findElement(t.root,e=>e.href==='https://artist-fixture.bandcamp.com/album/correct-edition'));
+ assert(!findElement(t.root,e=>e.href==='https://artist-fixture.bandcamp.com/album/wrong-edition'));
+ assert.equal(t.ui.state.route.offers.offers[0].identity.kind,'release');
+ assert.equal(t.ui.state.route.offers.offers[0].identity.ids[0].id,release);
+});
+
+test('a long Retry-After stops all-region scheduling without an early retry',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Pause Fixture'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]};
+ let allRequested=false;const requested=[];
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,
+   countries:['US','GB','CA','AU','DE'].map(code=>({code,name:code,services:[]})),sources:[]});
+  if(url.pathname==='/Bluefin/Catalog/Offers'){
+   const country=url.searchParams.get('country');
+   if(!country)allRequested=true;
+   else if(allRequested){
+    requested.push(country);
+    if(country==='US')return new Response('{}',{status:429,headers:{'Retry-After':'120'}});
+   }
+   return jsonReply({schemaVersion:1,identity,country,offers:[],sources:[
+    {source:'tmdb-watch-page',status:'noOffers',scope:'regionalAvailability',coverage:'partial',attributions:[]}]});
+  }
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('Pause Fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ const started=Date.now();country.value='';await country.onchange();
+ assert.equal(requested.filter(code=>code==='US').length,1);
+ assert(requested.length<=3);
+ assert(!requested.includes('AU')&&!requested.includes('DE'));
+ assert(t.ui.state.route.offerProgress.retryAt>=started+119000);
+ assert(t.root.textContent.includes('The source requested a longer pause.'));
+ assert(t.root.textContent.includes('Retry after'));
+});
+
+test('a denied source stops scheduling remaining regions and does not report universal completion',async()=>{
+ const movie={id:{kind:'tmdbMovie',value:597},title:'Denied Fixture'};
+ const identity={kind:'movie',ids:[{source:'tmdb',id:'movie/597'}]};
+ let allRequested=false;const requested=[];
+ const t=setup({apiResponse:url=>{
+  if(url.pathname==='/Bluefin/Catalog/Search')return jsonReply({results:[movie]});
+  if(url.pathname==='/Bluefin/Catalog/Details/movie/597')return jsonReply(movie);
+  if(url.pathname==='/Bluefin/Catalog/Providers')return jsonReply({schemaVersion:1,
+   countries:['US','GB','CA','AU','DE'].map(code=>({code,name:code,services:[]})),sources:[]});
+  if(url.pathname==='/Bluefin/Catalog/Offers'){
+   const country=url.searchParams.get('country');if(!country)allRequested=true;
+   if(allRequested&&country)requested.push(country);
+   return jsonReply({schemaVersion:1,identity,country,offers:[],sources:[
+    {source:'tmdb-watch-page',status:allRequested&&country==='US'?'denied':'noOffers',
+     scope:'regionalAvailability',coverage:'partial',attributions:[]}]});
+  }
+ }});
+ await t.ui.openSearch();await t.ui.startSearch('Denied Fixture',{scope:'movies'});
+ await findElement(t.root,e=>e.dataset.focusKey==='public-title|movie|tmdbMovie:597').listeners.click();
+ const country=findElement(t.root,e=>e.tagName==='SELECT'&&e.id==='search-offer-country');
+ country.value='';await country.onchange();
+ assert(requested.length<=3);
+ assert(!requested.includes('AU')&&!requested.includes('DE'));
+ assert(t.ui.state.route.offerProgress.stopped);
+ assert(t.root.textContent.includes('Remaining regions were not requested.'));
+ assert(!t.root.textContent.includes('Checked 5 of 5 regions'));
 });
