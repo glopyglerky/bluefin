@@ -165,7 +165,7 @@ function clearSearchFacets(){
  for(const timer of Object.values(facets?.lookupTimers||{}))clearTimeout(timer);
  state.facets=null;
 }
-function clearPrivateView(){clearTimeout(sportsRefreshTimer);state.sportsPreferences=null;routeController?.abort();routeController=null;state.featured=null;state.homeHistory=null;clearSearchFacets();state.search=null;state.rows=[];state.shelves=[];state.back=[];state.query='';state.route={kind:'home'};state.queue=[];state.unshuffledQueue=[];state.queueIndex=0;state.shuffle=false;state.local=false;state.localQuery='';state.localSnapshot=null;state.repeat='off';state.nowPanel='artwork';state.capabilities=null;state.capability=null;state.code='';state.pairing=null;state.device=null;state.invitation=null;}
+function clearPrivateView(){clearCatalogRetry();providerRegistryCache.clear();clearTimeout(sportsRefreshTimer);state.sportsPreferences=null;routeController?.abort();routeController=null;state.featured=null;state.homeHistory=null;clearSearchFacets();state.search=null;state.rows=[];state.shelves=[];state.back=[];state.query='';state.route={kind:'home'};state.queue=[];state.unshuffledQueue=[];state.queueIndex=0;state.shuffle=false;state.local=false;state.localQuery='';state.localSnapshot=null;state.repeat='off';state.nowPanel='artwork';state.capabilities=null;state.capability=null;state.code='';state.pairing=null;state.device=null;state.invitation=null;}
 const paths={
  artist:'M8 11a4 4 0 1 0 8 0 4 4 0 1 0-8 0M4 22v-2a8 8 0 0 1 16 0v2M9 2l3 2 3-2',album:'M4 8h16v13H4zM6 5h12M8 2h8',star:'m12 3 3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z',genres:'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z',mic:'M9 4a3 3 0 0 1 6 0v8a3 3 0 0 1-6 0V4M6 10v2a6 6 0 0 0 12 0v-2M12 18v4M8 22h8',close:'m5 5 14 14M19 5 5 19',filter:'M3 6h18M6 12h12M9 18h6',
  waves:'M3 6c3-3 6 3 9 0s6 3 9 0M3 12c3-3 6 3 9 0s6 3 9 0M3 18c3-3 6 3 9 0s6 3 9 0',
@@ -210,7 +210,7 @@ async function http(path,method='GET',body,query=[],session=state.session,keepal
  try{
   const response=await fetch(url,{method,headers,body:body===undefined?undefined:JSON.stringify(body),
    credentials:'same-origin',redirect:'error',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal,keepalive});
-  if(!response.ok){const error=Error(response.status===401||response.status===403?'Account access was denied. Sign in again.':'The server returned HTTP '+response.status+'.');error.status=response.status;throw error;}
+  if(!response.ok){const error=Error(response.status===401||response.status===403?'Account access was denied. Sign in again.':'The server returned HTTP '+response.status+'.');error.status=response.status;error.retryAfterMs=catalogRetryDelay(response);throw error;}
   const value=await readJson(response);
   if(!keepalive&&!captureReply)assertLive();
   return value;
@@ -222,6 +222,7 @@ async function retireLateAccount(session,base){
 }
 async function api(path,method='GET',body,query=[],signal){
  const epoch=state.epoch,session=state.session,mode=state.mode,base=state.base;assertLive(epoch,session);if(signal?.aborted)throw aborted();
+ query=query.filter(([,value])=>value!==null&&value!==undefined).map(([key,value])=>[String(key),String(value)]);
  let value;
  if(mode==='mesh'){
   if(!session?.handle)throw Error('Resume the encrypted device connection.');
@@ -248,7 +249,7 @@ async function connect(raw){
 }
 function account(value){const token=value?.AccessToken,user=value?.User?.Id;if(!uuid(user)||!token)throw Error('The server returned an invalid account.');authorization(token);return {token,user:id(user),name:String(value.User.Name||'Your account')};}
 async function accept(value,mode='https',epoch=state.epoch){
- assertLive(epoch);state.epoch++;const accepted=state.epoch;
+ assertLive(epoch);state.epoch++;const accepted=state.epoch;clearCatalogRetry();providerRegistryCache.clear();
  state.featured=null;state.homeHistory=null;clearSearchFacets();state.search=null;state.session=value;state.mode=mode;state.phase='library';state.sheet=null;state.capability=null;state.device=null;
  state.pairing=null;state.invitation=null;state.code='';state.tab='Home';state.back=[];state.route={kind:'home'};
  const capabilities=await api('Bluefin/Capabilities').catch(()=>null);assertLive(accepted,value);
@@ -484,6 +485,31 @@ function appendSearchPage(page,value){
  page.next+=(Array.isArray(value)?value:value.Items).length;
  page.total=entries.length?Math.max(page.next,Number(value.TotalRecordCount)||page.next):page.next;
 }
+function catalogRetryDelay(response){
+ const after=response.headers.get('Retry-After'),seconds=Number(after);
+ const delay=after?(Number.isFinite(seconds)?seconds*1000:Date.parse(after)-Date.now()):0;
+ return Number.isFinite(delay)?Math.max(0,delay):0;
+}
+function catalogOwner(){return {epoch:state.epoch,session:state.session,mode:state.mode,base:state.base};}
+function catalogCurrent(owner,signal){
+ return !pageRetired&&!signal?.aborted&&owner.epoch===state.epoch&&owner.session===state.session&&
+  owner.mode===state.mode&&owner.base===state.base;
+}
+function assertCatalogOwner(owner,signal){if(!catalogCurrent(owner,signal))throw aborted();}
+async function catalogRequest(path,query,signal,limit=1024*1024,timeoutMs=6000){
+ const owner=catalogOwner();assertCatalogOwner(owner,signal);
+ if(!/^Bluefin\/Catalog\/(?:Search|Offers|Providers|Details\/(?:movie|series|person|artist|album|release|recording|work)\/[A-Za-z0-9-]+)$/.test(path))throw Error('Invalid catalog route.');
+ let value;
+ try{
+  if(owner.session)value=await api(path,'GET',undefined,query,signal);
+  else{
+   const url=new URL('/'+path,document.baseURI);
+   for(const [key,item] of query)url.searchParams.set(key,String(item));
+   value=await publicCatalogJson(url,signal,limit,undefined,timeoutMs);
+  }
+ }catch(error){assertCatalogOwner(owner,signal);throw error;}
+ assertCatalogOwner(owner,signal);return value;
+}
 async function publicCatalogJson(url,signal,limit=1024*1024,headers,timeoutMs=6000){
  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),timeoutMs);
  const stop=()=>controller.abort();
@@ -493,9 +519,7 @@ async function publicCatalogJson(url,signal,limit=1024*1024,headers,timeoutMs=60
   const response=await fetch(url,{credentials:'omit',redirect:'error',referrerPolicy:'no-referrer',signal:controller.signal,headers});
   if(!response.ok){
    const failure=Error('Catalog unavailable');failure.status=response.status;
-   const after=response.headers.get('Retry-After'),seconds=Number(after);
-   const retryDelay=after?(Number.isFinite(seconds)?seconds*1000:Date.parse(after)-Date.now()):0;
-   failure.retryAfterMs=Number.isFinite(retryDelay)?Math.max(0,retryDelay):0;
+   failure.retryAfterMs=catalogRetryDelay(response);
    throw failure;
   }
   return await readJson(response,limit);
@@ -542,9 +566,7 @@ function specialistRecord(record){
   description:catalogText(record.summary,4000),imdbId:typeof record.imdbId==='string'&&filmId.test(record.imdbId)?record.imdbId:null,...assets};
 }
 async function specialistSearch(kind,query,signal,page=1){
- const url=new URL('/Bluefin/Catalog/Search',document.baseURI);
- for(const [key,value] of Object.entries({kind,query,page}))url.searchParams.set(key,value);
- const data=await publicCatalogJson(url,signal);
+ const data=await catalogRequest('Bluefin/Catalog/Search',Object.entries({kind,query,page}),signal);
  if(!Array.isArray(data?.results))throw Error('Invalid specialist catalog response');
  const items=data.results.slice(0,20).map(specialistRecord).filter(Boolean);
  return {items,next:Number.isSafeInteger(data.nextPage)&&data.nextPage===page+1?data.nextPage:null};
@@ -848,7 +870,7 @@ function libraryOfferReference(item){
 }
 async function loadRoute(onUsable){
  const epoch=state.epoch,session=state.session,route=state.route,user=session?.user;assertLive(epoch,session);
- clearTimeout(sportsRefreshTimer);routeController?.abort();const controller=routeController=new AbortController();
+ clearCatalogRetry();clearTimeout(sportsRefreshTimer);routeController?.abort();const controller=routeController=new AbortController();
  const current=()=>{if(pageRetired||epoch!==state.epoch||session!==state.session||route!==state.route||controller!==routeController||controller.signal.aborted)throw aborted();};
  const get=(path,query=[])=>api(path,'GET',undefined,query,controller.signal);
  if(route.kind==='local_music'||route.kind==='local_search'){state.rows=route.kind==='local_search'?localOwner().search(state.localQuery).map(localItem):localItems();state.shelves=[];return;}
@@ -1304,9 +1326,8 @@ async function loadPublicDetail(route,signal,current){
  const {item}=route;
  if(item.catalogRef){
   const {kind,value}=item.catalogRef;
-  const url=new URL('/Bluefin/Catalog/Details/'+kind+'/'+value,document.baseURI);
   try{
-   const response=await publicCatalogJson(url,signal);current();
+   const response=await catalogRequest('Bluefin/Catalog/Details/'+kind+'/'+value,[],signal);current();
    const details=specialistRecord(response);
    if(!details||details.id!==item.id)throw Error('Invalid catalog identity');
    for(const [key,value] of Object.entries(details))if(value!==null&&value!=='')item[key]=value;
@@ -1397,18 +1418,21 @@ function catalogOfferIdentity(item){
  return music?{kind:music,source:'musicbrainz',id:String(ref.value)}:null;
 }
 const providerRegistryCache=new Map();
+let offerRetryTimer=null;
+function clearCatalogRetry(){clearTimeout(offerRetryTimer);offerRetryTimer=null;}
 async function providerRegistry(country,signal,identity){
- const key=JSON.stringify([country||'*',identity]),cached=providerRegistryCache.get(key);
- if(cached&&cached.expires>Date.now())return cached.value;
- const url=new URL('/Bluefin/Catalog/Providers',document.baseURI);
- for(const [key,value]of Object.entries(identity||{}))url.searchParams.set(key,value);
- if(country)url.searchParams.set('country',country);
- const value=await publicCatalogJson(url,signal,4*1024*1024,undefined,25000);
+ const owner=catalogOwner();assertCatalogOwner(owner,signal);
+ const key=JSON.stringify([owner.epoch,owner.mode,owner.base,owner.session?.user||null,country||'*',identity]);
+ const cached=providerRegistryCache.get(key);
+ if(cached&&cached.session===owner.session&&cached.expires>Date.now())return cached.value;
+ const query=Object.entries(identity||{});if(country)query.push(['country',country]);
+ const value=await catalogRequest('Bluefin/Catalog/Providers',query,signal,4*1024*1024,25000);
+ assertCatalogOwner(owner,signal);
  if(value.schemaVersion!==1||!Array.isArray(value.countries))throw Error('Invalid provider registry');
  const clean={...value,countries:value.countries.filter(row=>/^[A-Z]{2}$/.test(row?.code)&&typeof row.name==='string')};
  if(providerRegistryCache.size>=160)providerRegistryCache.delete(providerRegistryCache.keys().next().value);
  const failed=Array.isArray(clean.sources)&&clean.sources.some(source=>!['complete','partial','noOffers'].includes(source?.status));
- if(!failed)providerRegistryCache.set(key,{value:clean,expires:Date.now()+300000});
+ if(!failed)providerRegistryCache.set(key,{value:clean,session:owner.session,expires:Date.now()+300000});
  return clean;
 }
 function matchesOfferIdentity(value,identity){
@@ -1418,8 +1442,8 @@ function matchesOfferIdentity(value,identity){
 function matchesOfferSubject(value,identity){
  if(matchesOfferIdentity(value,identity))return true;
  if(identity.kind!=='releaseGroup'||identity.source!=='musicbrainz'||value?.kind!=='release'||!Array.isArray(value.ids))return false;
- const releases=value.ids.filter(id=>id?.source?.toLowerCase()==='musicbrainz');
- const parents=value.ids.filter(id=>id?.source?.toLowerCase()==='musicbrainz-release-group');
+ const releases=value.ids.filter(id=>typeof id?.source==='string'&&id.source.toLowerCase()==='musicbrainz');
+ const parents=value.ids.filter(id=>typeof id?.source==='string'&&id.source.toLowerCase()==='musicbrainz-release-group');
  return releases.length===1&&typeof releases[0].id==='string'&&uuidText.test(releases[0].id)&&
   parents.length===1&&parents[0].id===identity.id;
 }
@@ -1434,10 +1458,8 @@ function validateOfferResponse(value,identity,country){
  return {...value,offers,filtered:offers.length!==value.offers.length};
 }
 async function fetchCatalogOffers(identity,country,signal){
- const url=new URL('/Bluefin/Catalog/Offers',document.baseURI);
- for(const [key,value]of Object.entries(identity))url.searchParams.set(key,value);
- if(country)url.searchParams.set('country',country);
- return validateOfferResponse(await publicCatalogJson(url,signal,4*1024*1024,undefined,25000),identity,country);
+ const query=Object.entries(identity);if(country)query.push(['country',country]);
+ return validateOfferResponse(await catalogRequest('Bluefin/Catalog/Offers',query,signal,4*1024*1024,25000),identity,country);
 }
 function offerWait(delay,signal){
  if(signal.aborted)return Promise.reject(aborted());
@@ -1509,14 +1531,15 @@ async function enrichAllOfferRegions(route,identity,signal,current){
 }
 function routeOfferIdentity(route){return route.offerRef||catalogOfferIdentity(route.item);}
 async function loadRegionalOffers(route,country,parentSignal=routeController?.signal){
- const identity=routeOfferIdentity(route);
+ const identity=routeOfferIdentity(route),owner=catalogOwner();
+ clearCatalogRetry();
  country=typeof country==='string'?country.toUpperCase():'';
  if(!identity||!parentSignal||parentSignal.aborted||(country&&!/^[A-Z]{2}$/.test(country)))return;
  route.offerController?.abort();
  const controller=new AbortController(),signal=controller.signal,request={};
  const stop=()=>controller.abort();parentSignal.addEventListener('abort',stop,{once:true});
  route.offerController=controller;route.offerRequest=request;route.offerProgress=null;
- const current=()=>state.route===route&&route.offerRequest===request&&!signal.aborted;
+ const current=()=>catalogCurrent(owner,signal)&&state.route===route&&route.offerRequest===request;
  if(route.offerCountry!==country)route.offerService='';
  route.offerCountry=country;route.offers={loading:true};render();
  try{
@@ -1677,6 +1700,7 @@ function offerSourceNotes(content,sources){
  }
 }
 function offersView(route){
+ clearCatalogRetry();
  const content=node('div',undefined,'provider-actions'),result=route.offers;
  const country=route.offerCountry??defaultCountry(),countries=new Map();
  for(const row of route.offerCountries||[])countries.set(row.code,catalogText(row.name,120)||offerMarketName(row.code));
@@ -1696,6 +1720,14 @@ function offersView(route){
  if(route.offerAllExplicit&&!country&&(progress?.stopped||progress?.registryUnavailable)&&!result?.loading){
   const retry=button('Check regions again',()=>{if(!(progress.retryAt>Date.now()))return loadRegionalOffers(route,'');});
   retry.disabled=progress.retryAt>Date.now();content.append(retry);
+  if(retry.disabled){
+   const owner=catalogOwner(),request=route.offerRequest;
+   const timer=setTimeout(()=>{
+    if(offerRetryTimer!==timer)return;offerRetryTimer=null;
+    if(catalogCurrent(owner)&&state.route===route&&route.offerRequest===request&&route.offerProgress===progress)render();
+   },Math.min(60000,Math.max(1,progress.retryAt-Date.now()+1)));
+   offerRetryTimer=timer;
+  }
  }
  if(progress){
   const text=progress.registryUnavailable?'The country list is unavailable; this remains a partial summary.':
