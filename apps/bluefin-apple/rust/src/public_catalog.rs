@@ -66,7 +66,7 @@ pub(super) fn public_tv_search(input: &Value) -> Result<Value> {
 }
 
 fn wikidata(params: &[(&str, &str)]) -> Result<Value> {
-    let mut query = vec![("format", "json"), ("formatversion", "2"), ("maxlag", "5")];
+    let mut query = vec![("format", "json"), ("formatversion", "2")];
     query.extend_from_slice(params);
     let value = read_catalog("https://www.wikidata.org/w/api.php", &query)?;
     if value.get("error").is_some() {
@@ -172,6 +172,40 @@ fn public_film_title(id: &str, entity: &Value, language: &str) -> Option<Value> 
     }))
 }
 
+pub(super) fn public_film_sources(input: &Value) -> Result<Value> {
+    let id = text(input, "id")?;
+    if !wikidata_id(id) {
+        return Err(err("Invalid film identity"));
+    }
+    let response = wikidata(&[
+        ("action", "wbgetclaims"),
+        ("entity", id),
+        ("property", "P9586"),
+    ])?;
+    Ok(json!({"sources": apple_tv_links(&response)}))
+}
+
+fn apple_tv_links(response: &Value) -> Vec<String> {
+    let mut seen = HashSet::new();
+    response["claims"]["P9586"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| row["rank"] != "deprecated")
+        .filter_map(|row| row["mainsnak"]["datavalue"]["value"].as_str())
+        .filter(|value| {
+            value.strip_prefix("umc.cmc.").is_some_and(|suffix| {
+                (22..=25).contains(&suffix.len())
+                    && suffix
+                        .bytes()
+                        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+            }) && seen.insert(*value)
+        })
+        .take(3)
+        .map(|id| format!("https://tv.apple.com/movie/{id}"))
+        .collect()
+}
+
 fn public_tv_title(row: &Value) -> Option<Value> {
     let show = row.get("show")?;
     let id = show["id"].as_u64().filter(|id| *id > 0)?;
@@ -235,5 +269,19 @@ mod public_catalog_tests {
         assert_eq!(title["description"], "1982 film");
         assert_eq!(title["sourceUrl"], "https://www.wikidata.org/wiki/Q184843");
         assert!(public_film_title("Q184843/extra", &entity, "fr").is_none());
+    }
+
+    #[test]
+    fn film_provider_links_use_only_current_typed_identifiers() {
+        let claims = json!({"claims":{"P9586":[
+            {"rank":"normal","mainsnak":{"datavalue":{"value":"umc.cmc.abcdefghijklmnopqrstuv"}}},
+            {"rank":"normal","mainsnak":{"datavalue":{"value":"umc.cmc.abcdefghijklmnopqrstuv"}}},
+            {"rank":"deprecated","mainsnak":{"datavalue":{"value":"umc.cmc.zzzzzzzzzzzzzzzzzzzzzz"}}},
+            {"rank":"normal","mainsnak":{"datavalue":{"value":"https://unrelated.test/play"}}}
+        ]}});
+        assert_eq!(
+            apple_tv_links(&claims),
+            ["https://tv.apple.com/movie/umc.cmc.abcdefghijklmnopqrstuv"]
+        );
     }
 }

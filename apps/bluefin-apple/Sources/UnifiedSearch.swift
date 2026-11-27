@@ -451,21 +451,26 @@ private struct PublicTitleSearchSection: View {
                         Text("No matches from \(catalog.provider).").foregroundStyle(.secondary)
                     } else if let page {
                         ForEach(page.results) { item in
-                            Link(destination: item.sourceUrl) {
-                                HStack(spacing: 14) {
-                                    AsyncImage(url: item.artwork) { image in
-                                        image.resizable().scaledToFill()
-                                    } placeholder: {
-                                        Image(systemName: catalog.icon).foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 8) {
+                                Link(destination: item.sourceUrl) {
+                                    HStack(spacing: 14) {
+                                        AsyncImage(url: item.artwork) { image in
+                                            image.resizable().scaledToFill()
+                                        } placeholder: {
+                                            Image(systemName: catalog.icon).foregroundStyle(.secondary)
+                                        }
+                                        .frame(width: 46, height: 64).clipped().accessibilityHidden(true)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(item.title).font(.headline)
+                                            Text([item.description ?? item.year, catalog.provider].compactMap { $0 }.joined(separator: " · "))
+                                                .font(.caption).foregroundStyle(.secondary)
+                                        }
                                     }
-                                    .frame(width: 46, height: 64).clipped().accessibilityHidden(true)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(item.title).font(.headline)
-                                        Text([item.description ?? item.year, catalog.provider].compactMap { $0 }.joined(separator: " · "))
-                                            .font(.caption).foregroundStyle(.secondary)
-                                    }
+                                }.accessibilityHint("Open title information on \(catalog.provider)")
+                                if catalog == .film {
+                                    PublicFilmProviderLinks(catalogID: item.sourceUrl.lastPathComponent)
                                 }
-                            }.accessibilityHint("Open title information on \(catalog.provider)")
+                            }
                         }
                         Text("Streaming availability for these results is unverified.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -490,6 +495,50 @@ private struct PublicTitleSearchSection: View {
                 page = nil
                 failed = true
                 completedQuery = requested
+            }
+        }
+    }
+}
+
+private struct PublicFilmProviderLinks: View {
+    struct Result: Decodable, Sendable { let sources: [URL] }
+
+    let catalogID: String
+    @State private var attempt = 0
+    @State private var failed = false
+    @State private var result: Result?
+
+    var body: some View {
+        Group {
+            if let result {
+                if result.sources.isEmpty {
+                    Text("No provider links found.").foregroundStyle(.secondary)
+                } else {
+                    ForEach(result.sources, id: \.self) { destination in
+                        Link("Open title in Apple TV", destination: destination)
+                    }
+                    Text("Apple TV checks regional availability and account access.").foregroundStyle(.secondary)
+                }
+            } else if attempt == 0 || failed {
+                Button(failed ? "Retry provider links" : "Find provider links") {
+                    failed = false
+                    attempt += 1
+                }
+                .buttonStyle(.borderless)
+            } else {
+                ProgressView("Finding provider links")
+            }
+        }
+        .font(.caption)
+        .task(id: attempt) {
+            guard attempt > 0 else { return }
+            do {
+                let response: Result = try await RustBridge.call("publicFilmSources", fields: ["id": catalogID])
+                try Task.checkCancellation()
+                result = response
+            } catch is CancellationError {} catch {
+                guard !Task.isCancelled else { return }
+                failed = true
             }
         }
     }
