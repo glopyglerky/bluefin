@@ -82,7 +82,7 @@ data class PublicFilmTitle(val id: String, val name: String, val artwork: String
                 val id = row.optString("id").takeIf { it.matches(Regex("Q[1-9][0-9]{0,14}")) } ?: return@mapNotNull null
                 val name = row.optString("title").takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 val art = row.optString("artwork").takeIf(::isCommonsArtwork)
-                val credit = row.optJSONObject("artworkCredit")?.let(PublicArtworkCredit::parse)
+                val credit = row.optJSONObject("artworkCredit")?.let { PublicArtworkCredit.parse(it) }
                 PublicFilmTitle(id, name, art?.takeIf { credit != null }, credit, PublicTitleSources.parse(row))
             }.distinctBy { it.id }
         }

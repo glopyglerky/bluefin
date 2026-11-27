@@ -301,7 +301,7 @@ class MainActivity : ComponentActivity() {
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Action("Back", dismiss)
+                Action("Back", click = dismiss)
                 Text(name, style = MaterialTheme.typography.headlineLarge)
                 PublicCatalogArtwork(artwork, Modifier.width(130.dp).height(182.dp))
                 credit?.let {
