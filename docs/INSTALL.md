@@ -1,9 +1,6 @@
 # Installing on bare metal (systemd)
 
-The Docker image and Helm chart in the [README](../README.md#quickstart) bundle everything.
-This page is the other path: Ferrofin as a Debian package (or the release tarball) on a
-Debian/Ubuntu host under systemd, with jellyfin-ffmpeg and the jellyfin-web client from
-Jellyfin's own apt repository.
+This inherited reference describes Ferrofin packages and tarballs on Debian/Ubuntu under systemd, with jellyfin-ffmpeg and jellyfin-web from Jellyfin's apt repository. Its release links identify upstream artifacts, not a qualified Bluefin release. See the [Bluefin source quickstart](../README.md#quickstart) for this fork and the [retained Helm chart](../charts/ferrofin/README.md) for container deployment configuration.
 
 | Path | What lives there |
 |---|---|
