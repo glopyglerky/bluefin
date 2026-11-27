@@ -162,7 +162,7 @@ struct MusicCollection: View {
                 }
                 if current && isTracks && !model.items.isEmpty {
                     Section {
-                        MusicPlayActions(pageOnly: model.window.cachedItemCount < model.window.total, disabled: store.startingPlayback) { shuffled in
+                        MusicPlayActions(pageOnly: model.window.cachedItemCount < model.window.total, songCount: model.items.count, disabled: store.startingPlayback) { shuffled in
                             let songs = model.items, context = store.accountContext
                             Task {
                                 guard store.accountContext == context else { return }

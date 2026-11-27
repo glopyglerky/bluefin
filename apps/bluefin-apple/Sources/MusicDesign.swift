@@ -69,12 +69,14 @@ struct MusicRow: View {
 /// Native tvOS button styles preserve Focus; iOS gets a quiet full-width action.
 struct MusicPlayActions: View {
     var pageOnly: Bool
+    var songCount: Int
     var disabled: Bool
     let play: (Bool) -> Void
+    private var songLabel: String { "\(songCount) \(songCount == 1 ? "song" : "songs")" }
     var body: some View {
         HStack(spacing: 14) {
-            Button { play(false) } label: { Label(pageOnly ? "Play loaded songs" : "Play", systemImage: "play.fill").frame(maxWidth: .infinity, minHeight: 44) }
-            Button { play(true) } label: { Label(pageOnly ? "Shuffle loaded songs" : "Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity, minHeight: 44) }
+            Button { play(false) } label: { Label(pageOnly ? "Play \(songLabel)" : "Play", systemImage: "play.fill").frame(maxWidth: .infinity, minHeight: 44) }
+            Button { play(true) } label: { Label(pageOnly ? "Shuffle \(songLabel)" : "Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity, minHeight: 44) }
         }.buttonStyle(.bordered).tint(BluefinStyle.accent).disabled(disabled)
     }
 }
