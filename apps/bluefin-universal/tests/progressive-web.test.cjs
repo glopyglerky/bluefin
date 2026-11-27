@@ -686,8 +686,8 @@ test('public TV discovery works without any connected peer and keeps catalog req
    image:{medium:'https://static.tvmaze.com/uploads/images/medium_portrait/2/47.jpg'}}},
   {show:{id:48,name:'No Poster',image:{medium:'https://unrelated.test/image.jpg'}}},
  ]):undefined});
- await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search TV shows')).listeners.click();
- await t.ui.startSearch('unowned stage');
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search movies and shows')).listeners.click();
+ await t.ui.startSearch('unowned stage',{scope:'tvShows'});
  assert.equal(t.requests.length,1);
  const request=t.requests[0],url=new URL(request.url);
  assert.equal(url.origin,'https://api.tvmaze.com');assert.equal(url.searchParams.get('q'),'unowned stage');
@@ -702,6 +702,29 @@ test('public TV discovery works without any connected peer and keeps catalog req
  const publicRequests=t.requests.filter(r=>new URL(r.url).hostname==='api.tvmaze.com');
  assert.equal(publicRequests.length,2);
  assert(publicRequests.every(r=>r.options.headers===undefined&&r.options.credentials==='omit'));
+});
+
+test('film catalog resolves ranked Wikidata titles without connecting a library', async()=>{
+ const t=setup({apiResponse:u=>{
+  if(u.hostname!=='www.wikidata.org')return undefined;
+  if(u.searchParams.get('action')==='query')return jsonReply({query:{search:[
+   {title:'Q184843'},{title:'Q184843'},{title:'Q1234567890123456789'},{title:'File:Unrelated'}]}});
+  return jsonReply({entities:{Q184843:{labels:{en:{value:'Blade Runner'}},
+   descriptions:{en:{value:'1982 film directed by Ridley Scott'}}}}});
+ }});
+ await findElement(t.root,e=>e.tagName==='BUTTON'&&e.textContent.includes('Search movies and shows')).listeners.click();
+ await t.ui.startSearch('Blade Runner',{scope:'movies'});
+ assert.equal(t.ui.state.session,null);
+ const requests=t.requests.filter(r=>new URL(r.url).hostname==='www.wikidata.org');
+ assert.equal(requests.length,2);
+ assert(requests.every(r=>r.options.credentials==='omit'&&r.options.referrerPolicy==='no-referrer'&&
+  Object.keys(r.options.headers).join(',')==='Api-User-Agent'));
+ assert.equal(new URL(requests[0].url).searchParams.get('srsearch'),'Blade Runner haswbstatement:P31=Q11424');
+ assert.equal(new URL(requests[1].url).searchParams.get('ids'),'Q184843');
+ const link=findElement(t.root,e=>e.tagName==='A'&&e.textContent.includes('Blade Runner'));
+ assert.equal(link.href,'https://www.wikidata.org/wiki/Q184843');
+ assert(link.textContent.includes('1982 film directed by Ridley Scott'));
+ assert(t.root.textContent.includes('Streaming availability for these results is unverified.'));
 });
 
 test('moonlit explicit search history uses the current account revision and survives a stale write rejection',async()=>{
