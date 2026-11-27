@@ -385,12 +385,31 @@ async fn me(endpoint: &PqcEndpoint, address: &ServerAddress, session: &str) -> V
 }
 
 async fn denied(endpoint: &PqcEndpoint, address: &ServerAddress, session: &str) {
+    // Require an application reply after a successful fresh PQ handshake.
+    // This differs from the committed revocation's [71; 32] request ID. A
+    // restored live grant would be revoked by this probe and return success,
+    // which must fail immediately rather than making later checks pass.
+    let mut proof = endpoint.connect_server(address).await.unwrap();
+    let request_id = [72u8; 32];
+    let request = json!({"version":1,"body":{
+        "type":"revoke_session","session_id":session,
+        "request_id":request_id,"binding":proof.binding()
+    }});
+    proof.send(&request).await.unwrap();
+    let rejected: Value = proof.receive().await
+        .expect("authorization evidence requires an explicit application reply");
+    assert_eq!(rejected["body"]["type"], "error", "a revived grant must fail this probe");
+    assert_eq!(rejected["body"]["code"], "denied");
+    proof.close().await;
+
+    // The control route must also return no account data. Network includes
+    // underlying IO errors, so this check alone is not authorization evidence.
     let mut connection = endpoint.connect_server(address).await.unwrap();
     let request = control(&connection, session);
     connection.send(&request).await.unwrap();
     assert!(
         matches!(connection.receive::<Value>().await, Err(MeshError::Closed | MeshError::Network)),
-        "old session must be actively closed; timeout is not denial evidence"
+        "old session returned control data or failed to complete its closure check"
     );
     connection.close().await;
 }

@@ -104,8 +104,8 @@ HTTP `Backup/Restore` and waits for the next actual server lifetime. A
 post-backup user must disappear, while the original administrator's unrelated
 HTTP token remains valid. The restored old session, exact Finish retry, unused
 invitation and internal bearer must fail; a new passkey login must succeed and
-remain valid after an ordinary restart. A timeout does not count as denied
-authorization.
+remain valid after an ordinary restart. An explicit application-level denial
+response is required; a socket error alone is not authorization evidence.
 
 This is actual-binary acceptance with both peers on one host and a software
 authenticator. It does not establish browser secure-context behavior, physical
