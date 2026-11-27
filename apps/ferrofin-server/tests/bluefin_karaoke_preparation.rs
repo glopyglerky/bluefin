@@ -241,6 +241,13 @@ impl Fixture {
             .get_static_media_sources(item, false, Some(user))
             .await
             .unwrap();
+        assert!(
+            sources[0].media_streams.iter().any(|stream| {
+                stream.stream_type == ferrofin_model::entities::MediaStreamType::Lyric
+                    && (stream.is_external || stream.path.is_some())
+            }),
+            "the normal library scan must retain the real lyric sidecar metadata"
+        );
         let source = sources[0].id.clone().unwrap();
         Self {
             temp,
@@ -405,6 +412,10 @@ fn bluefin_hash(bytes: &[u8]) -> String {
 #[tokio::test]
 #[ignore = "requires original official BLUEFIN_MODEL_ARCHIVE and startup thread settings"]
 async fn normal_library_auth_decode_official_model_serving_and_lifecycle() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("ferrofin_api::error=debug")
+        .with_test_writer()
+        .try_init();
     let archive = std::env::var_os("BLUEFIN_MODEL_ARCHIVE").expect("official archive path");
     let mut f = Fixture::new().await;
     let (status, capabilities) = call(

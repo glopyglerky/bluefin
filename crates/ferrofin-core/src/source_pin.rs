@@ -49,6 +49,14 @@ pub(crate) async fn prepare(
             "source is outside the captured version group",
         ));
     }
+    // Ordinary audio lyric sidecars are metadata read through the separately
+    // authorized lyrics route, never decoder inputs. Keep every captured stream
+    // row for authority/generation checks; omit only lyrics from execution.
+    if captured.source.media_type.as_deref() == Some("Audio") {
+        source.media_streams.retain(|stream| {
+            stream.stream_type != ferrofin_model::entities::MediaStreamType::Lyric
+        });
+    }
     let path = captured.source.path.as_deref().unwrap_or_default();
     let data = crate::item_data::parse_data(captured.source.data.as_deref());
     if source.protocol != MediaProtocol::File
