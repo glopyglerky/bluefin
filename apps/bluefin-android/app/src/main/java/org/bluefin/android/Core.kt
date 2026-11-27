@@ -66,16 +66,20 @@ class CoreClient private constructor(private val context: Context?, store: Clean
         check(account == owner) { "Account changed. Retry from the current library." }
         withContext(Dispatchers.IO) { cleanup.call(operation, fields, owner) }
     }
-    suspend fun publicTvSearch(query: String): List<PublicTvTitle> = withContext(Dispatchers.IO) {
-        val operation = "publicTvSearch"
-        val fields = JSONObject().put("query", query)
-        val value = exchange?.invoke(operation, fields, null) ?: run {
+    private suspend fun publicCatalogCall(operation: String, fields: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        exchange?.invoke(operation, fields, null) ?: run {
             check(NativeCore.available) { "Public catalog is unavailable." }
             fields.put("operation", operation).put("clientPlatform", "android")
             decodeNativeReply(operation, JSONObject(NativeCore.invoke(fields.toString())))
         }
-        PublicTvTitle.parse(value)
     }
+    suspend fun publicTvSearch(query: String): List<PublicTvTitle> =
+        PublicTvTitle.parse(publicCatalogCall("publicTvSearch", JSONObject().put("query", query)))
+    suspend fun publicFilmSearch(query: String): List<PublicFilmTitle> =
+        PublicFilmTitle.parse(publicCatalogCall("publicFilmSearch", JSONObject().put("query", query)))
+    suspend fun publicTitleSources(id: String, kind: String, imdbId: String?): PublicTitleSources =
+        PublicTitleSources.parse(publicCatalogCall("publicTitleSources", JSONObject()
+            .put("id", id).put("kind", kind).put("imdbId", imdbId)))
     private fun request(op: String, fields: JSONObject, owner: Account?): JSONObject {
         exchange?.let { return it(op, fields, owner) }
         check(NativeCore.available) { "Android native core is not packaged. Demo is available." }
@@ -121,7 +125,7 @@ class CoreClient private constructor(private val context: Context?, store: Clean
     }
 }
 
-data class LibraryItem(val id: String, val name: String, val type: String, val overview: String = "", val ticks: Long = 0, val providerLinks: List<Pair<String, String>> = emptyList(), val artworkSources: List<CatalogArtwork> = listOf(CatalogArtwork(id))) {
+data class LibraryItem(val id: String, val name: String, val type: String, val overview: String = "", val ticks: Long = 0, val providerLinks: List<Pair<String, String>> = emptyList(), val artworkSources: List<CatalogArtwork> = listOf(CatalogArtwork(id)), val imdbId: String? = null) {
     val playable get() = type in setOf("Movie", "Episode", "Audio", "TvChannel")
     val audio get() = type == "Audio"
     companion object {
@@ -134,7 +138,9 @@ data class LibraryItem(val id: String, val name: String, val type: String, val o
                     val url = link.optString("Url")
                     if (name.isNotBlank() && safeProviderUrl(url)) name to url else null
                 }
-            } ?: emptyList(), catalogArtwork(v))
+            } ?: emptyList(), catalogArtwork(v),
+            v.optJSONObject("ProviderIds")?.let { it.optString("Imdb").ifBlank { it.optString("IMDb") } }
+                ?.takeIf { it.matches(Regex("tt[0-9]{7,12}")) })
     }
 }
 fun JSONObject.items(): List<LibraryItem> {

@@ -48,7 +48,7 @@ data class MediaSearchFacets(
 }
 data class HomeShelf(val title: String, val items: List<LibraryItem>)
 
-data class PublicTvTitle(val id: Long, val name: String, val year: String?, val artwork: String?) {
+data class PublicTvTitle(val id: Long, val name: String, val year: String?, val artwork: String?, val imdbId: String? = null) {
     val url: String get() = "https://www.tvmaze.com/shows/$id"
 
     companion object {
@@ -64,8 +64,41 @@ data class PublicTvTitle(val id: Long, val name: String, val year: String?, val 
                 if (id <= 0 || title.isBlank() || title.length > 256) return@mapNotNull null
                 val year = row.optString("year").takeIf { it.length == 4 && it.all(Char::isDigit) }
                 val image = row.optString("artwork").takeIf(::isPortrait)
-                PublicTvTitle(id, title, year, image)
+                val imdb = row.optString("imdbId").takeIf { it.matches(Regex("tt[0-9]{7,12}")) }
+                PublicTvTitle(id, title, year, image, imdb)
             }.distinctBy { it.id }
+        }
+    }
+}
+
+data class PublicFilmTitle(val id: String, val name: String) {
+    companion object {
+        fun parse(page: JSONObject): List<PublicFilmTitle> {
+            val rows = page.getJSONArray("results")
+            return (0 until minOf(rows.length(), 12)).mapNotNull { i ->
+                val row = rows.optJSONObject(i) ?: return@mapNotNull null
+                val id = row.optString("id").takeIf { it.matches(Regex("Q[1-9][0-9]{0,14}")) } ?: return@mapNotNull null
+                val name = row.optString("title").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                PublicFilmTitle(id, name)
+            }.distinctBy { it.id }
+        }
+    }
+}
+
+data class PublicProviderDestination(val provider: String, val url: String, val player: Boolean)
+data class PublicTitleSources(val links: List<PublicProviderDestination>, val imdbIds: Set<String>) {
+    companion object {
+        fun parse(page: JSONObject): PublicTitleSources {
+            val rows = page.getJSONArray("links")
+            val providers = (0 until minOf(rows.length(), 20)).mapNotNull { i ->
+                val offer = rows.optJSONObject(i) ?: return@mapNotNull null
+                val provider = offer.optString("provider").takeIf { it.isNotBlank() && it.length <= 80 } ?: return@mapNotNull null
+                val url = offer.optString("url").takeIf(::safeProviderUrl) ?: return@mapNotNull null
+                PublicProviderDestination(provider, url, offer.optString("kind") == "player")
+            }
+            val ids = page.optJSONArray("imdbIds") ?: JSONArray()
+            return PublicTitleSources(providers, (0 until minOf(ids.length(), 6))
+                .map { ids.optString(it) }.filter { it.matches(Regex("tt[0-9]{7,12}")) }.toSet())
         }
     }
 }

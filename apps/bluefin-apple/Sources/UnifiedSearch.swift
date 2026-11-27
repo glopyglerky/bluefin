@@ -430,6 +430,7 @@ private struct PublicTitleSearchSection: View {
         let description: String?
         let artwork: URL?
         let sourceUrl: URL
+        let imdbId: String?
     }
 
     let query: String
@@ -452,29 +453,17 @@ private struct PublicTitleSearchSection: View {
                         Text("No matches from \(catalog.provider).").foregroundStyle(.secondary)
                     } else if let page {
                         ForEach(page.results) { item in
-                            VStack(alignment: .leading, spacing: 8) {
-                                Link(destination: item.sourceUrl) {
-                                    HStack(spacing: 14) {
-                                        AsyncImage(url: item.artwork) { image in
-                                            image.resizable().scaledToFill()
-                                        } placeholder: {
-                                            Image(systemName: catalog.icon).foregroundStyle(.secondary)
-                                        }
-                                        .frame(width: 46, height: 64).clipped().accessibilityHidden(true)
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(item.title).font(.headline)
-                                            Text([item.description ?? item.year, catalog.provider].compactMap { $0 }.joined(separator: " · "))
-                                                .font(.caption).foregroundStyle(.secondary)
-                                        }
-                                    }
-                                }.accessibilityHint("Open title information on \(catalog.provider)")
-                                if catalog == .film {
-                                    PublicFilmProviderLinks(catalogID: item.sourceUrl.lastPathComponent, library: library)
-                                }
-                            }
+                            PublicTitleProviderChoices(
+                                catalogID: item.sourceUrl.lastPathComponent,
+                                kind: catalog == .film ? "movie" : "series",
+                                imdbId: item.imdbId,
+                                title: item.title,
+                                subtitle: [item.description ?? item.year, catalog.provider].compactMap { $0 }.joined(separator: " · "),
+                                artwork: item.artwork,
+                                icon: catalog.icon,
+                                library: library
+                            )
                         }
-                        Text("Streaming availability for these results is unverified.")
-                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -501,110 +490,81 @@ private struct PublicTitleSearchSection: View {
     }
 }
 
-private struct PublicFilmProviderLinks: View {
-    struct Result: Decodable, Sendable {
-        let checked: Bool
-        let offers: [Offer]
-        let sources: [URL]
+private struct PublicTitleProviderChoices: View {
+    struct Result: Decodable, Sendable { let links: [Destination]; let imdbIds: [String] }
+    struct Destination: Decodable, Sendable, Identifiable {
+        let provider: String
+        let url: URL
+        let kind: String
+        var id: URL { url }
+        var action: String { (kind == "player" ? "Watch on " : "Open on ") + provider }
     }
-    struct Offer: Decodable, Identifiable, Sendable {
-        let id: String
-        let currency: String
-        let rent: Double?
-        let buy: Double?
-        let destination: URL
-    }
-    struct Request: Hashable {
-        let region: String
-        let attempt: Int
-    }
-    struct Identity: Decodable, Sendable { let imdbIds: [String] }
 
     let catalogID: String
+    let kind: String
+    let imdbId: String?
+    let title: String
+    let subtitle: String
+    let artwork: URL?
+    let icon: String
     let library: [MediaItem]
     @EnvironmentObject private var store: LibraryStore
     @State private var attempt = 0
-    @State private var region = (Locale.current.regionCode ?? "US").uppercased()
-    @State private var completed: Request?
+    @State private var completed = 0
     @State private var result: Result?
-    @State private var identities: Set<String> = []
-    private var request: Request { Request(region: region, attempt: attempt) }
-    private static let regions = Locale.isoRegionCodes.compactMap { code in
-        Locale.current.localizedString(forRegionCode: code).map { (code: code, name: $0) }
-    }.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
 
     var body: some View {
-        Group {
-            if attempt == 0 {
-                Button("Where to watch") { attempt += 1 }
-            } else {
+        VStack(alignment: .leading, spacing: 8) {
+            Button { if attempt == 0 { attempt = 1 } } label: {
+                HStack(spacing: 14) {
+                    AsyncImage(url: artwork) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        Image(systemName: icon).foregroundStyle(.secondary)
+                    }
+                    .frame(width: 46, height: 64).clipped().accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title).font(.headline)
+                        Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }.accessibilityHint("Show where to watch in Bluefin")
+            if attempt > completed {
+                ProgressView("Looking up providers")
+            } else if let result {
                 ForEach(library.filter { media in
-                    media.Type == "Movie" && (media.ProviderIds?["Imdb"] ?? media.ProviderIds?["IMDb"]).map(identities.contains) == true
+                    kind == "movie" && media.Type == "Movie" &&
+                    (media.ProviderIds?["Imdb"] ?? media.ProviderIds?["IMDb"]).map(result.imdbIds.contains) == true
                 }) { media in
                     Button(media.resumeTicks > 0 ? "Resume in Bluefin" : "Play in Bluefin") {
                         Task { await store.play(media) }
                     }
                 }
-                Picker("Storefront region", selection: $region) {
-                    ForEach(Self.regions, id: \.code) { choice in Text(choice.name).tag(choice.code) }
+                ForEach(result.links) { destination in
+                    Link(destination.action, destination: destination.url)
                 }
-                if completed != request {
-                    ProgressView("Checking availability")
-                } else if let result {
-                    if result.checked {
-                        Text("Apple storefront · \(Locale.current.localizedString(forRegionCode: region) ?? region)")
-                        if result.offers.isEmpty {
-                            Text("No rent or buy offer returned for this region.").foregroundStyle(.secondary)
-                        }
-                        ForEach(result.offers) { offer in
-                            VStack(alignment: .leading, spacing: 4) {
-                                if let rent = offer.rent {
-                                    Text("Rent \(rent.formatted(.currency(code: offer.currency)))")
-                                }
-                                if let buy = offer.buy {
-                                    Text("Buy \(buy.formatted(.currency(code: offer.currency)))")
-                                }
-                                Link("Continue to Apple TV", destination: offer.destination)
-                            }
-                        }
-                    } else {
-                        Text("No regional offers could be verified for this film.").foregroundStyle(.secondary)
-                        ForEach(result.sources, id: \.self) { destination in
-                            Link("Open title in Apple TV", destination: destination)
-                        }
-                    }
-                } else {
-                    Text("The Apple storefront could not be checked.").foregroundStyle(.secondary)
-                    Button("Retry availability") { attempt += 1 }
-                }
+                Text(result.links.isEmpty ? "No direct provider destinations found." :
+                    "The provider confirms streaming availability for your region and account.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if completed > 0 {
+                Text("Provider lookup is temporarily unavailable.").font(.caption).foregroundStyle(.secondary)
+                Button("Retry provider lookup") { attempt += 1 }
             }
         }
-        .font(.caption)
-        .task(id: attempt > 0 && !library.isEmpty) {
-            guard attempt > 0, !library.isEmpty else { identities = []; return }
+        .task(id: attempt) {
+            let request = attempt
+            guard request > 0 else { return }
+            var fields = ["id": catalogID, "kind": kind]
+            fields["imdbId"] = imdbId
             do {
-                let identity: Identity = try await RustBridge.call("publicFilmIdentity", fields: ["id": catalogID])
-                try Task.checkCancellation()
-                identities = Set(identity.imdbIds)
-            } catch is CancellationError {} catch {
-                guard !Task.isCancelled else { return }
-                identities = []
-            }
-        }
-        .task(id: request) {
-            let current = request
-            guard current.attempt > 0 else { return }
-            do {
-                let response: Result = try await RustBridge.call("publicFilmSources", fields: [
-                    "id": catalogID, "region": current.region
-                ])
+                let response: Result = try await RustBridge.call("publicTitleSources", fields: fields)
                 try Task.checkCancellation()
                 result = response
-                completed = current
+                completed = request
             } catch is CancellationError {} catch {
                 guard !Task.isCancelled else { return }
                 result = nil
-                completed = current
+                completed = request
             }
         }
     }

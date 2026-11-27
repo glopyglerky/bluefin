@@ -172,137 +172,231 @@ fn public_film_title(id: &str, entity: &Value, language: &str) -> Option<Value> 
     }))
 }
 
-pub(super) fn public_film_sources(input: &Value) -> Result<Value> {
+pub(super) fn public_title_sources(input: &Value) -> Result<Value> {
     let id = text(input, "id")?;
-    if !wikidata_id(id) {
-        return Err(err("Invalid film identity"));
-    }
-    let region = text(input, "region")?;
-    if region.len() != 2 || !region.bytes().all(|ch| ch.is_ascii_uppercase()) {
-        return Err(err("Invalid storefront region"));
-    }
+    let kind = text(input, "kind")?;
+    let entity = match kind {
+        "movie" if wikidata_id(id) => Some(id.to_owned()),
+        "series" if decimal(id, 1, 12) => match find_wikidata_id("P8600", id)? {
+            Some(entity) => Some(entity),
+            None => match input["imdbId"].as_str().filter(|value| imdb_id(value)) {
+                Some(imdb) => find_wikidata_id("P345", imdb)?,
+                None => None,
+            },
+        },
+        _ => return Err(err("Invalid public title identity")),
+    };
+    let Some(entity) = entity else {
+        return Ok(json!({"links": [], "imdbIds": []}));
+    };
     let response = wikidata(&[
-        ("action", "wbgetclaims"),
-        ("entity", id),
-        ("property", "P6398"),
+        ("action", "wbgetentities"),
+        ("ids", &entity),
+        ("props", "claims"),
     ])?;
-    let ids = claim_values(&response, "P6398", |value| {
-        (1..=15).contains(&value.len())
-            && !value.starts_with('0')
-            && value.bytes().all(|ch| ch.is_ascii_digit())
-    });
-    if !ids.is_empty() {
-        let result = read_catalog(
-            "https://itunes.apple.com/lookup",
-            &[("id", &ids.join(",")), ("country", region)],
-        )?;
-        let rows = result["results"]
-            .as_array()
-            .ok_or_else(|| err("Invalid Apple storefront response"))?;
-        let offers: Vec<_> = rows
-            .iter()
-            .filter_map(|row| storefront_offer(row, &ids, region))
-            .collect();
-        return Ok(json!({"checked": true, "offers": offers, "sources": []}));
+    let claims = &response["entities"][&entity]["claims"];
+    if !claims.is_object() {
+        return Err(err("Provider identities unavailable"));
     }
-    let response = wikidata(&[
-        ("action", "wbgetclaims"),
-        ("entity", id),
-        ("property", "P9586"),
-    ])?;
-    Ok(json!({"checked": false, "offers": [], "sources": apple_tv_links(&response)}))
+    Ok(json!({
+        "links": direct_provider_links(claims, kind == "movie"),
+        "imdbIds": claim_values(claims, "P345", imdb_id),
+    }))
 }
 
-pub(super) fn public_film_identity(input: &Value) -> Result<Value> {
-    let id = text(input, "id")?;
-    if !wikidata_id(id) {
-        return Err(err("Invalid film identity"));
-    }
+fn find_wikidata_id(property: &str, value: &str) -> Result<Option<String>> {
+    let search = format!("haswbstatement:{property}={value}");
     let response = wikidata(&[
-        ("action", "wbgetclaims"),
-        ("entity", id),
-        ("property", "P345"),
+        ("action", "query"),
+        ("list", "search"),
+        ("srnamespace", "0"),
+        ("srlimit", "3"),
+        ("srprop", ""),
+        ("srsearch", &search),
     ])?;
-    let imdb = claim_values(&response, "P345", |value| {
-        value.strip_prefix("tt").is_some_and(|digits| {
-            (7..=12).contains(&digits.len()) && digits.bytes().all(|ch| ch.is_ascii_digit())
-        })
-    });
-    Ok(json!({"imdbIds": imdb}))
+    let rows = response["query"]["search"]
+        .as_array()
+        .ok_or_else(|| err("Catalog identity unavailable"))?;
+    let ids: HashSet<_> = rows
+        .iter()
+        .filter_map(|row| row["title"].as_str())
+        .filter(|id| wikidata_id(id))
+        .collect();
+    Ok(if ids.len() == 1 {
+        ids.into_iter().next().map(str::to_owned)
+    } else {
+        None
+    })
 }
 
 fn claim_values<'a>(
-    response: &'a Value,
+    claims: &'a Value,
     property: &str,
     valid: impl Fn(&str) -> bool,
 ) -> Vec<&'a str> {
     let mut seen = HashSet::new();
-    response["claims"][property]
+    claims[property]
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|row| row["rank"] != "deprecated")
+        .filter(|row| row["rank"] != "deprecated" && row["mainsnak"]["snaktype"] == "value")
         .filter_map(|row| row["mainsnak"]["datavalue"]["value"].as_str())
         .filter(|value| valid(value) && seen.insert(*value))
         .take(6)
         .collect()
 }
 
-fn apple_tv_links(response: &Value) -> Vec<String> {
-    claim_values(response, "P9586", |value| {
-        value.strip_prefix("umc.cmc.").is_some_and(|suffix| {
-            (22..=25).contains(&suffix.len())
-                && suffix
-                    .bytes()
-                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
-        })
-    })
-    .into_iter()
-    .take(3)
-    .map(|id| format!("https://tv.apple.com/movie/{id}"))
-    .collect()
+fn decimal(value: &str, min: usize, max: usize) -> bool {
+    (min..=max).contains(&value.len()) && value.bytes().all(|ch| ch.is_ascii_digit())
+}
+fn imdb_id(value: &str) -> bool {
+    value
+        .strip_prefix("tt")
+        .is_some_and(|id| decimal(id, 7, 12))
+}
+fn uuid_id(value: &str) -> bool {
+    use uuid::Uuid;
+    value.len() == 36 && Uuid::parse_str(value).is_ok()
 }
 
-fn storefront_offer(row: &Value, ids: &[&str], region: &str) -> Option<Value> {
-    if row["kind"] != "feature-movie" {
-        return None;
-    }
-    let id = row["trackId"].as_u64()?.to_string();
-    if !ids.contains(&id.as_str()) {
-        return None;
-    }
-    let mut destination = Url::parse(row["trackViewUrl"].as_str()?).ok()?;
-    if destination.scheme() != "https"
-        || destination.host_str() != Some("itunes.apple.com")
-        || destination.port().is_some()
-        || !destination.username().is_empty()
-        || destination.password().is_some()
-        || !destination
-            .path()
-            .starts_with(&format!("/{}/movie/", region.to_ascii_lowercase()))
-        || !destination.path().ends_with(&format!("/id{id}"))
-    {
-        return None;
-    }
-    let currency = row["currency"].as_str()?;
-    if currency.len() != 3 || !currency.bytes().all(|ch| ch.is_ascii_uppercase()) {
-        return None;
-    }
-    let amount = |key: &str| {
-        row[key]
-            .as_f64()
-            .filter(|price| price.is_finite() && *price >= 0.)
-    };
-    let rent = amount("trackRentalPrice");
-    let buy = amount("trackPrice");
-    if rent.is_none() && buy.is_none() {
-        return None;
-    }
-    destination.set_query(None);
-    destination.set_fragment(None);
-    Some(json!({
-        "id": id, "currency": currency, "rent": rent, "buy": buy, "destination": destination.as_str(),
-    }))
+fn direct_provider_links(claims: &Value, movie: bool) -> Vec<Value> {
+    type Rule<'a> = (&'a str, &'a str, fn(&str) -> bool, &'a str, &'a str, bool);
+    let rules: [Rule<'_>; 9] = [
+        (
+            "Netflix",
+            "P1874",
+            |id| decimal(id, 6, 8),
+            if movie {
+                "https://www.netflix.com/watch/"
+            } else {
+                "https://www.netflix.com/title/"
+            },
+            "",
+            movie,
+        ),
+        (
+            "Disney+",
+            "P13902",
+            |id| {
+                id.strip_prefix("entity-")
+                    .or_else(|| id.strip_prefix("page-"))
+                    .is_some_and(uuid_id)
+            },
+            "https://www.disneyplus.com/browse/",
+            "",
+            false,
+        ),
+        (
+            "Disney+",
+            if movie { "P7595" } else { "P7596" },
+            |id| id.len() == 12 && id.bytes().all(|c| c.is_ascii_alphanumeric()),
+            if movie {
+                "https://www.disneyplus.com/movies/wd/"
+            } else {
+                "https://www.disneyplus.com/series/wp/"
+            },
+            "",
+            false,
+        ),
+        (
+            "Hulu",
+            if movie { "P6466" } else { "P6467" },
+            uuid_id,
+            if movie {
+                "https://www.hulu.com/movie/"
+            } else {
+                "https://www.hulu.com/series/"
+            },
+            "",
+            false,
+        ),
+        (
+            "Paramount+",
+            "P13147",
+            |id| {
+                (8..=80).contains(&id.len())
+                    && id
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+            },
+            "https://www.paramountplus.com/shows/video/",
+            "/",
+            true,
+        ),
+        (
+            "Peacock",
+            "P11815",
+            |id| {
+                id.split_once('/').is_some_and(|(kind, slug)| {
+                    matches!(kind, "movies" | "tv")
+                        && slug.split('-').all(|s| {
+                            !s.is_empty()
+                                && s.bytes()
+                                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                        })
+                        && slug.len() <= 200
+                })
+            },
+            "https://www.peacocktv.com/stream-",
+            "",
+            false,
+        ),
+        (
+            "Prime Video",
+            "P8055",
+            |id| {
+                id.len() == 10
+                    && id.starts_with('B')
+                    && id
+                        .bytes()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+            },
+            "https://www.amazon.com/gp/video/detail/",
+            "",
+            false,
+        ),
+        (
+            "HBO Max",
+            "P8298",
+            |id| {
+                id.split_once('/')
+                    .is_some_and(|(kind, id)| matches!(kind, "movie" | "show") && uuid_id(id))
+            },
+            "https://www.hbomax.com/",
+            "",
+            false,
+        ),
+        (
+            "Tubi",
+            if movie { "P7760" } else { "P7761" },
+            |id| !id.starts_with('0') && decimal(id, 1, 12),
+            if movie {
+                "https://tubitv.com/movies/"
+            } else {
+                "https://tubitv.com/series/"
+            },
+            "",
+            false,
+        ),
+    ];
+    let mut seen = HashSet::new();
+    rules
+        .into_iter()
+        .filter_map(|(provider, property, valid, prefix, suffix, player)| {
+            let id =
+                claim_values(claims, property, valid)
+                    .into_iter()
+                    .find(|id| match property {
+                        "P11815" => id.starts_with(if movie { "movies/" } else { "tv/" }),
+                        "P8298" => id.starts_with(if movie { "movie/" } else { "show/" }),
+                        _ => true,
+                    })?;
+            seen.insert(provider).then(|| {
+                json!({"provider": provider,
+            "url": format!("{prefix}{id}{suffix}"), "kind": if player {"player"} else {"title"}})
+            })
+        })
+        .collect()
 }
 
 fn public_tv_title(row: &Value) -> Option<Value> {
@@ -335,6 +429,7 @@ fn public_tv_title(row: &Value) -> Option<Value> {
         "id": id,
         "title": title,
         "year": year,
+        "imdbId": show["externals"]["imdb"].as_str().filter(|id| imdb_id(id)),
         "artwork": artwork,
         "sourceUrl": format!("https://www.tvmaze.com/shows/{id}")
     }))
@@ -371,31 +466,30 @@ mod public_catalog_tests {
     }
 
     #[test]
-    fn film_provider_links_use_only_current_typed_identifiers() {
-        let claims = json!({"claims":{"P9586":[
-            {"rank":"normal","mainsnak":{"datavalue":{"value":"umc.cmc.abcdefghijklmnopqrstuv"}}},
-            {"rank":"normal","mainsnak":{"datavalue":{"value":"umc.cmc.abcdefghijklmnopqrstuv"}}},
-            {"rank":"deprecated","mainsnak":{"datavalue":{"value":"umc.cmc.zzzzzzzzzzzzzzzzzzzzzz"}}},
-            {"rank":"normal","mainsnak":{"datavalue":{"value":"https://unrelated.test/play"}}}
-        ]}});
+    fn title_links_use_first_party_targets_for_exact_typed_ids() {
+        let claims = json!({
+            "P1874":[{"rank":"normal","mainsnak":{"snaktype":"value","datavalue":{"value":"80234304"}}}],
+            "P6466":[{"rank":"normal","mainsnak":{"snaktype":"value","datavalue":{"value":"e47078f3-1c0e-49a8-9da9-c571a7a20fec"}}}],
+            "P11815":[{"rank":"normal","mainsnak":{"snaktype":"value","datavalue":{"value":"movies/psych-3-this-is-gus"}}}],
+            "P13147":[{"rank":"deprecated","mainsnak":{"snaktype":"value","datavalue":{"value":"WwH_xKtpmHlHq2_4qrlBjfFDKIsgeI0e"}}}],
+            "P8298":[{"rank":"normal","mainsnak":{"snaktype":"value","datavalue":{"value":"movie/../../unrelated.test"}}}],
+            "P9586":[{"rank":"normal","mainsnak":{"snaktype":"value","datavalue":{"value":"unused"}}}]
+        });
+        let movies = direct_provider_links(&claims, true);
+        assert_eq!(movies.len(), 3);
+        assert_eq!(movies[0]["url"], "https://www.netflix.com/watch/80234304");
+        assert_eq!(movies[0]["kind"], "player");
         assert_eq!(
-            apple_tv_links(&claims),
-            ["https://tv.apple.com/movie/umc.cmc.abcdefghijklmnopqrstuv"]
+            movies[1]["url"],
+            "https://www.hulu.com/movie/e47078f3-1c0e-49a8-9da9-c571a7a20fec"
         );
-    }
-
-    #[test]
-    fn movie_offers_require_an_exact_identity_and_the_selected_storefront() {
-        let row = json!({"kind":"feature-movie","trackId":1003,"trackRentalPrice":5.99,"trackPrice":-1,
-            "currency":"USD","trackViewUrl":"https://itunes.apple.com/us/movie/example/id1003?at=unused"});
-        let offer = storefront_offer(&row, &["1003"], "US").unwrap();
-        assert_eq!(offer["rent"], 5.99);
-        assert!(offer["buy"].is_null());
         assert_eq!(
-            offer["destination"],
-            "https://itunes.apple.com/us/movie/example/id1003"
+            movies[2]["url"],
+            "https://www.peacocktv.com/stream-movies/psych-3-this-is-gus"
         );
-        assert!(storefront_offer(&row, &["1003"], "GB").is_none());
-        assert!(storefront_offer(&row, &["1004"], "US").is_none());
+        let shows = direct_provider_links(&claims, false);
+        assert_eq!(shows.len(), 1);
+        assert_eq!(shows[0]["url"], "https://www.netflix.com/title/80234304");
+        assert_eq!(shows[0]["kind"], "title");
     }
 }

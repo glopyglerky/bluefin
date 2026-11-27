@@ -158,10 +158,16 @@ class MainActivity : ComponentActivity() {
                     Action("Search", !model.busy, Modifier.focusRequester(search)) { model.submitSearch(term) }
                     SearchRefinements(model)
                     val filters = model.searchFilters
-                    if (filters.scope in listOf(MediaSearchScope.ALL, MediaSearchScope.SHOWS) &&
-                        filters.studio == null && filters.tag == null && filters.collection == null &&
+                    if (filters.studio == null && filters.tag == null && filters.collection == null &&
                         model.query.length >= 2 && model.selected == null) {
-                        PublicTvResults(model.core, model.query)
+                        if (filters.scope in listOf(MediaSearchScope.ALL, MediaSearchScope.SHOWS)) {
+                            PublicTvResults(model.core, model.query)
+                        }
+                        if (filters.scope in listOf(MediaSearchScope.ALL, MediaSearchScope.MOVIES)) {
+                            PublicFilmResults(model.core, model.query, if (model.demo) emptyList() else model.rows) {
+                                offline = false; queueIndex = null; playing = it
+                            }
+                        }
                     }
                 }
                 Text(model.section, style = MaterialTheme.typography.headlineMedium)
@@ -203,7 +209,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 @Composable private fun PublicTvResults(core: CoreClient, query: String) {
-    val context = LocalContext.current
+    var selected by remember(query) { mutableStateOf<PublicTvTitle?>(null) }
     var titles by remember(query) { mutableStateOf<List<PublicTvTitle>?>(null) }
     var failed by remember(query) { mutableStateOf(false) }
     LaunchedEffect(core, query) {
@@ -227,15 +233,77 @@ class MainActivity : ComponentActivity() {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         PublicTvArtwork(item, Modifier.width(60.dp).height(84.dp))
                         Action(listOfNotNull(item.name, item.year).joinToString(" · ")) {
-                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.url))) }
+                            selected = item
                         }
                     }
                 }
             }
-            Text("Title information from TVmaze. Streaming availability is unverified.",
-                style = MaterialTheme.typography.bodySmall)
         }
     }
+    selected?.let { title ->
+        PublicProviderDialog(core, title.id.toString(), "series", title.name, title.imdbId, emptyList(), {}, { selected = null })
+    }
+}
+@Composable private fun PublicFilmResults(core: CoreClient, query: String, library: List<LibraryItem>, play: (LibraryItem) -> Unit) {
+    var titles by remember(query) { mutableStateOf<List<PublicFilmTitle>?>(null) }
+    var failed by remember(query) { mutableStateOf(false) }
+    var selected by remember(query) { mutableStateOf<PublicFilmTitle?>(null) }
+    LaunchedEffect(core, query) {
+        try { titles = core.publicFilmSearch(query) }
+        catch (error: CancellationException) { throw error }
+        catch (_: Exception) { failed = true }
+    }
+    Text("Film catalog", style = MaterialTheme.typography.titleLarge)
+    val results = titles
+    when {
+        failed -> Text("Could not load film results.")
+        results == null -> Text("Searching film catalog…")
+        results.isEmpty() -> Text("No matches from Wikidata.")
+        else -> LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(results, key = { it.id }) { item -> Action(item.name) { selected = item } }
+        }
+    }
+    selected?.let { title ->
+        PublicProviderDialog(core, title.id, "movie", title.name, null, library, play, { selected = null })
+    }
+}
+@Composable private fun PublicProviderDialog(
+    core: CoreClient, id: String, kind: String, name: String, imdbId: String?,
+    library: List<LibraryItem>, play: (LibraryItem) -> Unit, dismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var sources by remember(id, kind) { mutableStateOf<PublicTitleSources?>(null) }
+    var failure by remember(id, kind) { mutableStateOf<String?>(null) }
+    LaunchedEffect(core, id, kind) {
+        try { sources = core.publicTitleSources(id, kind, imdbId) }
+        catch (error: CancellationException) { throw error }
+        catch (_: Exception) { failure = "Provider lookup is temporarily unavailable." }
+    }
+    AlertDialog(
+        onDismissRequest = dismiss,
+        title = { Text(name) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                failure?.let { Text(it) }
+                val result = sources
+                if (result == null && failure == null) Text("Looking up providers…")
+                if (result != null) {
+                    library.filter { it.type == "Movie" && it.imdbId?.let(result.imdbIds::contains) == true }.forEach { item ->
+                        Action(if (item.ticks > 0) "Resume in Bluefin" else "Play in Bluefin") { dismiss(); play(item) }
+                    }
+                    result.links.forEach { link ->
+                        Action((if (link.player) "Watch on " else "Open on ") + link.provider) {
+                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.url))) }
+                                .onFailure { failure = "Could not open " + link.provider + "." }
+                        }
+                    }
+                    Text(if (result.links.isEmpty()) "No direct provider destinations found." else
+                        "The provider confirms streaming availability for your region and account.")
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = dismiss) { Text("Done") } }
+    )
 }
 @Composable private fun SearchRefinements(model: LibraryModel) {
     val filters = model.searchFilters
